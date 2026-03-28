@@ -1,0 +1,10 @@
+[package]
+name = "veex-inbound-socks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+veex-core = { path = "../core" }
+tokio.workspace = true
+
