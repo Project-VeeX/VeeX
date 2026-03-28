@@ -1,0 +1,17 @@
+[package]
+name = "veex-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+veex-core = { path = "../core" }
+rustls.workspace = true
+rustls-native-certs.workspace = true
+rustls-pemfile.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+
+[dev-dependencies]
+rcgen = "0.13"
+

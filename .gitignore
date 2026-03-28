@@ -9,7 +9,6 @@
 # Rust build artifacts
 /target/
 **/*.rs.bk
-Cargo.lock
 
 # Logs and runtime files
 logs/
