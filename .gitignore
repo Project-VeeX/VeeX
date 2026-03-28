@@ -1,0 +1,26 @@
+.DS_Store
+.local/
+
+# Editors
+.idea/
+.vscode/*
+!.vscode/settings.json
+
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Logs and runtime files
+logs/
+*.log
+*.pid
+*.pid.lock
+*.seed
+
+# Coverage
+coverage/
+
+# Local environment files
+.env
+.env.*
