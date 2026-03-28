@@ -1,0 +1,39 @@
+{
+  "log": {
+    "level": "info",
+    "disabled": false
+  },
+  "inbounds": [
+    {
+      "type": "redirect",
+      "tag": "redirect-in",
+      "listen": "0.0.0.0",
+      "listen_port": 60080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "trojan",
+      "tag": "proxy",
+      "server": "trojan.example.com",
+      "server_port": 443,
+      "password": "change-me",
+      "tls": {
+        "enabled": true,
+        "server_name": "trojan.example.com",
+        "disable_sni": false,
+        "insecure": false
+      },
+      "utls": {
+        "enabled": false
+      }
+    }
+  ],
+  "route": {
+    "final": "proxy"
+  }
+}

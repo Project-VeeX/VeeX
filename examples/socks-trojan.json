@@ -1,0 +1,39 @@
+{
+  "log": {
+    "level": "info",
+    "disabled": false
+  },
+  "inbounds": [
+    {
+      "type": "socks",
+      "tag": "socks-in",
+      "listen": "127.0.0.1",
+      "listen_port": 1080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "trojan",
+      "tag": "proxy",
+      "server": "trojan.example.com",
+      "server_port": 443,
+      "password": "change-me",
+      "tls": {
+        "enabled": true,
+        "server_name": "trojan.example.com",
+        "disable_sni": false,
+        "insecure": false
+      },
+      "multiplex": {
+        "enabled": false
+      }
+    }
+  ],
+  "route": {
+    "final": "proxy"
+  }
+}
