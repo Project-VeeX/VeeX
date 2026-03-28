@@ -305,6 +305,139 @@ mod tests {
         let _ = fs::remove_file(trojan_server.certificate_path);
     }
 
+    #[tokio::test]
+    async fn runtime_reports_trojan_failure_on_wrong_password() {
+        let destination = Destination::new(Host::Ip(Ipv4Addr::new(93, 184, 216, 34).into()), 443);
+        let trojan_server = spawn_rejecting_trojan_server(
+            "localhost",
+            destination.clone(),
+            "secret",
+        )
+        .await;
+        let socks_addr = reserve_local_port().await;
+        let config = ProxyConfig {
+            log: LogConfig {
+                level: "info".into(),
+                disabled: false,
+            },
+            inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
+                tag: "socks-in".into(),
+                listen: "127.0.0.1".into(),
+                listen_port: socks_addr.port(),
+            })],
+            outbounds: vec![
+                OutboundConfig::Direct(DirectOutboundConfig {
+                    tag: "direct".into(),
+                }),
+                OutboundConfig::Trojan(TrojanOutboundConfig {
+                    tag: "proxy".into(),
+                    server: "127.0.0.1".into(),
+                    server_port: trojan_server.addr.port(),
+                    password: "wrong-secret".into(),
+                    tls: TrojanTlsConfig {
+                        enabled: true,
+                        server_name: Some("localhost".into()),
+                        disable_sni: false,
+                        insecure: true,
+                        certificate_path: None,
+                        ca_path: None,
+                    },
+                }),
+            ],
+            route: RouteConfig {
+                final_outbound: "proxy".into(),
+            },
+        };
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let runtime_task = tokio::spawn(async move {
+            run_with_shutdown(&config, async move {
+                shutdown_rx
+                    .await
+                    .map_err(|err| format!("shutdown channel failed: {err}"))?;
+                Ok(())
+            })
+            .await
+        });
+
+        wait_for_listener(socks_addr).await;
+        let failure = run_socks_client_expect_relay_failure(
+            socks_addr,
+            SocketAddr::from((Ipv4Addr::new(93, 184, 216, 34), 443)),
+        )
+        .await;
+        assert!(
+            failure.contains("failed to read relay response")
+                || failure.contains("connection closed before relay response"),
+            "unexpected failure: {failure}"
+        );
+
+        let _ = shutdown_tx.send(());
+        runtime_task
+            .await
+            .expect("runtime task should join")
+            .expect("runtime should stop cleanly");
+
+        let received = trojan_server
+            .handle
+            .await
+            .expect("trojan server task should join");
+        assert_ne!(
+            received.request,
+            build_trojan_request("secret", &destination, &[]).unwrap()
+        );
+        assert_eq!(received.payload, b"ping");
+        let _ = fs::remove_file(trojan_server.certificate_path);
+    }
+
+    #[tokio::test]
+    async fn runtime_reports_direct_failure_on_unreachable_target() {
+        let unreachable_addr = reserve_local_port().await;
+        let socks_addr = reserve_local_port().await;
+        let config = ProxyConfig {
+            log: LogConfig {
+                level: "info".into(),
+                disabled: false,
+            },
+            inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
+                tag: "socks-in".into(),
+                listen: "127.0.0.1".into(),
+                listen_port: socks_addr.port(),
+            })],
+            outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
+                tag: "direct".into(),
+            })],
+            route: RouteConfig {
+                final_outbound: "direct".into(),
+            },
+        };
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let runtime_task = tokio::spawn(async move {
+            run_with_shutdown(&config, async move {
+                shutdown_rx
+                    .await
+                    .map_err(|err| format!("shutdown channel failed: {err}"))?;
+                Ok(())
+            })
+            .await
+        });
+
+        wait_for_listener(socks_addr).await;
+        let failure = run_socks_client_expect_relay_failure(socks_addr, unreachable_addr).await;
+        assert!(
+            failure.contains("failed to read relay response")
+                || failure.contains("connection closed before relay response"),
+            "unexpected failure: {failure}"
+        );
+
+        let _ = shutdown_tx.send(());
+        runtime_task
+            .await
+            .expect("runtime task should join")
+            .expect("runtime should stop cleanly");
+    }
+
     async fn reserve_local_port() -> SocketAddr {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
@@ -382,6 +515,59 @@ mod tests {
         Ok(())
     }
 
+    async fn run_socks_client_expect_relay_failure(
+        socks_addr: SocketAddr,
+        target_addr: SocketAddr,
+    ) -> String {
+        let mut stream = TcpStream::connect(socks_addr)
+            .await
+            .expect("socks connect should succeed");
+
+        stream
+            .write_all(&[0x05, 0x01, 0x00])
+            .await
+            .expect("greeting write should succeed");
+        let mut method = [0u8; 2];
+        stream
+            .read_exact(&mut method)
+            .await
+            .expect("method selection should be readable");
+        assert_eq!(method, [0x05, 0x00]);
+
+        let mut request = vec![0x05, 0x01, 0x00, 0x01];
+        match target_addr.ip() {
+            std::net::IpAddr::V4(ip) => request.extend_from_slice(&ip.octets()),
+            std::net::IpAddr::V6(_) => panic!("test target must be IPv4"),
+        }
+        request.extend_from_slice(&target_addr.port().to_be_bytes());
+
+        stream
+            .write_all(&request)
+            .await
+            .expect("request write should succeed");
+
+        let mut reply = [0u8; 10];
+        stream
+            .read_exact(&mut reply)
+            .await
+            .expect("reply should be readable");
+        assert_eq!(reply[1], 0x00, "unexpected socks reply: {reply:?}");
+
+        stream
+            .write_all(b"ping")
+            .await
+            .expect("payload write should succeed");
+
+        let mut echoed = [0u8; 4];
+        match stream.read_exact(&mut echoed).await {
+            Ok(_) => panic!("relay unexpectedly succeeded with payload {echoed:?}"),
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
+                "connection closed before relay response".into()
+            }
+            Err(err) => format!("failed to read relay response: {err}"),
+        }
+    }
+
     struct TrojanServerResult {
         request: Vec<u8>,
         payload: Vec<u8>,
@@ -394,6 +580,35 @@ mod tests {
     }
 
     async fn spawn_trojan_server(server_name: &str, destination: Destination) -> TestTrojanServer {
+        spawn_trojan_server_with_mode(
+            server_name,
+            destination,
+            "secret",
+            TrojanServerMode::EchoPayload,
+        )
+        .await
+    }
+
+    async fn spawn_rejecting_trojan_server(
+        server_name: &str,
+        destination: Destination,
+        expected_password: &str,
+    ) -> TestTrojanServer {
+        spawn_trojan_server_with_mode(
+            server_name,
+            destination,
+            expected_password,
+            TrojanServerMode::RejectAfterPayloadRead,
+        )
+        .await
+    }
+
+    async fn spawn_trojan_server_with_mode(
+        server_name: &str,
+        destination: Destination,
+        expected_password: &str,
+        mode: TrojanServerMode,
+    ) -> TestTrojanServer {
         let certified = generate_simple_self_signed(vec![server_name.to_string()])
             .expect("certificate generation should succeed");
         let certificate = certified.cert.der().clone();
@@ -415,7 +630,7 @@ mod tests {
             .local_addr()
             .expect("trojan listener should expose local addr");
         let acceptor = TlsAcceptor::from(Arc::new(config));
-        let expected_request_len = build_trojan_request("secret", &destination, &[])
+        let expected_request_len = build_trojan_request(expected_password, &destination, &[])
             .expect("request builder should succeed")
             .len();
 
@@ -437,10 +652,18 @@ mod tests {
                 .read_exact(&mut payload)
                 .await
                 .expect("trojan server should read payload");
-            stream
-                .write_all(&payload)
-                .await
-                .expect("trojan server should echo payload");
+
+            match mode {
+                TrojanServerMode::EchoPayload => {
+                    stream
+                        .write_all(&payload)
+                        .await
+                        .expect("trojan server should echo payload");
+                }
+                TrojanServerMode::RejectAfterPayloadRead => {
+                    let _ = stream.shutdown().await;
+                }
+            }
 
             TrojanServerResult { request, payload }
         });
@@ -450,6 +673,12 @@ mod tests {
             certificate_path,
             handle,
         }
+    }
+
+    #[derive(Clone, Copy)]
+    enum TrojanServerMode {
+        EchoPayload,
+        RejectAfterPayloadRead,
     }
 
     fn write_temp_certificate(certificate_der: &[u8], prefix: &str) -> PathBuf {
