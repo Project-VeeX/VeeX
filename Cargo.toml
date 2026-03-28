@@ -1,0 +1,20 @@
+[workspace]
+members = [
+    "crates/veex-signal",
+    "crates/veex-orbit",
+    "crates/veex-echo",
+    "crates/veex-archive",
+    "crates/veex-terminal",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MPL-2.0"
+authors = ["VeeX Contributors"]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+anyhow = "1"
