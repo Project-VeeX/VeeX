@@ -1,6 +1,9 @@
 use tokio::io::copy_bidirectional;
 
-use crate::{error::{ProxyError, Result}, types::BoxedAsyncStream};
+use crate::{
+    error::{ProxyError, Result},
+    types::BoxedAsyncStream,
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RelayStats {
@@ -21,4 +24,3 @@ pub async fn relay_bidirectional(
         bytes_down,
     })
 }
-

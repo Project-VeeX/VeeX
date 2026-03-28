@@ -9,7 +9,8 @@ use crate::{
     json::{parse_json, JsonValue},
     schema::{
         DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
-        RedirectInboundConfig, RouteConfig, SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
+        RedirectInboundConfig, RouteConfig, SocksInboundConfig, TrojanOutboundConfig,
+        TrojanTlsConfig,
     },
 };
 
@@ -163,7 +164,8 @@ fn parse_outbounds(value: Option<&JsonValue>) -> Result<Vec<OutboundConfig>, Con
             "direct" => OutboundConfig::Direct(DirectOutboundConfig { tag }),
             "trojan" => {
                 let server = required_string(object.get("server"), format!("{path}.server"))?;
-                let server_port = required_port(object.get("server_port"), format!("{path}.server_port"))?;
+                let server_port =
+                    required_port(object.get("server_port"), format!("{path}.server_port"))?;
                 let password = required_string(object.get("password"), format!("{path}.password"))?;
                 let tls = parse_trojan_tls(object.get("tls"), &path)?;
                 OutboundConfig::Trojan(TrojanOutboundConfig {
@@ -188,7 +190,10 @@ fn parse_outbounds(value: Option<&JsonValue>) -> Result<Vec<OutboundConfig>, Con
     Ok(outbounds)
 }
 
-fn parse_trojan_tls(value: Option<&JsonValue>, parent_path: &str) -> Result<TrojanTlsConfig, ConfigError> {
+fn parse_trojan_tls(
+    value: Option<&JsonValue>,
+    parent_path: &str,
+) -> Result<TrojanTlsConfig, ConfigError> {
     let path = format!("{parent_path}.tls");
     let object = match value {
         Some(value) => expect_object(value, &path)?,
@@ -209,7 +214,8 @@ fn parse_trojan_tls(value: Option<&JsonValue>, parent_path: &str) -> Result<Troj
         server_name: optional_string(object.get("server_name"), format!("{path}.server_name"))?,
         disable_sni: optional_bool(object.get("disable_sni"), format!("{path}.disable_sni"))?
             .unwrap_or(false),
-        insecure: optional_bool(object.get("insecure"), format!("{path}.insecure"))?.unwrap_or(false),
+        insecure: optional_bool(object.get("insecure"), format!("{path}.insecure"))?
+            .unwrap_or(false),
         certificate_path: optional_string(
             object.get("certificate_path"),
             format!("{path}.certificate_path"),
@@ -291,24 +297,27 @@ fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn expect_object<'a>(
-    value: &'a JsonValue,
+fn expect_object(
+    value: &JsonValue,
     path: impl Into<String>,
-) -> Result<&'a BTreeMap<String, JsonValue>, ConfigError> {
+) -> Result<&BTreeMap<String, JsonValue>, ConfigError> {
     match value {
         JsonValue::Object(object) => Ok(object),
         _ => Err(ConfigError::validation(path, "expected object")),
     }
 }
 
-fn expect_array<'a>(value: &'a JsonValue, path: impl Into<String>) -> Result<&'a [JsonValue], ConfigError> {
+fn expect_array(value: &JsonValue, path: impl Into<String>) -> Result<&[JsonValue], ConfigError> {
     match value {
         JsonValue::Array(items) => Ok(items),
         _ => Err(ConfigError::validation(path, "expected array")),
     }
 }
 
-fn required_string(value: Option<&JsonValue>, path: impl Into<String>) -> Result<String, ConfigError> {
+fn required_string(
+    value: Option<&JsonValue>,
+    path: impl Into<String>,
+) -> Result<String, ConfigError> {
     let path = path.into();
     let Some(value) = value else {
         return Err(ConfigError::validation(path, "field is required"));
@@ -320,7 +329,10 @@ fn required_string(value: Option<&JsonValue>, path: impl Into<String>) -> Result
     }
 }
 
-fn optional_string(value: Option<&JsonValue>, path: impl Into<String>) -> Result<Option<String>, ConfigError> {
+fn optional_string(
+    value: Option<&JsonValue>,
+    path: impl Into<String>,
+) -> Result<Option<String>, ConfigError> {
     let path = path.into();
     let Some(value) = value else {
         return Ok(None);
@@ -333,7 +345,10 @@ fn optional_string(value: Option<&JsonValue>, path: impl Into<String>) -> Result
     }
 }
 
-fn optional_bool(value: Option<&JsonValue>, path: impl Into<String>) -> Result<Option<bool>, ConfigError> {
+fn optional_bool(
+    value: Option<&JsonValue>,
+    path: impl Into<String>,
+) -> Result<Option<bool>, ConfigError> {
     let path = path.into();
     let Some(value) = value else {
         return Ok(None);
@@ -353,7 +368,10 @@ fn required_port(value: Option<&JsonValue>, path: impl Into<String>) -> Result<u
 
     match value {
         JsonValue::Number(number) if (1..=65535).contains(number) => Ok(*number as u16),
-        JsonValue::Number(_) => Err(ConfigError::validation(path, "port must be within 1..=65535")),
+        JsonValue::Number(_) => Err(ConfigError::validation(
+            path,
+            "port must be within 1..=65535",
+        )),
         _ => Err(ConfigError::validation(path, "expected integer port")),
     }
 }

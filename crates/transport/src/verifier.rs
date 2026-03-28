@@ -57,7 +57,9 @@ pub fn build_client_config(options: &CertificateVerifierOptions) -> Result<Clien
 
     let provider = rustls::crypto::aws_lc_rs::default_provider();
     let verifier: Arc<dyn ServerCertVerifier> = if options.insecure {
-        Arc::new(NoCertificateVerification::new(provider.signature_verification_algorithms))
+        Arc::new(NoCertificateVerification::new(
+            provider.signature_verification_algorithms,
+        ))
     } else if let Some(pinned_certificate) = pinned_certificate {
         let inner = rustls::client::WebPkiServerVerifier::builder(Arc::new(root_store.clone()))
             .build()
@@ -75,7 +77,9 @@ pub fn build_client_config(options: &CertificateVerifierOptions) -> Result<Clien
 
     let config = ClientConfig::builder_with_provider(provider.into())
         .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
-        .map_err(|err| ProxyError::Tls(format!("failed to configure TLS protocol versions: {err}")))?
+        .map_err(|err| {
+            ProxyError::Tls(format!("failed to configure TLS protocol versions: {err}"))
+        })?
         .dangerous()
         .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
@@ -100,9 +104,9 @@ fn load_root_store() -> Result<RootCertStore> {
     }
 
     for certificate in native.certs {
-        root_store
-            .add(certificate)
-            .map_err(|err| ProxyError::Tls(format!("failed to add system root certificate: {err}")))?;
+        root_store.add(certificate).map_err(|err| {
+            ProxyError::Tls(format!("failed to add system root certificate: {err}"))
+        })?;
     }
 
     Ok(root_store)
@@ -113,16 +117,16 @@ fn add_certificates_to_root_store(
     certificates: &[CertificateDer<'static>],
 ) -> Result<()> {
     for certificate in certificates {
-        root_store
-            .add(certificate.clone())
-            .map_err(|err| ProxyError::Tls(format!("failed to add certificate to root store: {err}")))?;
+        root_store.add(certificate.clone()).map_err(|err| {
+            ProxyError::Tls(format!("failed to add certificate to root store: {err}"))
+        })?;
     }
     Ok(())
 }
 
 fn read_certificates(path: &str) -> Result<Vec<CertificateDer<'static>>> {
-    let content =
-        fs::read(path).map_err(|err| ProxyError::Tls(format!("failed to read certificate file {path}: {err}")))?;
+    let content = fs::read(path)
+        .map_err(|err| ProxyError::Tls(format!("failed to read certificate file {path}: {err}")))?;
     read_certificates_from_slice(&content).map_err(|err| {
         ProxyError::Tls(format!(
             "failed to parse certificate file {path} as PEM/DER: {err}"
@@ -145,8 +149,9 @@ pub(crate) fn read_certificates_from_slice(
 }
 
 fn ensure_file_exists(path: &str) -> Result<()> {
-    let metadata = fs::metadata(Path::new(path))
-        .map_err(|err| ProxyError::Tls(format!("failed to access certificate file {path}: {err}")))?;
+    let metadata = fs::metadata(Path::new(path)).map_err(|err| {
+        ProxyError::Tls(format!("failed to access certificate file {path}: {err}"))
+    })?;
     if !metadata.is_file() {
         return Err(ProxyError::Tls(format!(
             "certificate path is not a file: {path}"
@@ -233,8 +238,13 @@ impl ServerCertVerifier for PinnedCertificateVerifier {
         ocsp_response: &[u8],
         now: UnixTime,
     ) -> std::result::Result<ServerCertVerified, RustlsError> {
-        self.inner
-            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)?;
+        self.inner.verify_server_cert(
+            end_entity,
+            intermediates,
+            server_name,
+            ocsp_response,
+            now,
+        )?;
 
         if end_entity.as_ref() != self.pinned_certificate.as_ref() {
             return Err(RustlsError::General(

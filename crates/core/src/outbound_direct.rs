@@ -1,6 +1,9 @@
 use std::{net::SocketAddr, time::Duration};
 
-use tokio::{net::{lookup_host, TcpStream}, time::timeout};
+use tokio::{
+    net::{lookup_host, TcpStream},
+    time::timeout,
+};
 
 use crate::{
     error::{ProxyError, Result},
@@ -65,9 +68,9 @@ async fn resolve_destination(host: &Host, port: u16) -> Result<Vec<SocketAddr>> 
     match host {
         Host::Ip(ip) => Ok(vec![SocketAddr::new(*ip, port)]),
         Host::Domain(domain) => {
-            let addresses = lookup_host((domain.as_str(), port))
-                .await
-                .map_err(|err| ProxyError::Resolve(format!("failed to resolve {domain}:{port}: {err}")))?;
+            let addresses = lookup_host((domain.as_str(), port)).await.map_err(|err| {
+                ProxyError::Resolve(format!("failed to resolve {domain}:{port}: {err}"))
+            })?;
             let addresses: Vec<_> = addresses.collect();
             if addresses.is_empty() {
                 return Err(ProxyError::Resolve(format!(
@@ -79,7 +82,10 @@ async fn resolve_destination(host: &Host, port: u16) -> Result<Vec<SocketAddr>> 
     }
 }
 
-async fn connect_socket(address: SocketAddr, timeout_duration: Option<Duration>) -> Result<TcpStream> {
+async fn connect_socket(
+    address: SocketAddr,
+    timeout_duration: Option<Duration>,
+) -> Result<TcpStream> {
     let connect_future = TcpStream::connect(address);
 
     match timeout_duration {

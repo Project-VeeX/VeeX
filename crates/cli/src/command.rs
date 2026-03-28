@@ -55,9 +55,7 @@ where
     }
 
     let Some(config_path) = args.next() else {
-        return Err(CommandError(
-            "missing config path after '-c'".to_string(),
-        ));
+        return Err(CommandError("missing config path after '-c'".to_string()));
     };
 
     if args.next().is_some() {
@@ -108,4 +106,3 @@ mod tests {
         assert!(err.to_string().contains("missing required flag"));
     }
 }
-

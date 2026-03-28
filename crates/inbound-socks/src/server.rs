@@ -7,13 +7,13 @@ use std::{
     time::Instant,
 };
 
-use veex_core::{
-    BoxFuture, BoxedAsyncStream, Dispatcher, Inbound, Network, ProxyError, Result, SessionContext,
-    SessionMeta,
-};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+};
+use veex_core::{
+    BoxFuture, BoxedAsyncStream, Dispatcher, Inbound, Network, ProxyError, Result, SessionContext,
+    SessionMeta,
 };
 
 use crate::{
@@ -56,10 +56,14 @@ impl SocksInbound {
 
     pub fn validate(&self) -> Result<()> {
         if self.tag.trim().is_empty() {
-            return Err(ProxyError::Config("socks inbound tag must not be empty".into()));
+            return Err(ProxyError::Config(
+                "socks inbound tag must not be empty".into(),
+            ));
         }
         if self.listen.trim().is_empty() {
-            return Err(ProxyError::Config("socks inbound listen must not be empty".into()));
+            return Err(ProxyError::Config(
+                "socks inbound listen must not be empty".into(),
+            ));
         }
         if self.listen_port == 0 {
             return Err(ProxyError::Config(
@@ -213,4 +217,3 @@ async fn read_request(stream: &mut TcpStream) -> std::result::Result<Vec<u8>, So
 
     Ok(bytes)
 }
-

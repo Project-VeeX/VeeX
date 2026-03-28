@@ -149,7 +149,10 @@ impl<'a> Parser<'a> {
                     }
                 }
                 0x00..=0x1F => {
-                    return Err(ConfigError::json(path, "control characters are not allowed in strings"));
+                    return Err(ConfigError::json(
+                        path,
+                        "control characters are not allowed in strings",
+                    ));
                 }
                 byte => output.push(byte as char),
             }
@@ -176,9 +179,8 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        let slice = std::str::from_utf8(&self.input[start..self.pos]).map_err(|_| {
-            ConfigError::json(path, "number token is not valid UTF-8")
-        })?;
+        let slice = std::str::from_utf8(&self.input[start..self.pos])
+            .map_err(|_| ConfigError::json(path, "number token is not valid UTF-8"))?;
 
         slice
             .parse::<i64>()
@@ -203,9 +205,9 @@ impl<'a> Parser<'a> {
     fn parse_u16_hex(&mut self, path: &str) -> Result<u16, ConfigError> {
         let mut value = 0u16;
         for _ in 0..4 {
-            let byte = self.next().ok_or_else(|| {
-                ConfigError::json(path, "unterminated unicode escape sequence")
-            })?;
+            let byte = self
+                .next()
+                .ok_or_else(|| ConfigError::json(path, "unterminated unicode escape sequence"))?;
             value = (value << 4)
                 | match byte {
                     b'0'..=b'9' => (byte - b'0') as u16,
@@ -225,8 +227,7 @@ impl<'a> Parser<'a> {
                 path,
                 format!(
                     "expected '{}' but found '{}'",
-                    expected as char,
-                    actual as char
+                    expected as char, actual as char
                 ),
             )),
             None => Err(ConfigError::json(

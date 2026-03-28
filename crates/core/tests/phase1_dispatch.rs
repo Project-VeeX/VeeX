@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use veex_core::{DirectOutbound, Outbound, Router};
 
@@ -34,4 +30,3 @@ fn direct_outbound_is_constructible_for_dispatcher_registration() {
 
     assert_eq!(outbounds.len(), 1);
 }
-

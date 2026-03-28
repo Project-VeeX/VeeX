@@ -53,11 +53,13 @@ fn try_main() -> Result<u8, (u8, String)> {
 fn run_command(config_path: &str) -> Result<u8, (u8, String)> {
     let config = load_config(config_path)?;
     let logging = LoggingOptions {
-        level: parse_log_level(&config.log.level).map_err(|message| (EXIT_CONFIG_ERROR, message))?,
+        level: parse_log_level(&config.log.level)
+            .map_err(|message| (EXIT_CONFIG_ERROR, message))?,
         disabled: config.log.disabled,
     };
 
-    init_logging(&logging).map_err(|err| (EXIT_STARTUP_ERROR, format!("logging init failed: {err}")))?;
+    init_logging(&logging)
+        .map_err(|err| (EXIT_STARTUP_ERROR, format!("logging init failed: {err}")))?;
 
     println!(
         "veex starting: inbounds={}, outbounds={}, final={}",
@@ -69,17 +71,16 @@ fn run_command(config_path: &str) -> Result<u8, (u8, String)> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|err| (EXIT_STARTUP_ERROR, format!("failed to build runtime: {err}")))?;
+        .map_err(|err| {
+            (
+                EXIT_STARTUP_ERROR,
+                format!("failed to build runtime: {err}"),
+            )
+        })?;
 
     runtime
         .block_on(async {
-            run_with_shutdown(&config, async {
-                tokio::signal::ctrl_c()
-                    .await
-                    .map_err(|err| format!("failed to wait for shutdown signal: {err}"))?;
-                Ok::<(), String>(())
-            })
-            .await
+            run_with_shutdown(&config, async { wait_for_shutdown_signal().await }).await
         })
         .map_err(|err| (EXIT_RUNTIME_ERROR, err))?;
 
@@ -105,3 +106,28 @@ fn parse_log_level(value: &str) -> Result<LogLevel, String> {
     }
 }
 
+async fn wait_for_shutdown_signal() -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut terminate = signal(SignalKind::terminate())
+            .map_err(|err| format!("failed to install SIGTERM handler: {err}"))?;
+
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                result.map_err(|err| format!("failed to wait for SIGINT: {err}"))?;
+                Ok(())
+            }
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .map_err(|err| format!("failed to wait for shutdown signal: {err}"))?;
+        Ok(())
+    }
+}

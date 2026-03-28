@@ -5,7 +5,9 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use veex_core::{BoxedAsyncStream, Host, ProxyError, Result};
 
-use crate::verifier::{build_client_config, validate_certificate_paths, CertificateVerifierOptions};
+use crate::verifier::{
+    build_client_config, validate_certificate_paths, CertificateVerifierOptions,
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct TlsClientOptions {
@@ -259,7 +261,10 @@ mod tests {
         let acceptor = TlsAcceptor::from(Arc::new(config));
 
         tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.expect("listener accept should succeed");
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("listener accept should succeed");
             let mut stream = acceptor
                 .accept(stream)
                 .await

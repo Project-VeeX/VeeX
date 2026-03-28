@@ -14,4 +14,6 @@ pub use outbound_direct::DirectOutbound;
 pub use relay::{relay_bidirectional, RelayStats};
 pub use router::{RouteDecision, RouteReason, Router};
 pub use traits::{BoxFuture, Dispatcher, Inbound, Outbound};
-pub use types::{AsyncStream, BoxedAsyncStream, Destination, Host, Network, SessionContext, SessionMeta};
+pub use types::{
+    AsyncStream, BoxedAsyncStream, Destination, Host, Network, SessionContext, SessionMeta,
+};

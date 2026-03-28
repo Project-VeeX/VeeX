@@ -2,7 +2,7 @@ use std::{collections::HashMap, future::Future, sync::Arc};
 
 use tokio::task::JoinSet;
 use veex_config::{
-    DEFAULT_DIRECT_OUTBOUND_TAG, InboundConfig, OutboundConfig, ProxyConfig, TrojanTlsConfig,
+    InboundConfig, OutboundConfig, ProxyConfig, TrojanTlsConfig, DEFAULT_DIRECT_OUTBOUND_TAG,
 };
 use veex_core::{DirectOutbound, Dispatcher, Inbound, Outbound, Router, SimpleDispatcher};
 use veex_inbound_socks::SocksInbound;
@@ -61,9 +61,7 @@ fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, String> {
     })
 }
 
-fn build_outbounds(
-    config: &ProxyConfig,
-) -> Result<HashMap<String, Arc<dyn Outbound>>, String> {
+fn build_outbounds(config: &ProxyConfig) -> Result<HashMap<String, Arc<dyn Outbound>>, String> {
     let mut outbounds: HashMap<String, Arc<dyn Outbound>> = HashMap::new();
 
     for outbound in &config.outbounds {
@@ -179,7 +177,10 @@ mod tests {
             .local_addr()
             .expect("echo listener should expose local addr");
         let echo_task = tokio::spawn(async move {
-            let (mut stream, _) = echo_listener.accept().await.expect("echo accept should succeed");
+            let (mut stream, _) = echo_listener
+                .accept()
+                .await
+                .expect("echo accept should succeed");
             let mut buf = [0u8; 4];
             stream
                 .read_exact(&mut buf)
@@ -213,7 +214,9 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let runtime_task = tokio::spawn(async move {
             run_with_shutdown(&config, async move {
-                shutdown_rx.await.map_err(|err| format!("shutdown channel failed: {err}"))?;
+                shutdown_rx
+                    .await
+                    .map_err(|err| format!("shutdown channel failed: {err}"))?;
                 Ok(())
             })
             .await
@@ -287,8 +290,8 @@ mod tests {
             socks_addr,
             SocketAddr::from((Ipv4Addr::new(93, 184, 216, 34), 443)),
         )
-            .await
-            .expect("socks trojan round-trip should succeed");
+        .await
+        .expect("socks trojan round-trip should succeed");
 
         let _ = shutdown_tx.send(());
         runtime_task
@@ -300,7 +303,10 @@ mod tests {
             .handle
             .await
             .expect("trojan server task should join");
-        assert_eq!(received.request, build_trojan_request("secret", &destination, &[]).unwrap());
+        assert_eq!(
+            received.request,
+            build_trojan_request("secret", &destination, &[]).unwrap()
+        );
         assert_eq!(received.payload, b"ping");
         let _ = fs::remove_file(trojan_server.certificate_path);
     }
@@ -308,12 +314,8 @@ mod tests {
     #[tokio::test]
     async fn runtime_reports_trojan_failure_on_wrong_password() {
         let destination = Destination::new(Host::Ip(Ipv4Addr::new(93, 184, 216, 34).into()), 443);
-        let trojan_server = spawn_rejecting_trojan_server(
-            "localhost",
-            destination.clone(),
-            "secret",
-        )
-        .await;
+        let trojan_server =
+            spawn_rejecting_trojan_server("localhost", destination.clone(), "secret").await;
         let socks_addr = reserve_local_port().await;
         let config = ProxyConfig {
             log: LogConfig {
@@ -635,7 +637,10 @@ mod tests {
             .len();
 
         let handle = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.expect("trojan accept should succeed");
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("trojan accept should succeed");
             let mut stream = acceptor
                 .accept(stream)
                 .await

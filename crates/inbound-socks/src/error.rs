@@ -50,4 +50,3 @@ impl From<SocksError> for ProxyError {
         }
     }
 }
-

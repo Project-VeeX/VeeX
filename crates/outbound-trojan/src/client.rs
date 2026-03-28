@@ -1,8 +1,8 @@
 use std::{net::IpAddr, str::FromStr, time::Duration};
 
+use tokio::io::AsyncWriteExt;
 use veex_core::{BoxFuture, BoxedAsyncStream, Host, Outbound, ProxyError, Result, SessionContext};
 use veex_transport::{connect_host, connect_tls, TcpConnectOptions, TlsClientOptions};
-use tokio::io::AsyncWriteExt;
 
 use crate::request::build_trojan_request;
 
@@ -57,10 +57,14 @@ impl TrojanOutbound {
 
     pub fn validate(&self) -> Result<()> {
         if self.tag.trim().is_empty() {
-            return Err(ProxyError::Config("trojan outbound tag must not be empty".into()));
+            return Err(ProxyError::Config(
+                "trojan outbound tag must not be empty".into(),
+            ));
         }
         if self.password.is_empty() {
-            return Err(ProxyError::Config("trojan outbound password must not be empty".into()));
+            return Err(ProxyError::Config(
+                "trojan outbound password must not be empty".into(),
+            ));
         }
         if self.server_port == 0 {
             return Err(ProxyError::Config(
@@ -96,10 +100,9 @@ impl Outbound for TrojanOutbound {
 
             let mut stream = connect_tls(stream, &this.server, &this.tls).await?;
             let request = build_trojan_request(&this.password, &destination, &first_payload)?;
-            stream
-                .write_all(&request)
-                .await
-                .map_err(|err| ProxyError::Protocol(format!("failed to write trojan request: {err}")))?;
+            stream.write_all(&request).await.map_err(|err| {
+                ProxyError::Protocol(format!("failed to write trojan request: {err}"))
+            })?;
 
             Ok(stream)
         })
@@ -112,4 +115,3 @@ fn parse_host(value: &str) -> Host {
         Err(_) => Host::Domain(value.to_string()),
     }
 }
-

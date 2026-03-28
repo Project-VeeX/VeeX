@@ -54,7 +54,9 @@ pub fn decode_greeting(bytes: &[u8]) -> Result<Greeting, SocksError> {
 
     let method_len = bytes[1] as usize;
     if bytes.len() != method_len + 2 {
-        return Err(SocksError::Protocol("greeting method list length mismatch".into()));
+        return Err(SocksError::Protocol(
+            "greeting method list length mismatch".into(),
+        ));
     }
 
     Ok(Greeting {
@@ -75,7 +77,9 @@ pub fn decode_request(bytes: &[u8]) -> Result<Request, SocksError> {
     }
 
     if bytes[2] != 0x00 {
-        return Err(SocksError::Protocol("request reserved field must be 0x00".into()));
+        return Err(SocksError::Protocol(
+            "request reserved field must be 0x00".into(),
+        ));
     }
 
     let command = match bytes[1] {
@@ -99,7 +103,9 @@ pub fn decode_request(bytes: &[u8]) -> Result<Request, SocksError> {
             let domain_len = bytes[4] as usize;
             let expected = 4 + 1 + domain_len + 2;
             if bytes.len() != expected {
-                return Err(SocksError::Protocol("domain request length mismatch".into()));
+                return Err(SocksError::Protocol(
+                    "domain request length mismatch".into(),
+                ));
             }
             let domain = std::str::from_utf8(&bytes[5..5 + domain_len])
                 .map_err(|_| SocksError::Protocol("domain is not valid UTF-8".into()))?;
@@ -174,7 +180,10 @@ mod tests {
         let request = decode_request(&[SOCKS_VERSION, 0x01, 0x00, 0x01, 1, 2, 3, 4, 0x01, 0xbb])
             .expect("decode");
         assert_eq!(request.command, Command::Connect);
-        assert_eq!(request.destination.host, Host::Ip(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))));
+        assert_eq!(
+            request.destination.host,
+            Host::Ip(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)))
+        );
         assert_eq!(request.destination.port, 443);
     }
 
@@ -213,7 +222,10 @@ mod tests {
         bytes.extend_from_slice(&1080u16.to_be_bytes());
 
         let request = decode_request(&bytes).expect("decode");
-        assert_eq!(request.destination.host, Host::Ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert_eq!(
+            request.destination.host,
+            Host::Ip(IpAddr::V6(Ipv6Addr::LOCALHOST))
+        );
         assert_eq!(request.destination.port, 1080);
     }
 
@@ -223,4 +235,3 @@ mod tests {
         assert_eq!(reply, vec![0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]);
     }
 }
-

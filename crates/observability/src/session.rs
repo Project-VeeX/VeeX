@@ -16,6 +16,7 @@ pub struct SessionSummary {
 }
 
 impl SessionSummary {
+    #[allow(clippy::too_many_arguments)]
     pub fn succeeded(
         session_id: u64,
         inbound: impl Into<String>,

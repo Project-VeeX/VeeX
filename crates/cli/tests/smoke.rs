@@ -1,0 +1,194 @@
+use std::{
+    fs,
+    io::{Read, Write},
+    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+    path::PathBuf,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+#[test]
+fn run_starts_listener_relays_direct_and_shuts_down_on_sigint() {
+    run_lifecycle_smoke_test("-INT");
+}
+
+#[test]
+fn run_starts_listener_relays_direct_and_shuts_down_on_sigterm() {
+    run_lifecycle_smoke_test("-TERM");
+}
+
+fn run_lifecycle_smoke_test(signal: &str) {
+    let echo_listener = TcpListener::bind(("127.0.0.1", 0)).expect("echo listener should bind");
+    let echo_addr = echo_listener
+        .local_addr()
+        .expect("echo listener should expose local addr");
+    let echo_thread = thread::spawn(move || {
+        let (mut stream, _) = echo_listener.accept().expect("echo accept should succeed");
+        let mut buf = [0u8; 4];
+        stream
+            .read_exact(&mut buf)
+            .expect("echo server should read payload");
+        stream
+            .write_all(&buf)
+            .expect("echo server should write payload");
+    });
+
+    let socks_addr = reserve_local_addr();
+    let config_path = write_temp_file(
+        "veex-smoke-run",
+        &format!(
+            r#"{{
+  "log": {{ "level": "info", "disabled": false }},
+  "inbounds": [
+    {{ "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": {} }}
+  ],
+  "outbounds": [
+    {{ "type": "direct", "tag": "direct" }}
+  ],
+  "route": {{ "final": "direct" }}
+}}"#,
+            socks_addr.port()
+        ),
+    );
+
+    let child = Command::new(env!("CARGO_BIN_EXE_veex"))
+        .args([
+            "run",
+            "-c",
+            config_path.to_str().expect("config path should be utf-8"),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("veex run should spawn");
+
+    wait_for_listener(socks_addr);
+    run_socks_round_trip(socks_addr, echo_addr);
+
+    send_signal(child.id(), signal);
+    let output = child
+        .wait_with_output()
+        .expect("veex run should exit cleanly");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("veex starting"));
+    assert!(stdout.contains("veex stopped"));
+    assert!(stdout.contains("session_id="));
+    assert!(stdout.contains("error_kind=none"));
+
+    echo_thread.join().expect("echo thread should join");
+    fs::remove_file(&config_path).expect("config file should be removed");
+}
+
+#[test]
+fn check_returns_config_error_for_invalid_config() {
+    let config_path = write_temp_file(
+        "veex-smoke-check",
+        r#"{
+  "inbounds": [
+    { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+  ],
+  "outbounds": [
+    { "type": "direct", "tag": "direct" }
+  ]
+}"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_veex"))
+        .args([
+            "check",
+            "-c",
+            config_path.to_str().expect("config path should be utf-8"),
+        ])
+        .output()
+        .expect("veex check should run");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "stderr:\n{stderr}");
+    assert!(stderr.contains("$.route"));
+
+    fs::remove_file(&config_path).expect("config file should be removed");
+}
+
+fn reserve_local_addr() -> SocketAddr {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("temporary listener should bind");
+    listener
+        .local_addr()
+        .expect("temporary listener should expose local addr")
+}
+
+fn write_temp_file(prefix: &str, content: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("{prefix}-{nanos}.json"));
+    fs::write(&path, content).expect("temporary config should be written");
+    path
+}
+
+fn wait_for_listener(addr: SocketAddr) {
+    for _ in 0..100 {
+        if TcpStream::connect(addr).is_ok() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    panic!("listener did not become ready on {addr}");
+}
+
+fn run_socks_round_trip(socks_addr: SocketAddr, target_addr: SocketAddr) {
+    let mut stream = TcpStream::connect(socks_addr).expect("socks connect should succeed");
+
+    stream
+        .write_all(&[0x05, 0x01, 0x00])
+        .expect("greeting write should succeed");
+
+    let mut method = [0u8; 2];
+    stream
+        .read_exact(&mut method)
+        .expect("method selection should be readable");
+    assert_eq!(method, [0x05, 0x00]);
+
+    let mut request = vec![0x05, 0x01, 0x00, 0x01];
+    match target_addr.ip() {
+        std::net::IpAddr::V4(ip) => request.extend_from_slice(&ip.octets()),
+        std::net::IpAddr::V6(_) => panic!("smoke target must be IPv4"),
+    }
+    request.extend_from_slice(&target_addr.port().to_be_bytes());
+
+    stream
+        .write_all(&request)
+        .expect("request write should succeed");
+
+    let mut reply = [0u8; 10];
+    stream
+        .read_exact(&mut reply)
+        .expect("reply should be readable");
+    assert_eq!(reply[1], 0x00, "unexpected socks reply: {reply:?}");
+
+    stream
+        .write_all(b"ping")
+        .expect("payload write should succeed");
+    let mut echoed = [0u8; 4];
+    stream
+        .read_exact(&mut echoed)
+        .expect("echoed payload should be readable");
+    assert_eq!(&echoed, b"ping");
+    let _ = stream.shutdown(Shutdown::Both);
+}
+
+fn send_signal(pid: u32, signal: &str) {
+    let status = Command::new("kill")
+        .args([signal, &pid.to_string()])
+        .status()
+        .expect("kill should run");
+    assert!(status.success(), "kill {signal} {pid} failed");
+}

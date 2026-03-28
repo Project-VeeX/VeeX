@@ -13,4 +13,3 @@ pub use schema::{
     TrojanTlsConfig,
 };
 pub use validate::{load_from_path, parse_config, ConfigError, ExitCodeHint};
-

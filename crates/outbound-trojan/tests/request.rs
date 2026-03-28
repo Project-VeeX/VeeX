@@ -7,7 +7,9 @@ use veex_outbound_trojan::{build_trojan_request, password_hash_hex};
 fn password_hash_has_expected_length() {
     let hash = password_hash_hex("secret");
     assert_eq!(hash.len(), 56);
-    assert!(hash.chars().all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()));
+    assert!(hash
+        .chars()
+        .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()));
 }
 
 #[test]
@@ -57,4 +59,3 @@ fn encodes_ipv6_destination() {
     assert_eq!(request[59], 0x04);
     assert_eq!(&request[60..76], &Ipv6Addr::LOCALHOST.octets());
 }
-

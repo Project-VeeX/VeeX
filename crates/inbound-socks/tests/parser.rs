@@ -65,4 +65,3 @@ fn reply_code_values_are_stable() {
     assert_eq!(ReplyCode::Succeeded as u8, 0x00);
     assert_eq!(ReplyCode::CommandNotSupported as u8, 0x07);
 }
-

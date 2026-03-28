@@ -11,10 +11,7 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     ServerConfig,
 };
-use tokio::{
-    io::AsyncReadExt,
-    net::TcpListener,
-};
+use tokio::{io::AsyncReadExt, net::TcpListener};
 use tokio_rustls::TlsAcceptor;
 use veex_core::{Destination, Host, Network, Outbound, SessionContext, SessionMeta};
 use veex_outbound_trojan::{build_trojan_request, TrojanOutbound};
@@ -95,7 +92,10 @@ async fn spawn_tls_server(server_name: &str) -> TestTlsServer {
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
     let handle = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("listener accept should succeed");
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("listener accept should succeed");
         let mut stream = acceptor
             .accept(stream)
             .await
@@ -151,8 +151,7 @@ fn pem_encode_certificate(certificate_der: &[u8]) -> String {
 }
 
 fn base64_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut index = 0;

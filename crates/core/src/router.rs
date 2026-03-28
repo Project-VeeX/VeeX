@@ -25,7 +25,10 @@ pub struct Router {
 }
 
 impl Router {
-    pub fn new(final_outbound_tag: impl Into<String>, direct_outbound_tag: impl Into<String>) -> Self {
+    pub fn new(
+        final_outbound_tag: impl Into<String>,
+        direct_outbound_tag: impl Into<String>,
+    ) -> Self {
         Self {
             final_outbound_tag: final_outbound_tag.into(),
             direct_outbound_tag: direct_outbound_tag.into(),
@@ -169,7 +172,10 @@ mod tests {
     #[test]
     fn bypasses_private_ipv4() {
         let router = Router::new("proxy", "direct");
-        let ctx = build_ctx(Destination::from_ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)), 53));
+        let ctx = build_ctx(Destination::from_ip(
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
+            53,
+        ));
 
         let decision = router.select(&ctx);
         assert_eq!(decision.outbound_tag, "direct");
