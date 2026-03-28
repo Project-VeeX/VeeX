@@ -1,0 +1,16 @@
+[package]
+name = "veex-outbound-trojan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+veex-core = { path = "../core" }
+veex-transport = { path = "../transport" }
+tokio.workspace = true
+
+[dev-dependencies]
+rcgen = "0.13"
+rustls.workspace = true
+tokio-rustls.workspace = true
+
