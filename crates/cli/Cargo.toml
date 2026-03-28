@@ -1,0 +1,24 @@
+[package]
+name = "veex-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "veex"
+path = "src/main.rs"
+
+[dependencies]
+veex-config = { path = "../config" }
+veex-core = { path = "../core" }
+veex-inbound-socks = { path = "../inbound-socks" }
+veex-observability = { path = "../observability" }
+veex-outbound-trojan = { path = "../outbound-trojan" }
+veex-transport = { path = "../transport" }
+tokio.workspace = true
+
+[dev-dependencies]
+rcgen = "0.13"
+rustls.workspace = true
+tokio-rustls.workspace = true
+
