@@ -1,10 +1,11 @@
-use std::{collections::HashMap, future::Future, sync::Arc};
+use std::{collections::HashMap, future::Future, net::ToSocketAddrs, sync::Arc};
 
 use tokio::task::JoinSet;
 use veex_config::{
     InboundConfig, OutboundConfig, ProxyConfig, TrojanTlsConfig, DEFAULT_DIRECT_OUTBOUND_TAG,
 };
 use veex_core::{DirectOutbound, Dispatcher, Inbound, Outbound, Router, SimpleDispatcher};
+use veex_inbound_redirect::RedirectInbound;
 use veex_inbound_socks::SocksInbound;
 use veex_outbound_trojan::TrojanOutbound;
 use veex_transport::TlsClientOptions;
@@ -95,6 +96,10 @@ fn build_router(config: &ProxyConfig) -> Router {
     for outbound in &config.outbounds {
         if let OutboundConfig::Trojan(trojan) = outbound {
             router = router.with_bypass_host(trojan.server.clone());
+
+            if let Ok(addrs) = (trojan.server.as_str(), trojan.server_port).to_socket_addrs() {
+                router = router.with_bypass_hosts(addrs.map(|addr| addr.ip().to_string()));
+            }
         }
     }
 
@@ -115,10 +120,12 @@ fn build_inbounds(config: &ProxyConfig) -> Result<Vec<Arc<dyn Inbound>>, String>
                 inbounds.push(instance);
             }
             InboundConfig::Redirect(redirect) => {
-                return Err(format!(
-                    "redirect inbound '{}' is not wired into the CLI runtime yet",
-                    redirect.tag
+                let instance: Arc<dyn Inbound> = Arc::new(RedirectInbound::new(
+                    redirect.tag.clone(),
+                    redirect.listen.clone(),
+                    redirect.listen_port,
                 ));
+                inbounds.push(instance);
             }
         }
     }
@@ -432,6 +439,49 @@ mod tests {
                 || failure.contains("connection closed before relay response"),
             "unexpected failure: {failure}"
         );
+
+        let _ = shutdown_tx.send(());
+        runtime_task
+            .await
+            .expect("runtime task should join")
+            .expect("runtime should stop cleanly");
+    }
+
+    #[tokio::test]
+    async fn runtime_starts_with_redirect_inbound() {
+        let redirect_addr = reserve_local_port().await;
+        let config = ProxyConfig {
+            log: LogConfig {
+                level: "info".into(),
+                disabled: false,
+            },
+            inbounds: vec![InboundConfig::Redirect(
+                veex_config::RedirectInboundConfig {
+                    tag: "redirect-in".into(),
+                    listen: "127.0.0.1".into(),
+                    listen_port: redirect_addr.port(),
+                },
+            )],
+            outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
+                tag: "direct".into(),
+            })],
+            route: RouteConfig {
+                final_outbound: "direct".into(),
+            },
+        };
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let runtime_task = tokio::spawn(async move {
+            run_with_shutdown(&config, async move {
+                shutdown_rx
+                    .await
+                    .map_err(|err| format!("shutdown channel failed: {err}"))?;
+                Ok(())
+            })
+            .await
+        });
+
+        wait_for_listener(redirect_addr).await;
 
         let _ = shutdown_tx.send(());
         runtime_task

@@ -1,25 +1,9 @@
-//! Redirect inbound implementation placeholder for Task 06.
+//! Linux redirect inbound support built on top of `SO_ORIGINAL_DST`.
 
-use veex_core::Result;
+pub mod error;
+pub mod original_dst;
+pub mod server;
 
-pub const SO_ORIGINAL_DST: i32 = 80;
-pub const IP6T_SO_ORIGINAL_DST: i32 = 80;
-
-#[derive(Clone, Debug)]
-pub struct RedirectInbound {
-    tag: String,
-}
-
-impl RedirectInbound {
-    pub fn new(tag: impl Into<String>) -> Self {
-        Self { tag: tag.into() }
-    }
-
-    pub fn tag(&self) -> &str {
-        &self.tag
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        Ok(())
-    }
-}
+pub use error::RedirectError;
+pub use original_dst::{resolve_original_dst, IP6T_SO_ORIGINAL_DST, SO_ORIGINAL_DST};
+pub use server::RedirectInbound;

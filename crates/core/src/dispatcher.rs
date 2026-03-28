@@ -1,11 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
-use veex_observability::{emit_session_summary, SessionSummary};
+use veex_observability::{emit_session_summary, log_line, LogLevel, SessionSummary};
 
 use crate::{
     error::ProxyError,
     relay::relay_bidirectional,
-    router::Router,
+    router::{RouteReason, Router},
     traits::{BoxFuture, Dispatcher, Outbound},
     types::{BoxedAsyncStream, SessionContext},
 };
@@ -25,6 +25,19 @@ impl Dispatcher for SimpleDispatcher {
     fn dispatch(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             let decision = self.router.select(&ctx);
+            if decision.reason != RouteReason::Final {
+                log_line(
+                    LogLevel::Info,
+                    &format!(
+                        "session_id={} inbound={} selected_outbound={} bypass_reason={} dest={}",
+                        ctx.meta.id,
+                        ctx.meta.inbound_tag,
+                        decision.outbound_tag,
+                        decision.reason.as_str(),
+                        ctx.meta.destination,
+                    ),
+                );
+            }
             let outbound_tag = decision.outbound_tag.clone();
             let outbound = self.outbounds.get(&decision.outbound_tag).ok_or_else(|| {
                 ProxyError::Config(format!("missing outbound tag: {}", decision.outbound_tag))

@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 veex-config = { path = "../config" }
 veex-core = { path = "../core" }
+veex-inbound-redirect = { path = "../inbound-redirect" }
 veex-inbound-socks = { path = "../inbound-socks" }
 veex-observability = { path = "../observability" }
 veex-outbound-trojan = { path = "../outbound-trojan" }

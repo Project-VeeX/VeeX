@@ -499,6 +499,7 @@ dependencies = [
  "tokio-rustls",
  "veex-config",
  "veex-core",
+ "veex-inbound-redirect",
  "veex-inbound-socks",
  "veex-observability",
  "veex-outbound-trojan",
@@ -521,7 +522,10 @@ dependencies = [
 name = "veex-inbound-redirect"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "tokio",
  "veex-core",
+ "veex-observability",
 ]
 
 [[package]]

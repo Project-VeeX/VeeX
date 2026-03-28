@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+libc = "0.2"
+tokio.workspace = true
 veex-core = { path = "../core" }
+veex-observability = { path = "../observability" }
 
 

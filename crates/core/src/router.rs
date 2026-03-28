@@ -90,6 +90,18 @@ impl Router {
     }
 }
 
+impl RouteReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Final => "final",
+            Self::BypassLoopback => "loopback",
+            Self::BypassPrivate => "private",
+            Self::BypassLinkLocal => "link_local",
+            Self::BypassConfigured => "configured",
+        }
+    }
+}
+
 fn normalize_host(host: &Host) -> String {
     match host {
         Host::Ip(ip) => ip.to_string(),
