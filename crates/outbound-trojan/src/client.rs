@@ -84,7 +84,7 @@ impl Outbound for TrojanOutbound {
     fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
         let this = self.clone();
         let destination = ctx.meta.destination.clone();
-        let first_payload = ctx.first_payload.clone();
+        let buffered_payload = ctx.buffered_payload.clone();
 
         Box::pin(async move {
             this.validate()?;
@@ -99,7 +99,7 @@ impl Outbound for TrojanOutbound {
             .await?;
 
             let mut stream = connect_tls(stream, &this.server, &this.tls).await?;
-            let request = build_trojan_request(&this.password, &destination, &first_payload)?;
+            let request = build_trojan_request(&this.password, &destination, &buffered_payload)?;
             stream.write_all(&request).await.map_err(|err| {
                 ProxyError::Protocol(format!("failed to write trojan request: {err}"))
             })?;

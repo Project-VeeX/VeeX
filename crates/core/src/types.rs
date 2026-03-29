@@ -75,14 +75,14 @@ pub struct SessionMeta {
 #[derive(Clone, Debug)]
 pub struct SessionContext {
     pub meta: Arc<SessionMeta>,
-    pub first_payload: Vec<u8>,
+    pub buffered_payload: Vec<u8>,
 }
 
 impl SessionContext {
-    pub fn new(meta: SessionMeta, first_payload: Vec<u8>) -> Self {
+    pub fn new(meta: SessionMeta, buffered_payload: Vec<u8>) -> Self {
         Self {
             meta: Arc::new(meta),
-            first_payload,
+            buffered_payload,
         }
     }
 }

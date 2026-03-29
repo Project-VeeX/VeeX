@@ -1,3 +1,9 @@
+//! Minimal JSON subset parser used by VeeX config loading.
+//!
+//! This module intentionally does not aim to be a complete general-purpose JSON implementation.
+//! It supports the subset currently required by VeeX configuration:
+//! objects, arrays, strings, booleans, `null`, and integer numbers.
+
 use std::collections::BTreeMap;
 
 use crate::parse::ConfigError;
@@ -12,6 +18,10 @@ pub enum JsonValue {
     Object(BTreeMap<String, JsonValue>),
 }
 
+/// Parses the current VeeX configuration JSON subset.
+///
+/// Supported number tokens are limited to signed integers; floating-point and exponent forms are
+/// rejected on purpose so configuration behavior stays explicit and easy to validate.
 pub fn parse_json(input: &str) -> Result<JsonValue, ConfigError> {
     let mut parser = Parser::new(input);
     let value = parser.parse_value("$")?;

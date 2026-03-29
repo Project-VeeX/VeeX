@@ -34,8 +34,8 @@ async fn trojan_outbound_connects_and_writes_request() {
     );
 
     let destination = Destination::new(Host::Domain("example.com".into()), 443);
-    let first_payload = b"GET / HTTP/1.1\r\n\r\n".to_vec();
-    let expected = build_trojan_request("secret", &destination, &first_payload)
+    let buffered_payload = b"GET / HTTP/1.1\r\n\r\n".to_vec();
+    let expected = build_trojan_request("secret", &destination, &buffered_payload)
         .expect("request builder should succeed");
     let ctx = SessionContext::new(
         SessionMeta {
@@ -46,7 +46,7 @@ async fn trojan_outbound_connects_and_writes_request() {
             destination,
             start: Instant::now(),
         },
-        first_payload,
+        buffered_payload,
     );
 
     let stream = outbound

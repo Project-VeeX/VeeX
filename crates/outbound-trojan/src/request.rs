@@ -29,7 +29,7 @@ pub fn password_hash_hex(password: &str) -> String {
 pub fn build_trojan_request(
     password: &str,
     destination: &Destination,
-    first_payload: &[u8],
+    buffered_payload: &[u8],
 ) -> Result<Vec<u8>> {
     let mut output = Vec::new();
     output.extend_from_slice(password_hash_hex(password).as_bytes());
@@ -37,7 +37,7 @@ pub fn build_trojan_request(
     output.push(TrojanCommand::Connect as u8);
     encode_destination(destination, &mut output)?;
     output.extend_from_slice(b"\r\n");
-    output.extend_from_slice(first_payload);
+    output.extend_from_slice(buffered_payload);
     Ok(output)
 }
 
