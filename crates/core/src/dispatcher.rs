@@ -29,7 +29,7 @@ impl Dispatcher for SimpleDispatcher {
                 log_line(
                     LogLevel::Info,
                     &format!(
-                        "session_id={} inbound={} selected_outbound={} bypass_reason={} dest={}",
+                        "event=route_select session_id={} inbound={} outbound={} reason={} dest={}",
                         ctx.meta.id,
                         ctx.meta.inbound_tag,
                         decision.outbound_tag,

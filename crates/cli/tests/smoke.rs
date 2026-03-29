@@ -77,9 +77,9 @@ fn run_lifecycle_smoke_test(signal: &str) {
         output.status.success(),
         "stdout:\n{stdout}\nstderr:\n{stderr}"
     );
-    assert!(stdout.contains("veex starting"));
-    assert!(stdout.contains("veex stopped"));
-    assert!(stdout.contains("session_id="));
+    assert!(stdout.contains("event=process_start"));
+    assert!(stdout.contains("event=process_stop"));
+    assert!(stdout.contains("event=session_finish"));
     assert!(stdout.contains("error_kind=none"));
 
     echo_thread.join().expect("echo thread should join");

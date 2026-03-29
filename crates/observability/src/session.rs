@@ -55,7 +55,7 @@ pub fn format_session_summary(summary: &SessionSummary) -> String {
     let error_kind = summary.error_kind.as_deref().unwrap_or("none");
 
     format!(
-        "session_id={} inbound={} outbound={} peer={} dest={} bytes_up={} bytes_down={} duration_ms={} error_kind={}",
+        "event=session_finish session_id={} inbound={} outbound={} peer={} dest={} bytes_up={} bytes_down={} duration_ms={} error_kind={}",
         summary.session_id,
         summary.inbound,
         summary.outbound,
@@ -89,6 +89,7 @@ mod tests {
         .failed("tls");
 
         let line = format_session_summary(&summary);
+        assert!(line.contains("event=session_finish"));
         assert!(line.contains("session_id=7"));
         assert!(line.contains("inbound=socks-in"));
         assert!(line.contains("outbound=proxy"));

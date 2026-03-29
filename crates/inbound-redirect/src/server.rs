@@ -97,7 +97,7 @@ impl RedirectInbound {
         log_line(
             LogLevel::Info,
             &format!(
-                "session_id={} inbound={} peer={} original_dst={}",
+                "event=session_start session_id={} inbound={} peer={} original_dst={}",
                 session_id, self.tag, peer, destination
             ),
         );
@@ -135,7 +135,12 @@ impl Inbound for RedirectInbound {
                     if let Err(err) = inbound.handle_connection(dispatcher, stream, peer).await {
                         log_line(
                             LogLevel::Warn,
-                            &format!("inbound=redirect peer={} error={}", peer, err),
+                            &format!(
+                                "event=inbound_error inbound=redirect peer={} error_kind={} message={}",
+                                peer,
+                                format!("{:?}", err.kind()).to_ascii_lowercase(),
+                                err
+                            ),
                         );
                     }
                 });

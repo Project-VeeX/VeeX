@@ -1,7 +1,15 @@
-use std::sync::Arc;
+use std::{
+    io,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 
 use rustls::pki_types::ServerName;
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::TcpStream,
+};
 use tokio_rustls::TlsConnector;
 use veex_core::{BoxedAsyncStream, Host, ProxyError, Result};
 
@@ -83,13 +91,69 @@ pub async fn connect_tls(
         .await
         .map_err(|err| ProxyError::Tls(format!("tls handshake failed: {err}")))?;
 
-    Ok(Box::new(stream))
+    Ok(Box::new(TlsCloseNotifyTolerantStream::new(stream)))
+}
+
+fn is_ignorable_tls_close_notify_error(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::UnexpectedEof
+        && err
+            .to_string()
+            .contains("peer closed connection without sending TLS close_notify")
+}
+
+struct TlsCloseNotifyTolerantStream<T> {
+    inner: T,
+}
+
+impl<T> TlsCloseNotifyTolerantStream<T> {
+    fn new(inner: T) -> Self {
+        Self { inner }
+    }
+}
+
+impl<T> AsyncRead for TlsCloseNotifyTolerantStream<T>
+where
+    T: AsyncRead + Unpin,
+{
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match Pin::new(&mut self.inner).poll_read(cx, buf) {
+            Poll::Ready(Err(err)) if is_ignorable_tls_close_notify_error(&err) => {
+                Poll::Ready(Ok(()))
+            }
+            other => other,
+        }
+    }
+}
+
+impl<T> AsyncWrite for TlsCloseNotifyTolerantStream<T>
+where
+    T: AsyncWrite + Unpin,
+{
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
-        fs,
+        fs, io,
         net::IpAddr,
         path::PathBuf,
         sync::Arc,
@@ -108,7 +172,9 @@ mod tests {
     use tokio_rustls::TlsAcceptor;
     use veex_core::Host;
 
-    use super::{connect_tls, server_name_for_tls, TlsClientOptions};
+    use super::{
+        connect_tls, is_ignorable_tls_close_notify_error, server_name_for_tls, TlsClientOptions,
+    };
 
     #[test]
     fn derives_server_name_from_domain() {
@@ -162,6 +228,13 @@ mod tests {
             .await
             .expect("client read should succeed");
         assert_eq!(&response, b"pong");
+
+        let mut eof_probe = [0u8; 1];
+        let read = stream
+            .read(&mut eof_probe)
+            .await
+            .expect("missing close_notify should be treated as eof");
+        assert_eq!(read, 0);
     }
 
     #[tokio::test]
@@ -346,5 +419,17 @@ mod tests {
         }
 
         output
+    }
+
+    #[test]
+    fn only_ignores_rustls_close_notify_eof() {
+        let ignored = io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "peer closed connection without sending TLS close_notify",
+        );
+        let preserved = io::Error::new(io::ErrorKind::UnexpectedEof, "connection reset by peer");
+
+        assert!(is_ignorable_tls_close_notify_error(&ignored));
+        assert!(!is_ignorable_tls_close_notify_error(&preserved));
     }
 }

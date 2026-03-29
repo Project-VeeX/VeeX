@@ -6,7 +6,7 @@ use std::{env, process::ExitCode};
 use command::{parse_args, Command};
 use runtime::run_with_shutdown;
 use veex_config::{load_from_path, ConfigError};
-use veex_observability::{init_logging, LogLevel, LoggingOptions};
+use veex_observability::{init_logging, log_line, LogLevel, LoggingOptions};
 
 const EXIT_OK: u8 = 0;
 const EXIT_CONFIG_ERROR: u8 = 2;
@@ -61,11 +61,14 @@ fn run_command(config_path: &str) -> Result<u8, (u8, String)> {
     init_logging(&logging)
         .map_err(|err| (EXIT_STARTUP_ERROR, format!("logging init failed: {err}")))?;
 
-    println!(
-        "veex starting: inbounds={}, outbounds={}, final={}",
-        config.inbounds.len(),
-        config.outbounds.len(),
-        config.route.final_outbound
+    log_line(
+        LogLevel::Info,
+        &format!(
+            "event=process_start inbounds={} outbounds={} final={}",
+            config.inbounds.len(),
+            config.outbounds.len(),
+            config.route.final_outbound
+        ),
     );
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -84,7 +87,7 @@ fn run_command(config_path: &str) -> Result<u8, (u8, String)> {
         })
         .map_err(|err| (EXIT_RUNTIME_ERROR, err))?;
 
-    println!("veex stopped");
+    log_line(LogLevel::Info, "event=process_stop");
     Ok(EXIT_OK)
 }
 

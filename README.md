@@ -34,6 +34,16 @@ The resulting executable is:
 target/debug/veex
 ```
 
+## Distribution
+
+VeeX is released as a CLI binary.
+
+OpenWrt and ImmortalWrt packaging is intentionally kept out of this repository.
+
+The dedicated packaging/feed repository will be linked here when it is created:
+
+- `TBD`
+
 ## Usage
 
 Show version:
@@ -107,7 +117,7 @@ Next milestone:
 
 - redirect inbound
 - transparent proxy validation
-- OpenWrt package and service integration
+- binary release contract for downstream OpenWrt packaging
 
 Later milestones:
 
