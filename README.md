@@ -11,14 +11,15 @@ The long-term project direction is a reusable proxy core that can host multiple 
 Current user-facing scope:
 
 - SOCKS5 inbound for TCP `CONNECT`
+- Linux redirect inbound for TCP transparent proxy validation
 - Trojan outbound over TLS
 - direct outbound for bypass and local destinations
 - foreground daemon with config validation and graceful shutdown
 
 Current non-goals:
 
-- transparent proxy runtime path
 - additional protocols beyond Trojan
+- OpenWrt packaging and service integration in this repository
 
 ## Build
 
@@ -43,6 +44,12 @@ OpenWrt and ImmortalWrt packaging is intentionally kept out of this repository.
 The dedicated packaging/feed repository will be linked here when it is created:
 
 - `TBD`
+
+Transparent proxy validation guides live in:
+
+- `docs/transparent-proxy-iptables.md`
+- `docs/transparent-proxy-fw4.md`
+- `docs/transparent-proxy-openwrt-sop.md`
 
 ## Usage
 
@@ -103,21 +110,21 @@ Example configs:
 - `examples/socks-trojan.json`
 - `examples/redirect-trojan.json`
 
-`redirect` is already represented in config parsing, but its runtime path belongs to the next milestone.
-
 ## Roadmap
 
 Current milestone:
 
 - stable SOCKS5 -> Trojan -> remote TCP path
+- stable Linux redirect -> Trojan/direct path
 - config validation through `veex check`
 - process-level smoke coverage for `veex run` and `veex check`
+- transparent proxy validation guides for OpenWrt-class systems
 
 Next milestone:
 
-- redirect inbound
-- transparent proxy validation
 - binary release contract for downstream OpenWrt packaging
+- downstream packaging/feed repository
+- richer routing and policy support
 
 Later milestones:
 
