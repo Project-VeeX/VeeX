@@ -1,0 +1,42 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - meta
+  pull_request:
+    branches:
+      - meta
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Run formatting check
+        run: cargo fmt --all --check
+
+      - name: Run tests
+        run: cargo test --locked --workspace
+
+      - name: Run clippy
+        run: cargo clippy --locked --workspace --all-targets
+
+      - name: Verify release-test build
+        run: cargo build --locked --profile release-test -p veex-cli

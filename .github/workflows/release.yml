@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Fetch meta branch
+        run: git fetch --no-tags origin meta:refs/remotes/origin/meta
+
+      - name: Validate tag and release mode
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          CARGO_VERSION="$(
+            awk '
+              /^\[workspace.package\]/ { in_section = 1; next }
+              /^\[/ && in_section { exit }
+              in_section && /^version = / {
+                gsub(/"/, "", $3)
+                print $3
+                exit
+              }
+            ' Cargo.toml
+          )"
+
+          if [[ -z "${CARGO_VERSION}" ]]; then
+            echo "failed to read workspace.package.version from Cargo.toml" >&2
+            exit 1
+          fi
+
+          if [[ "${VERSION}" != "${CARGO_VERSION}" ]]; then
+            echo "tag version (${VERSION}) does not match Cargo.toml (${CARGO_VERSION})" >&2
+            exit 1
+          fi
+
+          if ! git branch -r --contains "${GITHUB_SHA}" | grep -q 'origin/meta$'; then
+            echo "tag commit ${GITHUB_SHA} is not contained in origin/meta" >&2
+            exit 1
+          fi
+
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-((alpha|beta|rc)(\.[0-9A-Za-z-]+)*))?$ ]]; then
+            echo "unsupported tag format: ${TAG}" >&2
+            echo "expected vX.Y.Z or vX.Y.Z-alpha.1 / beta.1 / rc.1" >&2
+            exit 1
+          fi
+
+          if [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-((alpha|beta|rc)(\.[0-9A-Za-z-]+)*))$ ]]; then
+            echo "prerelease=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "prerelease=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "target=x86_64-unknown-linux-gnu" >> "${GITHUB_OUTPUT}"
+
+      - name: Run quality gates
+        run: |
+          cargo fmt --all --check
+          cargo test --locked --workspace
+          cargo clippy --locked --workspace --all-targets
+
+      - name: Build release binary
+        run: cargo build --locked --release -p veex-cli
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${{ steps.meta.outputs.tag }}"
+          TARGET="${{ steps.meta.outputs.target }}"
+          DIST_DIR="dist"
+          SOURCE_DIR="veex-${TAG}"
+
+          mkdir -p "${DIST_DIR}/binary/examples"
+
+          git archive --format=tar.gz --prefix="${SOURCE_DIR}/" \
+            -o "${DIST_DIR}/veex-${TAG}-source.tar.gz" \
+            "${GITHUB_SHA}"
+
+          cp target/release/veex "${DIST_DIR}/binary/"
+          cp README.md "${DIST_DIR}/binary/"
+          cp examples/socks-trojan.json "${DIST_DIR}/binary/examples/"
+          cp examples/redirect-trojan.json "${DIST_DIR}/binary/examples/"
+
+          tar -C "${DIST_DIR}/binary" -czf \
+            "${DIST_DIR}/veex-${TAG}-${TARGET}.tar.gz" \
+            veex README.md examples
+
+          (
+            cd "${DIST_DIR}"
+            sha256sum \
+              "veex-${TAG}-source.tar.gz" \
+              "veex-${TAG}-${TARGET}.tar.gz" \
+              > "veex-${TAG}-sha256.txt"
+          )
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${{ steps.meta.outputs.tag }}"
+          RELEASE_ARGS=(
+            "${TAG}"
+            "--verify-tag"
+            "--generate-notes"
+            "dist/veex-${TAG}-source.tar.gz"
+            "dist/veex-${TAG}-${{ steps.meta.outputs.target }}.tar.gz"
+            "dist/veex-${TAG}-sha256.txt"
+          )
+
+          if [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]]; then
+            RELEASE_ARGS+=("--prerelease")
+          fi
+
+          gh release create "${RELEASE_ARGS[@]}"
