@@ -35,6 +35,8 @@ The resulting executable is:
 target/debug/veex
 ```
 
+For validation or distribution builds, use a non-default Cargo profile as needed.
+
 ## Distribution
 
 VeeX is released as a CLI binary.
@@ -134,7 +136,7 @@ Later milestones:
 
 ## Contributing
 
-Before sending changes, run:
+Run formatting, tests, and clippy before sending changes:
 
 ```bash
 cargo fmt --all --check
@@ -142,7 +144,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets
 ```
 
-If your change affects runtime behavior, update or add the smallest test that proves the success path and the failure path.
+If runtime behavior changes, update the smallest relevant test coverage.
 
 ## License
 

@@ -6,7 +6,7 @@ Use this checklist before treating a Phase2 build as releasable for transparent 
 
 - `cargo fmt --all --check`
 - `cargo test --workspace`
-- cross-build target binary for the intended router target
+- cross-build `release-test` or `release` target binary for the intended router target
 - confirm the router is running the latest uploaded `/tmp/veex`
 
 ## Core Runtime
