@@ -1,15 +1,8 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, net::IpAddr};
+
+pub use crate::types::RouteReason;
 
 use crate::types::{Host, SessionContext};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RouteReason {
-    Final,
-    BypassLoopback,
-    BypassPrivate,
-    BypassLinkLocal,
-    BypassConfigured,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RouteDecision {
@@ -21,7 +14,8 @@ pub struct RouteDecision {
 pub struct Router {
     final_outbound_tag: String,
     direct_outbound_tag: String,
-    bypass_hosts: BTreeSet<String>,
+    bypass_domains: BTreeSet<String>,
+    bypass_ips: BTreeSet<IpAddr>,
 }
 
 impl Router {
@@ -32,12 +26,13 @@ impl Router {
         Self {
             final_outbound_tag: final_outbound_tag.into(),
             direct_outbound_tag: direct_outbound_tag.into(),
-            bypass_hosts: BTreeSet::new(),
+            bypass_domains: BTreeSet::new(),
+            bypass_ips: BTreeSet::new(),
         }
     }
 
     pub fn with_bypass_host(mut self, host: impl Into<String>) -> Self {
-        self.bypass_hosts.insert(normalize_host_str(&host.into()));
+        self.insert_bypass_host(&host.into());
         self
     }
 
@@ -47,7 +42,7 @@ impl Router {
         S: Into<String>,
     {
         for host in hosts {
-            self.bypass_hosts.insert(normalize_host_str(&host.into()));
+            self.insert_bypass_host(&host.into());
         }
         self
     }
@@ -76,7 +71,7 @@ impl Router {
             };
         }
 
-        if self.bypass_hosts.contains(&normalize_host(host)) {
+        if is_configured_bypass(host, &self.bypass_domains, &self.bypass_ips) {
             return RouteDecision {
                 outbound_tag: self.direct_outbound_tag.clone(),
                 reason: RouteReason::BypassConfigured,
@@ -88,29 +83,54 @@ impl Router {
             reason: RouteReason::Final,
         }
     }
-}
 
-impl RouteReason {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Final => "final",
-            Self::BypassLoopback => "loopback",
-            Self::BypassPrivate => "private",
-            Self::BypassLinkLocal => "link_local",
-            Self::BypassConfigured => "configured",
+    fn insert_bypass_host(&mut self, host: &str) {
+        match parse_bypass_host(host) {
+            BypassHost::Ip(ip) => {
+                self.bypass_ips.insert(ip);
+            }
+            BypassHost::Domain(domain) => {
+                self.bypass_domains.insert(domain);
+            }
         }
     }
 }
 
-fn normalize_host(host: &Host) -> String {
+fn normalize_domain(host: &Host) -> Option<String> {
     match host {
-        Host::Ip(ip) => ip.to_string(),
-        Host::Domain(domain) => normalize_host_str(domain),
+        Host::Ip(_) => None,
+        Host::Domain(domain) => Some(normalize_domain_str(domain)),
     }
 }
 
-fn normalize_host_str(host: &str) -> String {
+fn normalize_domain_str(host: &str) -> String {
     host.trim().to_ascii_lowercase()
+}
+
+enum BypassHost {
+    Ip(IpAddr),
+    Domain(String),
+}
+
+fn parse_bypass_host(host: &str) -> BypassHost {
+    let host = host.trim();
+    match host.parse::<IpAddr>() {
+        Ok(ip) => BypassHost::Ip(ip),
+        Err(_) => BypassHost::Domain(normalize_domain_str(host)),
+    }
+}
+
+fn is_configured_bypass(
+    host: &Host,
+    bypass_domains: &BTreeSet<String>,
+    bypass_ips: &BTreeSet<IpAddr>,
+) -> bool {
+    match host {
+        Host::Ip(ip) => bypass_ips.contains(ip),
+        Host::Domain(_) => normalize_domain(host)
+            .map(|domain| bypass_domains.contains(&domain))
+            .unwrap_or(false),
+    }
 }
 
 fn is_loopback(host: &Host) -> bool {
@@ -198,6 +218,29 @@ mod tests {
     fn bypasses_configured_host() {
         let router = Router::new("proxy", "direct").with_bypass_host("trojan.example.com");
         let ctx = build_ctx(Destination::from_domain("trojan.example.com", 443));
+
+        let decision = router.select(&ctx);
+        assert_eq!(decision.outbound_tag, "direct");
+        assert_eq!(decision.reason, RouteReason::BypassConfigured);
+    }
+
+    #[test]
+    fn splits_configured_domains_and_ips() {
+        let router = Router::new("proxy", "direct").with_bypass_hosts([
+            " Trojan.EXAMPLE.com ",
+            "192.0.2.10",
+            "2001:db8::1",
+        ]);
+
+        assert!(router.bypass_domains.contains("trojan.example.com"));
+        assert!(router.bypass_ips.contains(&"192.0.2.10".parse().unwrap()));
+        assert!(router.bypass_ips.contains(&"2001:db8::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn bypasses_configured_ip() {
+        let router = Router::new("proxy", "direct").with_bypass_host("192.0.2.10");
+        let ctx = build_ctx(Destination::from_ip("192.0.2.10".parse().unwrap(), 443));
 
         let decision = router.select(&ctx);
         assert_eq!(decision.outbound_tag, "direct");

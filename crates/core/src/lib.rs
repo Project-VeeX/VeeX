@@ -13,9 +13,10 @@ pub use dispatcher::SimpleDispatcher;
 pub use error::{ErrorKind, ProxyError, Result};
 pub use outbound_direct::DirectOutbound;
 pub use relay::{relay_bidirectional, RelayStats};
-pub use router::{RouteDecision, RouteReason, Router};
+pub use router::{RouteDecision, Router};
 pub use shutdown::{shutdown_channel, ShutdownSignal, ShutdownTrigger};
 pub use traits::{BoxFuture, Dispatcher, Inbound, Outbound};
 pub use types::{
-    AsyncStream, BoxedAsyncStream, Destination, Host, Network, SessionContext, SessionMeta,
+    AsyncStream, BoxedAsyncStream, Destination, Host, Network, RouteReason, SessionContext,
+    SessionMeta, SessionRoute, SessionState,
 };

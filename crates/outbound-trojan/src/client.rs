@@ -84,7 +84,7 @@ impl Outbound for TrojanOutbound {
     fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
         let this = self.clone();
         let destination = ctx.meta.destination.clone();
-        let buffered_payload = ctx.buffered_payload.clone();
+        let buffered_payload = ctx.state.buffered_payload.clone();
 
         Box::pin(async move {
             this.validate()?;
