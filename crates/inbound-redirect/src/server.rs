@@ -1,4 +1,5 @@
 use std::{
+    future::pending,
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -7,10 +8,13 @@ use std::{
     time::Instant,
 };
 
-use tokio::net::{TcpListener, TcpStream};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    task::JoinSet,
+};
 use veex_core::{
     BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, Network, ProxyError, Result,
-    SessionContext, SessionMeta,
+    SessionContext, SessionMeta, ShutdownSignal,
 };
 use veex_observability::{log_line, LogLevel};
 
@@ -25,18 +29,51 @@ pub struct RedirectInbound {
     listen_port: u16,
     next_session_id: AtomicU64,
     resolver: Arc<ResolveOriginalDst>,
+    shutdown: Option<ShutdownSignal>,
 }
 
 impl RedirectInbound {
     pub fn new(tag: impl Into<String>, listen: impl Into<String>, listen_port: u16) -> Self {
-        Self::new_with_resolver(tag, listen, listen_port, Arc::new(resolve_original_dst))
+        Self::new_internal(
+            tag,
+            listen,
+            listen_port,
+            Arc::new(resolve_original_dst),
+            None,
+        )
     }
 
+    pub fn with_shutdown_signal(
+        tag: impl Into<String>,
+        listen: impl Into<String>,
+        listen_port: u16,
+        shutdown: ShutdownSignal,
+    ) -> Self {
+        Self::new_internal(
+            tag,
+            listen,
+            listen_port,
+            Arc::new(resolve_original_dst),
+            Some(shutdown),
+        )
+    }
+
+    #[cfg(test)]
     fn new_with_resolver(
         tag: impl Into<String>,
         listen: impl Into<String>,
         listen_port: u16,
         resolver: Arc<ResolveOriginalDst>,
+    ) -> Self {
+        Self::new_internal(tag, listen, listen_port, resolver, None)
+    }
+
+    fn new_internal(
+        tag: impl Into<String>,
+        listen: impl Into<String>,
+        listen_port: u16,
+        resolver: Arc<ResolveOriginalDst>,
+        shutdown: Option<ShutdownSignal>,
     ) -> Self {
         Self {
             tag: tag.into(),
@@ -44,6 +81,7 @@ impl RedirectInbound {
             listen_port,
             next_session_id: AtomicU64::new(1),
             resolver,
+            shutdown,
         }
     }
 
@@ -114,6 +152,13 @@ impl RedirectInbound {
         let stream: BoxedAsyncStream = Box::new(stream);
         dispatcher.dispatch(stream, ctx).await
     }
+
+    async fn wait_for_shutdown(&self) {
+        match &self.shutdown {
+            Some(shutdown) => shutdown.wait().await,
+            None => pending::<()>().await,
+        }
+    }
 }
 
 impl Inbound for RedirectInbound {
@@ -125,26 +170,46 @@ impl Inbound for RedirectInbound {
         Box::pin(async move {
             self.validate()?;
             let listener = TcpListener::bind(self.bind_addr()).await?;
+            let mut connections = JoinSet::new();
+            let mut shutting_down = false;
 
             loop {
-                let (stream, peer) = listener.accept().await?;
-                let inbound = Arc::clone(&self);
-                let dispatcher = Arc::clone(&dispatcher);
+                if shutting_down && connections.is_empty() {
+                    break;
+                }
 
-                tokio::spawn(async move {
-                    if let Err(err) = inbound.handle_connection(dispatcher, stream, peer).await {
-                        log_line(
-                            LogLevel::Warn,
-                            &format!(
-                                "event=inbound_error inbound=redirect peer={} error_kind={} message={}",
-                                peer,
-                                format!("{:?}", err.kind()).to_ascii_lowercase(),
-                                err
-                            ),
-                        );
+                tokio::select! {
+                    _ = self.wait_for_shutdown(), if !shutting_down => {
+                        shutting_down = true;
                     }
-                });
+                    accept_result = listener.accept(), if !shutting_down => {
+                        let (stream, peer) = accept_result?;
+                        let inbound = Arc::clone(&self);
+                        let dispatcher = Arc::clone(&dispatcher);
+
+                        connections.spawn(async move {
+                            if let Err(err) = inbound.handle_connection(dispatcher, stream, peer).await {
+                                log_line(
+                                    LogLevel::Warn,
+                                    &format!(
+                                        "event=inbound_error inbound=redirect peer={} error_kind={} message={}",
+                                        peer,
+                                        err.kind(),
+                                        err
+                                    ),
+                                );
+                            }
+                        });
+                    }
+                    maybe_task = connections.join_next(), if !connections.is_empty() => {
+                        if let Some(task_result) = maybe_task {
+                            let _ = task_result;
+                        }
+                    }
+                }
             }
+
+            Ok(())
         })
     }
 }

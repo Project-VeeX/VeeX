@@ -1,10 +1,13 @@
-use std::{collections::HashMap, future::Future, net::ToSocketAddrs, sync::Arc};
+use std::{collections::HashMap, future::Future, sync::Arc};
 
 use tokio::task::JoinSet;
 use veex_config::{
     InboundConfig, OutboundConfig, ProxyConfig, TrojanTlsConfig, DEFAULT_DIRECT_OUTBOUND_TAG,
 };
-use veex_core::{DirectOutbound, Dispatcher, Inbound, Outbound, Router, SimpleDispatcher};
+use veex_core::{
+    shutdown_channel, DirectOutbound, Dispatcher, Inbound, Outbound, Router, ShutdownSignal,
+    ShutdownTrigger, SimpleDispatcher,
+};
 use veex_inbound_redirect::RedirectInbound;
 use veex_inbound_socks::SocksInbound;
 use veex_outbound_trojan::TrojanOutbound;
@@ -13,6 +16,7 @@ use veex_transport::TlsClientOptions;
 struct RuntimeState {
     dispatcher: Arc<dyn Dispatcher>,
     inbounds: Vec<Arc<dyn Inbound>>,
+    shutdown: ShutdownTrigger,
 }
 
 pub async fn run_with_shutdown<F>(config: &ProxyConfig, shutdown: F) -> Result<(), String>
@@ -20,21 +24,32 @@ where
     F: Future<Output = Result<(), String>>,
 {
     let state = build_runtime_state(config)?;
+    let RuntimeState {
+        dispatcher,
+        inbounds,
+        shutdown: shutdown_trigger,
+    } = state;
     let mut tasks = JoinSet::new();
 
-    for inbound in state.inbounds {
-        tasks.spawn(inbound.serve(Arc::clone(&state.dispatcher)));
+    for inbound in inbounds {
+        tasks.spawn(inbound.serve(Arc::clone(&dispatcher)));
     }
 
     tokio::pin!(shutdown);
+    let mut shutdown_requested = false;
 
     loop {
+        if shutdown_requested && tasks.is_empty() {
+            return Ok(());
+        }
+
         tokio::select! {
-            result = &mut shutdown => {
+            result = &mut shutdown, if !shutdown_requested => {
                 result?;
-                return Ok(());
+                shutdown_trigger.trigger();
+                shutdown_requested = true;
             }
-            maybe_task = tasks.join_next() => {
+            maybe_task = tasks.join_next(), if !tasks.is_empty() => {
                 match maybe_task {
                     Some(Ok(Ok(()))) => continue,
                     Some(Ok(Err(err))) => return Err(format!("runtime task failed: {err}")),
@@ -51,14 +66,16 @@ fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, String> {
         return Err("at least one inbound is required to run veex".into());
     }
 
+    let (shutdown, shutdown_signal) = shutdown_channel();
     let outbounds = build_outbounds(config)?;
     let router = build_router(config);
     let dispatcher: Arc<dyn Dispatcher> = Arc::new(SimpleDispatcher::new(router, outbounds));
-    let inbounds = build_inbounds(config)?;
+    let inbounds = build_inbounds(config, shutdown_signal)?;
 
     Ok(RuntimeState {
         dispatcher,
         inbounds,
+        shutdown,
     })
 }
 
@@ -96,34 +113,35 @@ fn build_router(config: &ProxyConfig) -> Router {
     for outbound in &config.outbounds {
         if let OutboundConfig::Trojan(trojan) = outbound {
             router = router.with_bypass_host(trojan.server.clone());
-
-            if let Ok(addrs) = (trojan.server.as_str(), trojan.server_port).to_socket_addrs() {
-                router = router.with_bypass_hosts(addrs.map(|addr| addr.ip().to_string()));
-            }
         }
     }
 
     router
 }
 
-fn build_inbounds(config: &ProxyConfig) -> Result<Vec<Arc<dyn Inbound>>, String> {
+fn build_inbounds(
+    config: &ProxyConfig,
+    shutdown_signal: ShutdownSignal,
+) -> Result<Vec<Arc<dyn Inbound>>, String> {
     let mut inbounds: Vec<Arc<dyn Inbound>> = Vec::new();
 
     for inbound in &config.inbounds {
         match inbound {
             InboundConfig::Socks(socks) => {
-                let instance: Arc<dyn Inbound> = Arc::new(SocksInbound::new(
+                let instance: Arc<dyn Inbound> = Arc::new(SocksInbound::with_shutdown_signal(
                     socks.tag.clone(),
                     socks.listen.clone(),
                     socks.listen_port,
+                    shutdown_signal.clone(),
                 ));
                 inbounds.push(instance);
             }
             InboundConfig::Redirect(redirect) => {
-                let instance: Arc<dyn Inbound> = Arc::new(RedirectInbound::new(
+                let instance: Arc<dyn Inbound> = Arc::new(RedirectInbound::with_shutdown_signal(
                     redirect.tag.clone(),
                     redirect.listen.clone(),
                     redirect.listen_port,
+                    shutdown_signal.clone(),
                 ));
                 inbounds.push(instance);
             }

@@ -1,17 +1,6 @@
 use std::{error::Error, fmt, io};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ErrorKind {
-    Config,
-    Dial,
-    Resolve,
-    Tls,
-    Protocol,
-    Relay,
-    Timeout,
-    Io,
-    Shutdown,
-}
+pub use veex_observability::ErrorKind;
 
 #[derive(Debug)]
 pub enum ProxyError {

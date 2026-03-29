@@ -2,6 +2,41 @@ use std::time::Duration;
 
 use crate::logging::{log_line, LogLevel};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ErrorKind {
+    Config,
+    Dial,
+    Resolve,
+    Tls,
+    Protocol,
+    Relay,
+    Timeout,
+    Io,
+    Shutdown,
+}
+
+impl ErrorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Dial => "dial",
+            Self::Resolve => "resolve",
+            Self::Tls => "tls",
+            Self::Protocol => "protocol",
+            Self::Relay => "relay",
+            Self::Timeout => "timeout",
+            Self::Io => "io",
+            Self::Shutdown => "shutdown",
+        }
+    }
+}
+
+impl std::fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionSummary {
     pub session_id: u64,
@@ -12,12 +47,12 @@ pub struct SessionSummary {
     pub bytes_up: u64,
     pub bytes_down: u64,
     pub duration: Duration,
-    pub error_kind: Option<String>,
+    pub error_kind: Option<ErrorKind>,
 }
 
 impl SessionSummary {
     #[allow(clippy::too_many_arguments)]
-    pub fn succeeded(
+    pub fn success(
         session_id: u64,
         inbound: impl Into<String>,
         outbound: impl Into<String>,
@@ -26,6 +61,56 @@ impl SessionSummary {
         bytes_up: u64,
         bytes_down: u64,
         duration: Duration,
+    ) -> Self {
+        Self::build(
+            session_id,
+            inbound,
+            outbound,
+            peer,
+            destination,
+            bytes_up,
+            bytes_down,
+            duration,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn failure(
+        session_id: u64,
+        inbound: impl Into<String>,
+        outbound: impl Into<String>,
+        peer: impl Into<String>,
+        destination: impl Into<String>,
+        bytes_up: u64,
+        bytes_down: u64,
+        duration: Duration,
+        error_kind: ErrorKind,
+    ) -> Self {
+        Self::build(
+            session_id,
+            inbound,
+            outbound,
+            peer,
+            destination,
+            bytes_up,
+            bytes_down,
+            duration,
+            Some(error_kind),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        session_id: u64,
+        inbound: impl Into<String>,
+        outbound: impl Into<String>,
+        peer: impl Into<String>,
+        destination: impl Into<String>,
+        bytes_up: u64,
+        bytes_down: u64,
+        duration: Duration,
+        error_kind: Option<ErrorKind>,
     ) -> Self {
         Self {
             session_id,
@@ -36,13 +121,8 @@ impl SessionSummary {
             bytes_up,
             bytes_down,
             duration,
-            error_kind: None,
+            error_kind,
         }
-    }
-
-    pub fn failed(mut self, error_kind: impl Into<String>) -> Self {
-        self.error_kind = Some(error_kind.into());
-        self
     }
 }
 
@@ -52,7 +132,7 @@ pub fn emit_session_summary(summary: &SessionSummary) {
 
 pub fn format_session_summary(summary: &SessionSummary) -> String {
     let duration_ms = summary.duration.as_millis();
-    let error_kind = summary.error_kind.as_deref().unwrap_or("none");
+    let error_kind = summary.error_kind.map(ErrorKind::as_str).unwrap_or("none");
 
     format!(
         "event=session_finish session_id={} inbound={} outbound={} peer={} dest={} bytes_up={} bytes_down={} duration_ms={} error_kind={}",
@@ -72,11 +152,11 @@ pub fn format_session_summary(summary: &SessionSummary) -> String {
 mod tests {
     use std::time::Duration;
 
-    use super::{format_session_summary, SessionSummary};
+    use super::{format_session_summary, ErrorKind, SessionSummary};
 
     #[test]
     fn formats_session_summary_as_flat_kv_line() {
-        let summary = SessionSummary::succeeded(
+        let summary = SessionSummary::failure(
             7,
             "socks-in",
             "proxy",
@@ -85,8 +165,8 @@ mod tests {
             12,
             34,
             Duration::from_millis(56),
-        )
-        .failed("tls");
+            ErrorKind::Tls,
+        );
 
         let line = format_session_summary(&summary);
         assert!(line.contains("event=session_finish"));

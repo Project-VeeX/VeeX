@@ -51,7 +51,7 @@ impl Dispatcher for SimpleDispatcher {
             .await;
 
             let summary = match &result {
-                Ok(stats) => SessionSummary::succeeded(
+                Ok(stats) => SessionSummary::success(
                     ctx.meta.id,
                     ctx.meta.inbound_tag.as_str(),
                     outbound_tag.as_str(),
@@ -61,7 +61,7 @@ impl Dispatcher for SimpleDispatcher {
                     stats.bytes_down,
                     ctx.meta.start.elapsed(),
                 ),
-                Err(err) => SessionSummary::succeeded(
+                Err(err) => SessionSummary::failure(
                     ctx.meta.id,
                     ctx.meta.inbound_tag.as_str(),
                     outbound_tag.as_str(),
@@ -70,8 +70,8 @@ impl Dispatcher for SimpleDispatcher {
                     0,
                     0,
                     ctx.meta.start.elapsed(),
-                )
-                .failed(format!("{:?}", err.kind()).to_ascii_lowercase()),
+                    err.kind(),
+                ),
             };
 
             emit_session_summary(&summary);
