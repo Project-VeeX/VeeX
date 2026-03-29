@@ -1,10 +1,9 @@
-mod command;
-mod runtime;
-
 use std::{env, process::ExitCode};
 
-use command::{parse_args, Command};
-use runtime::run_with_shutdown;
+use veex_cli::{
+    command::{parse_args, Command},
+    runtime::run_with_shutdown,
+};
 use veex_config::{load_from_path, ConfigError};
 use veex_observability::{init_logging, log_line, LogLevel, LoggingOptions};
 

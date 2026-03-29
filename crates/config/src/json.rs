@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::validate::ConfigError;
+use crate::parse::ConfigError;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JsonValue {
