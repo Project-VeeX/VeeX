@@ -491,7 +491,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "veex-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rcgen",
  "rustls",
@@ -508,11 +508,11 @@ dependencies = [
 
 [[package]]
 name = "veex-config"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "veex-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tokio",
  "veex-observability",
@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "veex-inbound-redirect"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "tokio",
@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "veex-inbound-socks"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tokio",
  "veex-core",
@@ -538,11 +538,11 @@ dependencies = [
 
 [[package]]
 name = "veex-observability"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "veex-outbound-trojan"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rcgen",
  "rustls",
@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "veex-transport"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rcgen",
  "rustls",
