@@ -1,6 +1,6 @@
 # OpenWrt Transparent Proxy SOP
 
-This SOP describes the smallest reproducible flow for validating transparent proxy behavior on an OpenWrt-class router without relying on a package manager integration.
+This SOP describes the smallest reproducible Phase3 validation flow on an OpenWrt-class router without relying on package-manager integration.
 
 It assumes:
 
@@ -8,6 +8,17 @@ It assumes:
 - the binary is uploaded manually, for example to `/tmp/veex`
 - configuration files are uploaded manually
 - firewall rules are temporary
+
+Primary references:
+
+- `docs/transparent-proxy-tproxy.md`
+- `docs/transparent-proxy-routing-mark.md`
+- `docs/tproxy-config-compatibility.md`
+
+Fallback references for older `REDIRECT` validation:
+
+- `docs/transparent-proxy-iptables.md`
+- `docs/transparent-proxy-fw4.md`
 
 ## 1. Preflight
 
@@ -17,82 +28,134 @@ Confirm the binary runs:
 /tmp/veex version
 ```
 
-Confirm the config parses:
+Confirm the Phase3 compatibility config parses:
 
 ```sh
-/tmp/veex check -c /tmp/veex-redirect-trojan.json
+/tmp/veex check -c /tmp/tproxy-compat.json
 ```
 
-## 2. Start `veex`
+## 2. Stop The Previous Transparent Proxy Daemon
+
+Stop the previously running transparent proxy process before starting `veex`.
+
+Examples:
 
 ```sh
-/tmp/veex run -c /tmp/veex-redirect-trojan.json > /tmp/veex-redir.log 2>&1 &
-echo $! > /tmp/veex-redir.pid
+/etc/init.d/<previous_proxy_service> stop 2>/dev/null || true
+killall <previous_proxy_binary> 2>/dev/null || true
+```
+
+Do not continue until you are sure only one transparent proxy data plane is active.
+
+## 3. Prepare Policy Routing
+
+Install the temporary policy routing bootstrap used by the TPROXY interception mark:
+
+```sh
+ip rule add fwmark 0x1/0x1 lookup 100
+ip route add local 0.0.0.0/0 dev lo table 100
+```
+
+Verify them:
+
+```sh
+ip rule show
+ip route show table 100
+```
+
+## 4. Start `veex`
+
+```sh
+/tmp/veex run -c /tmp/tproxy-compat.json > /tmp/veex-tproxy.log 2>&1 &
+echo $! > /tmp/veex-tproxy.pid
 ```
 
 Verify the listener:
 
 ```sh
-ss -ltnp | grep 10080
+ss -ltnp | grep 1041
 ```
 
-## 3. Validate Private Bypass First
+## 5. Add Temporary TPROXY Rules
 
-Use the conservative `iptables` flow from:
+Follow one of the temporary TPROXY setups from:
 
-- `docs/transparent-proxy-iptables.md`
+- `docs/transparent-proxy-tproxy.md`
 
-Success criteria:
-
-- the client reaches the router local service
-- `event=route_select` shows `reason=private`
-- `event=session_finish` ends with `error_kind=none`
-
-## 4. Validate Trojan Path
-
-Still follow the conservative `iptables` flow and only redirect:
+Keep the validation narrow:
 
 - one client
 - one destination IP
-- one port
+- one destination port
+
+## 6. Validate The Data Path
+
+Validate in this order:
+
+1. private bypass
+2. Trojan outbound
+3. Trojan server self-bypass
+
+Useful checks:
+
+```sh
+curl --resolve www.google.com:443:185.45.5.35 -I https://www.google.com
+ip rule show
+ip route show table 100
+logread | grep 'event=session_start'
+logread | grep 'event=route_select'
+logread | grep 'event=session_finish'
+```
 
 Success criteria:
 
-- the client receives a successful HTTPS response
+- rule counters increase
 - `event=session_start` shows the expected `original_dst`
-- `event=session_finish` shows `outbound=proxy`
-- `event=session_finish` ends with `error_kind=none`
+- private traffic shows `outbound=direct` and `reason=private`
+- Trojan traffic shows `outbound=proxy`
+- Trojan server self-bypass shows `outbound=direct` and `reason=configured`
+- successful sessions end with `error_kind=none`
 
-## 5. Validate Trojan Server Self-Bypass
+## 7. Validate Direct No-Loop Behavior
 
-Restart `veex`, then target the Trojan server address itself.
+If the deployment also intercepts router-originated traffic, validate the direct egress mark plan from:
+
+- `docs/transparent-proxy-routing-mark.md`
 
 Success criteria:
 
-- `event=route_select` shows `outbound=direct`
-- `reason=configured`
-- no recursion into `outbound=proxy`
+- marked direct traffic stays on `outbound=direct`
+- marked direct traffic does not recurse into `outbound=proxy`
 
-## 6. Collect Evidence
+## 8. Collect Evidence
 
 Keep the following:
 
 - the exact config file
 - the exact firewall commands
+- the exact `ip rule` and `ip route` output
 - client command output
 - `veex` log output
 
-## 7. Roll Back
+## 9. Roll Back
 
-Always remove temporary rules and stop `veex`:
+Always remove temporary rules, policy routing state, and stop `veex`:
 
 ```sh
-iptables -t nat -D PREROUTING -i br-lan -j VEEX_TEST 2>/dev/null || true
-iptables -t nat -F VEEX_TEST 2>/dev/null || true
-iptables -t nat -X VEEX_TEST 2>/dev/null || true
-kill -TERM "$(cat /tmp/veex-redir.pid 2>/dev/null)" 2>/dev/null || true
+iptables -t mangle -D PREROUTING -i br-lan -j VEEX_TPROXY 2>/dev/null || true
+iptables -t mangle -F VEEX_TPROXY 2>/dev/null || true
+iptables -t mangle -X VEEX_TPROXY 2>/dev/null || true
+nft delete table inet veex_tproxy 2>/dev/null || true
+ip rule del fwmark 0x1/0x1 lookup 100 2>/dev/null || true
+ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
+kill -TERM "$(cat /tmp/veex-tproxy.pid 2>/dev/null)" 2>/dev/null || true
 ```
 
-## 8. Escalate Only After This SOP Passes
+## 10. Run The Redirect Fallback If Needed
 
-Do not move to persistent firewall integration, package integration, or broader LAN interception until this SOP is green end-to-end.
+If the TPROXY path is not green yet, re-run the conservative `REDIRECT` validation flow before blaming application logic:
+
+- `docs/transparent-proxy-iptables.md`
+- `docs/transparent-proxy-fw4.md`
+
+Do not broaden to persistent firewall integration or wider interception until the conservative validation path is green end-to-end.
