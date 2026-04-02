@@ -1,7 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use veex_config::{OutboundConfig, ProxyConfig, TrojanTlsConfig};
-use veex_core::{DirectOutbound, Outbound};
+use veex_core::Outbound;
+use veex_outbound_direct::DirectOutbound;
 use veex_outbound_trojan::TrojanOutbound;
 use veex_transport::TlsClientOptions;
 

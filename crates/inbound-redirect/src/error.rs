@@ -1,6 +1,7 @@
 use std::{error::Error, fmt, io};
 
 use veex_core::ProxyError;
+use veex_infra_linux::TransparentError;
 
 #[derive(Debug)]
 pub enum RedirectError {
@@ -58,6 +59,30 @@ impl Error for RedirectError {
 impl From<io::Error> for RedirectError {
     fn from(value: io::Error) -> Self {
         Self::Io(value)
+    }
+}
+
+impl From<TransparentError> for RedirectError {
+    fn from(value: TransparentError) -> Self {
+        match value {
+            TransparentError::UnsupportedPlatform => Self::UnsupportedPlatform,
+            TransparentError::GetSockOpt {
+                level,
+                option,
+                source,
+            } => Self::GetSockOpt {
+                level,
+                option,
+                source,
+            },
+            TransparentError::UnexpectedSockAddrLen { expected, actual } => {
+                Self::UnexpectedSockAddrLen { expected, actual }
+            }
+            TransparentError::UnsupportedAddressFamily(family) => {
+                Self::UnsupportedAddressFamily(family)
+            }
+            TransparentError::Io(err) => Self::Io(err),
+        }
     }
 }
 

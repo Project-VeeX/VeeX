@@ -1,11 +1,13 @@
+//! Direct outbound implementation kept outside `veex-core` so platform-specific
+//! egress behavior can evolve without polluting core runtime abstractions.
+
 use std::{net::SocketAddr, time::Duration};
 
 use tokio::{
     net::{lookup_host, TcpStream},
     time::timeout,
 };
-
-use crate::{
+use veex_core::{
     error::{ProxyError, Result},
     traits::{BoxFuture, Outbound},
     types::{BoxedAsyncStream, Host, SessionContext},
@@ -96,5 +98,24 @@ async fn connect_socket(
         None => connect_future
             .await
             .map_err(|err| ProxyError::Dial(format!("direct connect failed to {address}: {err}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc, time::Duration};
+
+    use veex_core::Outbound;
+
+    use super::DirectOutbound;
+
+    #[test]
+    fn direct_outbound_is_constructible_for_dispatcher_registration() {
+        let mut outbounds: HashMap<String, Arc<dyn Outbound>> = HashMap::new();
+        let mut direct = DirectOutbound::new("direct");
+        direct.set_connect_timeout(Some(Duration::from_secs(1)));
+        outbounds.insert("direct".into(), Arc::new(direct));
+
+        assert_eq!(outbounds.len(), 1);
     }
 }

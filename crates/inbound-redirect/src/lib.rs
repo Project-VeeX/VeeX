@@ -1,4 +1,4 @@
-//! Linux redirect inbound support built on top of `SO_ORIGINAL_DST`.
+//! Linux redirect inbound support built on top of `veex-infra-linux`.
 
 pub mod error;
 pub mod original_dst;

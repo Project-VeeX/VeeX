@@ -1,6 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
-
-use veex_core::{DirectOutbound, Outbound, Router};
+use veex_core::Router;
 
 #[test]
 fn router_can_bypass_configured_trojan_server_host() {
@@ -19,14 +17,4 @@ fn router_can_bypass_configured_trojan_server_host() {
 
     let decision = router.select(&ctx);
     assert_eq!(decision.outbound_tag, "direct");
-}
-
-#[test]
-fn direct_outbound_is_constructible_for_dispatcher_registration() {
-    let mut outbounds: HashMap<String, Arc<dyn Outbound>> = HashMap::new();
-    let mut direct = DirectOutbound::new("direct");
-    direct.set_connect_timeout(Some(Duration::from_secs(1)));
-    outbounds.insert("direct".into(), Arc::new(direct));
-
-    assert_eq!(outbounds.len(), 1);
 }

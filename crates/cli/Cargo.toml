@@ -14,6 +14,7 @@ veex-core = { path = "../core" }
 veex-inbound-redirect = { path = "../inbound-redirect" }
 veex-inbound-socks = { path = "../inbound-socks" }
 veex-observability = { path = "../observability" }
+veex-outbound-direct = { path = "../outbound-direct" }
 veex-outbound-trojan = { path = "../outbound-trojan" }
 veex-transport = { path = "../transport" }
 tokio.workspace = true
@@ -22,4 +23,3 @@ tokio.workspace = true
 rcgen = "0.13"
 rustls.workspace = true
 tokio-rustls.workspace = true
-
