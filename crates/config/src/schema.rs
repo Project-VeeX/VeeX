@@ -88,6 +88,7 @@ pub struct DirectOutboundConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RouteConfig {
     pub final_outbound: String,
+    pub bypass: Vec<String>,
 }
 
 impl InboundConfig {

@@ -246,4 +246,40 @@ mod tests {
         assert_eq!(decision.outbound_tag, "direct");
         assert_eq!(decision.reason, RouteReason::BypassConfigured);
     }
+
+    #[test]
+    fn prefers_loopback_reason_over_configured_bypass() {
+        let router = Router::new("proxy", "direct").with_bypass_host("127.0.0.1");
+        let ctx = build_ctx(Destination::from_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080));
+
+        let decision = router.select(&ctx);
+        assert_eq!(decision.outbound_tag, "direct");
+        assert_eq!(decision.reason, RouteReason::BypassLoopback);
+    }
+
+    #[test]
+    fn prefers_private_reason_over_configured_bypass() {
+        let router = Router::new("proxy", "direct").with_bypass_host("192.168.1.10");
+        let ctx = build_ctx(Destination::from_ip(
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
+            8080,
+        ));
+
+        let decision = router.select(&ctx);
+        assert_eq!(decision.outbound_tag, "direct");
+        assert_eq!(decision.reason, RouteReason::BypassPrivate);
+    }
+
+    #[test]
+    fn prefers_link_local_reason_over_configured_bypass() {
+        let router = Router::new("proxy", "direct").with_bypass_host("169.254.10.20");
+        let ctx = build_ctx(Destination::from_ip(
+            IpAddr::V4(Ipv4Addr::new(169, 254, 10, 20)),
+            8080,
+        ));
+
+        let decision = router.select(&ctx);
+        assert_eq!(decision.outbound_tag, "direct");
+        assert_eq!(decision.reason, RouteReason::BypassLinkLocal);
+    }
 }

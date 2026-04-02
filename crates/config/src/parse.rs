@@ -128,12 +128,24 @@ fn parse_inbounds(value: Option<&JsonValue>) -> Result<Vec<InboundConfig>, Confi
                 listen,
                 listen_port,
             }),
-            "tproxy" => InboundConfig::TProxy(TProxyInboundConfig {
-                tag,
-                listen,
-                listen_port,
-                network: optional_string(object.get("network"), format!("{path}.network"))?,
-            }),
+            "tproxy" => {
+                let network = optional_string(object.get("network"), format!("{path}.network"))?;
+                if let Some(network) = network.as_deref() {
+                    if network != "tcp" {
+                        return Err(ConfigError::validation(
+                            format!("{path}.network"),
+                            "tproxy inbound only supports network='tcp'",
+                        ));
+                    }
+                }
+
+                InboundConfig::TProxy(TProxyInboundConfig {
+                    tag,
+                    listen,
+                    listen_port,
+                    network,
+                })
+            }
             _ => {
                 return Err(ConfigError::validation(
                     format!("{path}.type"),
@@ -239,6 +251,7 @@ fn parse_route(value: Option<&JsonValue>) -> Result<RouteConfig, ConfigError> {
 
     Ok(RouteConfig {
         final_outbound: required_string(object.get("final"), "$.route.final")?,
+        bypass: optional_string_array(object.get("bypass"), "$.route.bypass")?.unwrap_or_default(),
     })
 }
 
@@ -330,6 +343,36 @@ fn optional_u32(
     }
 }
 
+fn optional_string_array(
+    value: Option<&JsonValue>,
+    path: impl Into<String>,
+) -> Result<Option<Vec<String>>, ConfigError> {
+    let path = path.into();
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    match value {
+        JsonValue::Null => Ok(None),
+        JsonValue::Array(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                match item {
+                    JsonValue::String(content) => values.push(content.clone()),
+                    _ => {
+                        return Err(ConfigError::validation(
+                            format!("{path}[{index}]"),
+                            "expected string",
+                        ))
+                    }
+                }
+            }
+            Ok(Some(values))
+        }
+        _ => Err(ConfigError::validation(path, "expected array")),
+    }
+}
+
 fn required_port(value: Option<&JsonValue>, path: impl Into<String>) -> Result<u16, ConfigError> {
     let path = path.into();
     let Some(value) = value else {
@@ -377,6 +420,7 @@ mod tests {
 
         let config = parse_config(input).expect("config should parse");
         assert_eq!(config.route.final_outbound, "proxy");
+        assert!(config.route.bypass.is_empty());
         assert_eq!(config.inbounds.len(), 1);
         assert_eq!(config.outbounds.len(), 2);
     }
@@ -551,6 +595,7 @@ mod tests {
         "#;
 
         let err = parse_config(input).expect_err("non-tcp tproxy network should fail");
+        assert!(err.to_string().contains("$.inbounds[0].network"));
         assert!(err.to_string().contains("only supports network='tcp'"));
     }
 
@@ -588,5 +633,62 @@ mod tests {
 
         let err = parse_config(input).expect_err("negative routing_mark should fail");
         assert!(err.to_string().contains("u32 range"));
+    }
+
+    #[test]
+    fn parses_route_bypass_as_string_list() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "bypass": [" trojan.example.com ", "192.0.2.10"]
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("route bypass should parse");
+        assert_eq!(
+            config.route.bypass,
+            vec![" trojan.example.com ".to_string(), "192.0.2.10".to_string()]
+        );
+    }
+
+    #[test]
+    fn rejects_route_bypass_with_non_string_items() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "bypass": ["example.com", 1]
+          }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("non-string bypass item should fail");
+        assert!(err.to_string().contains("$.route.bypass[1]"));
+    }
+
+    #[test]
+    fn parses_tproxy_compat_example_with_ignored_fields() {
+        let input = include_str!("../../../examples/tproxy-compat.json");
+
+        let config = parse_config(input).expect("compat example should parse");
+        assert_eq!(config.route.final_outbound, "proxy");
+        assert_eq!(
+            config.route.bypass,
+            vec!["trojan.example.com".to_string(), "192.168.0.1".to_string()]
+        );
     }
 }

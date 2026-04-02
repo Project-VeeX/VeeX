@@ -1,0 +1,62 @@
+{
+  "log": {
+    "level": "info",
+    "disabled": false,
+    "timestamp": true,
+    "output": "stdout"
+  },
+  "dns": {
+    "strategy": "prefer_ipv4",
+    "servers": [
+      {
+        "tag": "local",
+        "address": "223.5.5.5"
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "type": "tproxy",
+      "tag": "tproxy-in",
+      "listen": "0.0.0.0",
+      "listen_port": 1041,
+      "network": "tcp"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct",
+      "routing_mark": 255
+    },
+    {
+      "type": "trojan",
+      "tag": "proxy",
+      "server": "trojan.example.com",
+      "server_port": 443,
+      "password": "change-me",
+      "domain_resolver": "local",
+      "tls": {
+        "enabled": true,
+        "server_name": "trojan.example.com",
+        "disable_sni": false,
+        "insecure": false
+      }
+    }
+  ],
+  "route": {
+    "final": "proxy",
+    "bypass": [
+      "trojan.example.com",
+      "192.168.0.1"
+    ],
+    "rules": [
+      {
+        "outbound": "direct",
+        "domain_suffix": [
+          "lan"
+        ]
+      }
+    ]
+  }
+}

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use crate::{
     defaults::DEFAULT_DIRECT_OUTBOUND_TAG,
     parse::ConfigError,
-    schema::{InboundConfig, OutboundConfig, ProxyConfig},
+    schema::{OutboundConfig, ProxyConfig},
 };
 
 pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
@@ -15,17 +15,6 @@ pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
                 "$.inbounds",
                 format!("duplicate inbound tag '{tag}'"),
             ));
-        }
-
-        if let InboundConfig::TProxy(tproxy) = inbound {
-            if let Some(network) = tproxy.network.as_deref() {
-                if network != "tcp" {
-                    return Err(ConfigError::validation(
-                        format!("$.inbounds[{tag}].network"),
-                        "tproxy inbound only supports network='tcp'",
-                    ));
-                }
-            }
         }
     }
 

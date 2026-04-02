@@ -116,6 +116,31 @@ fn check_returns_config_error_for_invalid_config() {
     fs::remove_file(&config_path).expect("config file should be removed");
 }
 
+#[test]
+fn check_accepts_tproxy_compat_example() {
+    let config_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/tproxy-compat.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_veex"))
+        .args([
+            "check",
+            "-c",
+            config_path.to_str().expect("config path should be utf-8"),
+        ])
+        .output()
+        .expect("veex check should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("config check passed"));
+    assert!(stdout.contains("final=proxy"));
+}
+
 fn reserve_local_addr() -> SocketAddr {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("temporary listener should bind");
     listener

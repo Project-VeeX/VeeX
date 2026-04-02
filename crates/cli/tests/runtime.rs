@@ -67,6 +67,7 @@ async fn runtime_supports_socks_to_direct_round_trip() {
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
+            bypass: vec![],
         },
     };
 
@@ -131,6 +132,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
         ],
         route: RouteConfig {
             final_outbound: "proxy".into(),
+            bypass: vec![],
         },
     };
 
@@ -209,6 +211,7 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
         ],
         route: RouteConfig {
             final_outbound: "proxy".into(),
+            bypass: vec![],
         },
     };
 
@@ -273,6 +276,7 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
+            bypass: vec![],
         },
     };
 
@@ -323,6 +327,7 @@ async fn runtime_starts_with_redirect_inbound() {
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
+            bypass: vec![],
         },
     };
 
