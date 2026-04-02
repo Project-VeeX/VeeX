@@ -6,6 +6,7 @@ members = [
     "crates/infra-linux",
     "crates/inbound-redirect",
     "crates/inbound-socks",
+    "crates/inbound-tproxy",
     "crates/observability",
     "crates/outbound-direct",
     "crates/outbound-trojan",

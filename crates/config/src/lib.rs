@@ -11,6 +11,6 @@ pub use json::JsonValue;
 pub use parse::{load_from_path, parse_config, ConfigError, ExitCodeHint};
 pub use schema::{
     DirectOutboundConfig, InboundConfig, InboundType, LogConfig, OutboundConfig, OutboundType,
-    ProxyConfig, RedirectInboundConfig, RouteConfig, SocksInboundConfig, TrojanOutboundConfig,
-    TrojanTlsConfig,
+    ProxyConfig, RedirectInboundConfig, RouteConfig, SocksInboundConfig, TProxyInboundConfig,
+    TrojanOutboundConfig, TrojanTlsConfig,
 };

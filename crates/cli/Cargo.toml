@@ -13,6 +13,7 @@ veex-config = { path = "../config" }
 veex-core = { path = "../core" }
 veex-inbound-redirect = { path = "../inbound-redirect" }
 veex-inbound-socks = { path = "../inbound-socks" }
+veex-inbound-tproxy = { path = "../inbound-tproxy" }
 veex-observability = { path = "../observability" }
 veex-outbound-direct = { path = "../outbound-direct" }
 veex-outbound-trojan = { path = "../outbound-trojan" }

@@ -5,8 +5,8 @@ use crate::{
     json::{parse_json, JsonValue},
     schema::{
         DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
-        RedirectInboundConfig, RouteConfig, SocksInboundConfig, TrojanOutboundConfig,
-        TrojanTlsConfig,
+        RedirectInboundConfig, RouteConfig, SocksInboundConfig, TProxyInboundConfig,
+        TrojanOutboundConfig, TrojanTlsConfig,
     },
     validate::validate_config,
 };
@@ -127,6 +127,12 @@ fn parse_inbounds(value: Option<&JsonValue>) -> Result<Vec<InboundConfig>, Confi
                 tag,
                 listen,
                 listen_port,
+            }),
+            "tproxy" => InboundConfig::TProxy(TProxyInboundConfig {
+                tag,
+                listen,
+                listen_port,
+                network: optional_string(object.get("network"), format!("{path}.network"))?,
             }),
             _ => {
                 return Err(ConfigError::validation(
@@ -311,6 +317,8 @@ fn required_port(value: Option<&JsonValue>, path: impl Into<String>) -> Result<u
 
 #[cfg(test)]
 mod tests {
+    use crate::{InboundConfig, TProxyInboundConfig};
+
     use super::parse_config;
 
     #[test]
@@ -416,6 +424,32 @@ mod tests {
     }
 
     #[test]
+    fn parses_tproxy_inbound_with_optional_network() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "tproxy", "tag": "tproxy-in", "listen": "0.0.0.0", "listen_port": 1041 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let config = parse_config(input).expect("tproxy config should parse");
+        assert_eq!(
+            config.inbounds,
+            vec![InboundConfig::TProxy(TProxyInboundConfig {
+                tag: "tproxy-in".into(),
+                listen: "0.0.0.0".into(),
+                listen_port: 1041,
+                network: None,
+            })]
+        );
+    }
+
+    #[test]
     fn rejects_invalid_tls_combination() {
         let input = r#"
         {
@@ -439,5 +473,29 @@ mod tests {
 
         let err = parse_config(input).expect_err("invalid tls combination should fail");
         assert!(err.to_string().contains("disable_sni=true"));
+    }
+
+    #[test]
+    fn rejects_tproxy_network_other_than_tcp() {
+        let input = r#"
+        {
+          "inbounds": [
+            {
+              "type": "tproxy",
+              "tag": "tproxy-in",
+              "listen": "0.0.0.0",
+              "listen_port": 1041,
+              "network": "udp"
+            }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("non-tcp tproxy network should fail");
+        assert!(err.to_string().contains("only supports network='tcp'"));
     }
 }

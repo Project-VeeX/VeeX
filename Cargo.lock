@@ -511,6 +511,7 @@ dependencies = [
  "veex-core",
  "veex-inbound-redirect",
  "veex-inbound-socks",
+ "veex-inbound-tproxy",
  "veex-observability",
  "veex-outbound-direct",
  "veex-outbound-trojan",
@@ -545,6 +546,16 @@ version = "0.2.0"
 dependencies = [
  "tokio",
  "veex-core",
+]
+
+[[package]]
+name = "veex-inbound-tproxy"
+version = "0.2.0"
+dependencies = [
+ "tokio",
+ "veex-core",
+ "veex-infra-linux",
+ "veex-observability",
 ]
 
 [[package]]
