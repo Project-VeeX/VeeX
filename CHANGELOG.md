@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Added TCP-only `tproxy` inbound support for the Phase3 transparent proxy path.
+- Added Linux `direct.routing_mark` support through `SO_MARK` for no-loop direct egress.
+- Extended route config with explicit `bypass` entries and a repository compatibility fixture.
+- Added TPROXY, routing-mark, OpenWrt SOP, and Phase3 regression documentation.
+
 ## 0.2.0
 
 - Linux redirect inbound support for transparent proxy validation.
