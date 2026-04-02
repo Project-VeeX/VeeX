@@ -12,7 +12,10 @@ pub fn build_outbounds(config: &ProxyConfig) -> Result<HashMap<String, Arc<dyn O
     for outbound in &config.outbounds {
         match outbound {
             OutboundConfig::Direct(direct) => {
-                let instance: Arc<dyn Outbound> = Arc::new(DirectOutbound::new(direct.tag.clone()));
+                let instance: Arc<dyn Outbound> = Arc::new(
+                    DirectOutbound::new(direct.tag.clone(), direct.routing_mark)
+                        .map_err(|err| err.to_string())?,
+                );
                 outbounds.insert(direct.tag.clone(), instance);
             }
             OutboundConfig::Trojan(trojan) => {

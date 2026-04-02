@@ -162,7 +162,13 @@ fn parse_outbounds(value: Option<&JsonValue>) -> Result<Vec<OutboundConfig>, Con
         let tag = required_string(object.get("tag"), format!("{path}.tag"))?;
 
         let outbound = match kind.as_str() {
-            "direct" => OutboundConfig::Direct(DirectOutboundConfig { tag }),
+            "direct" => OutboundConfig::Direct(DirectOutboundConfig {
+                tag,
+                routing_mark: optional_u32(
+                    object.get("routing_mark"),
+                    format!("{path}.routing_mark"),
+                )?,
+            }),
             "trojan" => {
                 let server = required_string(object.get("server"), format!("{path}.server"))?;
                 let server_port =
@@ -299,6 +305,31 @@ fn optional_bool(
     }
 }
 
+fn optional_u32(
+    value: Option<&JsonValue>,
+    path: impl Into<String>,
+) -> Result<Option<u32>, ConfigError> {
+    let path = path.into();
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    match value {
+        JsonValue::Null => Ok(None),
+        JsonValue::Number(number) if *number >= 0 && *number <= u32::MAX as i64 => {
+            Ok(Some(*number as u32))
+        }
+        JsonValue::Number(_) => Err(ConfigError::validation(
+            path,
+            "expected non-negative integer within u32 range",
+        )),
+        _ => Err(ConfigError::validation(
+            path,
+            "expected non-negative integer",
+        )),
+    }
+}
+
 fn required_port(value: Option<&JsonValue>, path: impl Into<String>) -> Result<u16, ConfigError> {
     let path = path.into();
     let Some(value) = value else {
@@ -317,7 +348,7 @@ fn required_port(value: Option<&JsonValue>, path: impl Into<String>) -> Result<u
 
 #[cfg(test)]
 mod tests {
-    use crate::{InboundConfig, TProxyInboundConfig};
+    use crate::{DirectOutboundConfig, InboundConfig, OutboundConfig, TProxyInboundConfig};
 
     use super::parse_config;
 
@@ -450,6 +481,30 @@ mod tests {
     }
 
     #[test]
+    fn parses_direct_outbound_with_optional_routing_mark() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct", "routing_mark": 1 }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let config = parse_config(input).expect("direct config with routing_mark should parse");
+        assert_eq!(
+            config.outbounds,
+            vec![OutboundConfig::Direct(DirectOutboundConfig {
+                tag: "direct".into(),
+                routing_mark: Some(1),
+            })]
+        );
+    }
+
+    #[test]
     fn rejects_invalid_tls_combination() {
         let input = r#"
         {
@@ -497,5 +552,41 @@ mod tests {
 
         let err = parse_config(input).expect_err("non-tcp tproxy network should fail");
         assert!(err.to_string().contains("only supports network='tcp'"));
+    }
+
+    #[test]
+    fn rejects_direct_routing_mark_with_wrong_type() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct", "routing_mark": "1" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("string routing_mark should fail");
+        assert!(err.to_string().contains("$.outbounds[0].routing_mark"));
+    }
+
+    #[test]
+    fn rejects_direct_routing_mark_outside_u32_range() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct", "routing_mark": -1 }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("negative routing_mark should fail");
+        assert!(err.to_string().contains("u32 range"));
     }
 }

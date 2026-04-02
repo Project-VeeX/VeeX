@@ -82,6 +82,7 @@ pub struct TrojanTlsConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectOutboundConfig {
     pub tag: String,
+    pub routing_mark: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

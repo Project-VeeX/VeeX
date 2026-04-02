@@ -63,6 +63,7 @@ async fn runtime_supports_socks_to_direct_round_trip() {
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
+            routing_mark: None,
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -111,6 +112,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
         outbounds: vec![
             OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
+                routing_mark: None,
             }),
             OutboundConfig::Trojan(TrojanOutboundConfig {
                 tag: "proxy".into(),
@@ -188,6 +190,7 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
         outbounds: vec![
             OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
+                routing_mark: None,
             }),
             OutboundConfig::Trojan(TrojanOutboundConfig {
                 tag: "proxy".into(),
@@ -266,6 +269,7 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
+            routing_mark: None,
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -315,6 +319,7 @@ async fn runtime_starts_with_redirect_inbound() {
         )],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
+            routing_mark: None,
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),

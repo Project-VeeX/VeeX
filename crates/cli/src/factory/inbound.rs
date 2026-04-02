@@ -71,6 +71,7 @@ mod tests {
             })],
             outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
+                routing_mark: None,
             })],
             route: RouteConfig {
                 final_outbound: "direct".into(),
