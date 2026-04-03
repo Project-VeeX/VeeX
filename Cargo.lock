@@ -688,7 +688,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "veex-cli"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "rcgen",
  "rustls",
@@ -710,14 +710,14 @@ dependencies = [
 
 [[package]]
 name = "veex-config"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "veex-core"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "thiserror",
  "tokio",
@@ -728,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "veex-inbound-redirect"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "tokio",
  "tracing",
@@ -739,7 +739,7 @@ dependencies = [
 
 [[package]]
 name = "veex-inbound-socks"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "thiserror",
  "tokio",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "veex-inbound-tproxy"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "tokio",
  "tracing",
@@ -760,7 +760,7 @@ dependencies = [
 
 [[package]]
 name = "veex-infra-linux"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "libc",
  "socket2 0.5.10",
@@ -771,14 +771,14 @@ dependencies = [
 
 [[package]]
 name = "veex-observability"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "veex-outbound-direct"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "libc",
  "socket2 0.5.10",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "veex-outbound-trojan"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "rcgen",
  "rustls",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "veex-transport"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "rcgen",
  "rustls",

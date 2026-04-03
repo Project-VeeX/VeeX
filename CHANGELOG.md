@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0
+
+- Added structured tracing coverage across runtime, session, TLS, and transparent-socket paths with stable field contracts.
+- Hardened relay accounting so `session_finish` preserves partial `bytes_up` and `bytes_down` on relay failure instead of collapsing to `0/0`.
+- Tightened `route.bypass` semantics to exact domain and exact IP matches, with wildcard and suffix-style patterns rejected explicitly.
+- Replaced the hand-rolled Trojan password SHA-224 implementation with `sha2::Sha224` and added standard-vector coverage.
+- Improved transparent listener diagnostics with explicit socket-option status fields and clearer fallback events.
+
 ## 0.3.1
 
 - Hardened dual-stack transparent proxy handling for `redirect` and `tproxy` validation paths.
