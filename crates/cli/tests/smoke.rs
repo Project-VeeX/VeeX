@@ -72,15 +72,15 @@ fn run_lifecycle_smoke_test(signal: &str) {
         .expect("veex run should exit cleanly");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
 
     assert!(
         output.status.success(),
         "stdout:\n{stdout}\nstderr:\n{stderr}"
     );
-    assert!(stdout.contains("event=process_start"));
-    assert!(stdout.contains("event=process_stop"));
-    assert!(stdout.contains("event=session_finish"));
-    assert!(stdout.contains("error_kind=none"));
+    assert!(combined.contains("process_start"));
+    assert!(combined.contains("process_stop"));
+    assert_output_has_event(&combined, "session_finish", &[("success", "true")]);
 
     echo_thread.join().expect("echo thread should join");
     fs::remove_file(&config_path).expect("config file should be removed");
@@ -216,4 +216,27 @@ fn send_signal(pid: u32, signal: &str) {
         .status()
         .expect("kill should run");
     assert!(status.success(), "kill {signal} {pid} failed");
+}
+
+fn assert_output_has_event(output: &str, event_name: &str, expected_fields: &[(&str, &str)]) {
+    let matched = output.lines().any(|line| {
+        let fields = parse_output_fields(line);
+        fields.get("event").map(String::as_str) == Some(event_name)
+            && expected_fields.iter().all(|(key, expected)| {
+                fields.get(*key).map(String::as_str) == Some(*expected)
+            })
+    });
+
+    assert!(
+        matched,
+        "expected event `{event_name}` with fields {:?} in output:\n{output}",
+        expected_fields
+    );
+}
+
+fn parse_output_fields(line: &str) -> std::collections::BTreeMap<String, String> {
+    line.split_whitespace()
+        .filter_map(|token| token.split_once('='))
+        .map(|(key, value)| (key.to_string(), value.trim_matches('"').to_string()))
+        .collect()
 }

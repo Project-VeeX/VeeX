@@ -13,6 +13,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
+use tracing::{error, info, warn};
 use veex_core::{
     format_listen_addr, BoxFuture, BoxedAsyncStream, Dispatcher, Inbound, Network, ProxyError,
     Result, SessionContext, SessionMeta, ShutdownSignal,
@@ -114,39 +115,79 @@ impl SocksInbound {
         peer: SocketAddr,
         dispatcher: Arc<dyn Dispatcher>,
     ) -> Result<()> {
-        let methods = read_greeting(&mut stream).await?;
-        let greeting = decode_greeting(&methods)?;
+        let methods = read_greeting(&mut stream).await.map_err(|err| {
+            self.log_handshake_failed(peer, "greeting", &err);
+            ProxyError::from(err)
+        })?;
+        let greeting = decode_greeting(&methods).map_err(|err| {
+            self.log_handshake_failed(peer, "greeting", &err);
+            ProxyError::from(err)
+        })?;
 
         if !greeting.methods.contains(&NO_AUTHENTICATION) {
-            stream
+            if let Err(err) = stream
                 .write_all(&encode_method_selection(NO_ACCEPTABLE_METHODS))
-                .await?;
-            return Err(SocksError::UnsupportedAuthMethods.into());
+                .await
+            {
+                let err = SocksError::from(err);
+                self.log_handshake_failed(peer, "method_selection", &err);
+                return Err(err.into());
+            }
+
+            let err = SocksError::UnsupportedAuthMethods;
+            self.log_handshake_failed(peer, "method_selection", &err);
+            return Err(err.into());
         }
 
         stream
             .write_all(&encode_method_selection(NO_AUTHENTICATION))
-            .await?;
+            .await
+            .map_err(|err| {
+                let err = SocksError::from(err);
+                self.log_handshake_failed(peer, "method_selection", &err);
+                ProxyError::from(err)
+            })?;
 
-        let request_bytes = read_request(&mut stream).await?;
+        let request_bytes = read_request(&mut stream).await.map_err(|err| {
+            self.log_handshake_failed(peer, "request_decode", &err);
+            ProxyError::from(err)
+        })?;
         let request = match decode_request(&request_bytes) {
             Ok(request) => request,
             Err(err @ SocksError::UnsupportedCommand(_)) => {
-                stream
+                if let Err(write_err) = stream
                     .write_all(&encode_reply(ReplyCode::CommandNotSupported, None))
-                    .await?;
+                    .await
+                {
+                    let err = SocksError::from(write_err);
+                    self.log_handshake_failed(peer, "request_validate", &err);
+                    return Err(err.into());
+                }
+                self.log_handshake_failed(peer, "request_validate", &err);
                 return Err(err.into());
             }
             Err(err @ SocksError::UnsupportedAddressType(_)) => {
-                stream
+                if let Err(write_err) = stream
                     .write_all(&encode_reply(ReplyCode::AddressTypeNotSupported, None))
-                    .await?;
+                    .await
+                {
+                    let err = SocksError::from(write_err);
+                    self.log_handshake_failed(peer, "request_validate", &err);
+                    return Err(err.into());
+                }
+                self.log_handshake_failed(peer, "request_validate", &err);
                 return Err(err.into());
             }
             Err(err) => {
-                stream
+                if let Err(write_err) = stream
                     .write_all(&encode_reply(ReplyCode::GeneralFailure, None))
-                    .await?;
+                    .await
+                {
+                    let err = SocksError::from(write_err);
+                    self.log_handshake_failed(peer, "request_decode", &err);
+                    return Err(err.into());
+                }
+                self.log_handshake_failed(peer, "request_decode", &err);
                 return Err(err.into());
             }
         };
@@ -154,10 +195,27 @@ impl SocksInbound {
         let local_addr = stream.local_addr().ok();
         stream
             .write_all(&encode_reply(ReplyCode::Succeeded, local_addr))
-            .await?;
+            .await
+            .map_err(|err| {
+                let err = SocksError::from(err);
+                self.log_handshake_failed(peer, "request_validate", &err);
+                ProxyError::from(err)
+            })?;
+
+        let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
+        let destination = request.destination.clone();
+        info!(
+            event = "session_start",
+            session_id,
+            inbound = %self.tag,
+            peer = %peer,
+            destination = %destination,
+            network = "tcp",
+            "socks session start"
+        );
 
         let meta = SessionMeta {
-            id: self.next_session_id.fetch_add(1, Ordering::Relaxed),
+            id: session_id,
             network: Network::Tcp,
             inbound_tag: self.tag.clone(),
             peer,
@@ -166,7 +224,20 @@ impl SocksInbound {
         };
         let ctx = SessionContext::new(meta, Vec::new());
         let stream: BoxedAsyncStream = Box::new(stream);
-        dispatcher.dispatch(stream, ctx).await
+        let result = dispatcher.dispatch(stream, ctx).await;
+        if let Err(err) = &result {
+            warn!(
+                event = "session_failed",
+                session_id,
+                inbound = %self.tag,
+                peer = %peer,
+                destination = %destination,
+                error_kind = %err.kind(),
+                error = %err,
+                "socks session failed"
+            );
+        }
+        result
     }
 
     async fn wait_for_shutdown(&self) {
@@ -174,6 +245,17 @@ impl SocksInbound {
             Some(shutdown) => shutdown.wait().await,
             None => pending::<()>().await,
         }
+    }
+
+    fn log_handshake_failed(&self, peer: SocketAddr, stage: &'static str, err: &SocksError) {
+        warn!(
+            event = "handshake_failed",
+            inbound = %self.tag,
+            peer = %peer,
+            stage = stage,
+            error = %err,
+            "socks handshake failed"
+        );
     }
 }
 
@@ -208,8 +290,17 @@ impl Inbound for SocksInbound {
                         });
                     }
                     maybe_task = connections.join_next(), if !connections.is_empty() => {
-                        if let Some(task_result) = maybe_task {
-                            let _ = task_result;
+                        if let Some(Err(err)) = maybe_task {
+                            error!(
+                                event = "task_join_failed",
+                                inbound = %self.tag,
+                                error = %err,
+                                "socks connection task join failed"
+                            );
+                            return Err(ProxyError::protocol_ctx(
+                                "socks inbound connection task join failed",
+                                err,
+                            ));
                         }
                     }
                 }

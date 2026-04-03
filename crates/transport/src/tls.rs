@@ -6,15 +6,17 @@ use std::{
 };
 
 use rustls::pki_types::ServerName;
+use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::TcpStream,
 };
 use tokio_rustls::TlsConnector;
+use tracing::warn;
 use veex_core::{BoxedAsyncStream, Host, ProxyError, Result};
 
 use crate::verifier::{
-    build_client_config, validate_certificate_paths, CertificateVerifierOptions,
+    build_client_config, validate_certificate_paths, CertificateVerifierOptions, VerifierError,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -27,25 +29,63 @@ pub struct TlsClientOptions {
     pub ca_path: Option<String>,
 }
 
+#[derive(Debug, Error)]
+pub enum TlsError {
+    #[error("disable_sni=true requires an explicit server_name or insecure=true")]
+    DisableSniRequiresServerName,
+    #[error("tls server_name is required when using an IP address with certificate verification")]
+    MissingServerNameForIp,
+    #[error("tls verifier configuration failed: {0}")]
+    Verifier(#[from] VerifierError),
+    #[error("invalid tls server_name `{server_name}`: {message}")]
+    InvalidServerName { server_name: String, message: String },
+    #[error(
+        "tls handshake failed for host={host} server_name={server_name} insecure={insecure} disable_sni={disable_sni}: {source}"
+    )]
+    Handshake {
+        host: String,
+        server_name: String,
+        insecure: bool,
+        disable_sni: bool,
+        #[source]
+        source: io::Error,
+    },
+}
+
+impl From<TlsError> for ProxyError {
+    fn from(value: TlsError) -> Self {
+        match value {
+            TlsError::DisableSniRequiresServerName
+            | TlsError::MissingServerNameForIp
+            | TlsError::InvalidServerName { .. } => ProxyError::config(value.to_string()),
+            TlsError::Verifier(_) | TlsError::Handshake { .. } => {
+                ProxyError::tls(value.to_string())
+            }
+        }
+    }
+}
+
 impl TlsClientOptions {
     pub fn validate(&self) -> Result<()> {
         if self.disable_sni && !self.insecure && self.server_name.is_none() {
-            return Err(ProxyError::Config(
-                "disable_sni=true requires an explicit server_name or insecure=true".into(),
-            ));
+            return Err(TlsError::DisableSniRequiresServerName.into());
         }
 
         validate_certificate_paths(&CertificateVerifierOptions {
             insecure: self.insecure,
             certificate_path: self.certificate_path.clone(),
             ca_path: self.ca_path.clone(),
-        })?;
+        })
+        .map_err(TlsError::from)?;
 
         Ok(())
     }
 }
 
-pub fn server_name_for_tls(host: &Host, options: &TlsClientOptions) -> Result<String> {
+pub fn server_name_for_tls(
+    host: &Host,
+    options: &TlsClientOptions,
+) -> std::result::Result<String, TlsError> {
     if let Some(server_name) = &options.server_name {
         return Ok(server_name.clone());
     }
@@ -56,9 +96,7 @@ pub fn server_name_for_tls(host: &Host, options: &TlsClientOptions) -> Result<St
             if options.insecure {
                 Ok(ip.to_string())
             } else {
-                Err(ProxyError::Config(
-                    "tls server_name is required when using an IP address with certificate verification".into(),
-                ))
+                Err(TlsError::MissingServerNameForIp)
             }
         }
     }
@@ -74,22 +112,42 @@ pub async fn connect_tls(
     }
 
     options.validate()?;
-    let server_name = server_name_for_tls(host, options)?;
+    let server_name = server_name_for_tls(host, options).map_err(ProxyError::from)?;
     let mut config = build_client_config(&CertificateVerifierOptions {
         insecure: options.insecure,
         certificate_path: options.certificate_path.clone(),
         ca_path: options.ca_path.clone(),
-    })?;
+    })
+    .map_err(TlsError::from)
+    .map_err(ProxyError::from)?;
     config.enable_sni = !options.disable_sni;
 
     let connector = TlsConnector::from(Arc::new(config));
-    let server_name = ServerName::try_from(server_name)
-        .map_err(|err| ProxyError::Config(format!("invalid tls server_name: {err}")))?;
+    let tls_server_name = ServerName::try_from(server_name.clone()).map_err(|err| {
+        ProxyError::from(TlsError::InvalidServerName {
+            server_name: server_name.clone(),
+            message: err.to_string(),
+        })
+    })?;
 
-    let stream = connector
-        .connect(server_name, stream)
-        .await
-        .map_err(|err| ProxyError::Tls(format!("tls handshake failed: {err}")))?;
+    let stream = connector.connect(tls_server_name, stream).await.map_err(|err| {
+        warn!(
+            event = "tls_handshake_failed",
+            host = %host,
+            server_name = %server_name,
+            insecure = options.insecure,
+            disable_sni = options.disable_sni,
+            error = %err,
+            "tls handshake failed"
+        );
+        ProxyError::from(TlsError::Handshake {
+            host: host.to_string(),
+            server_name: server_name.clone(),
+            insecure: options.insecure,
+            disable_sni: options.disable_sni,
+            source: err,
+        })
+    })?;
 
     Ok(Box::new(TlsCloseNotifyTolerantStream::new(stream)))
 }

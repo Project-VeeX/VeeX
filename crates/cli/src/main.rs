@@ -2,10 +2,11 @@ use std::{env, process::ExitCode};
 
 use veex_cli::{
     command::{parse_args, Command},
+    logging::init_tracing,
     runtime::run_with_shutdown,
 };
 use veex_config::{load_from_path, ConfigError};
-use veex_observability::{init_logging, log_line, LogLevel, LoggingOptions};
+use veex_observability::{log_line, LogLevel, LoggingOptions};
 
 const EXIT_OK: u8 = 0;
 const EXIT_CONFIG_ERROR: u8 = 2;
@@ -57,7 +58,7 @@ fn run_command(config_path: &str) -> Result<u8, (u8, String)> {
         disabled: config.log.disabled,
     };
 
-    init_logging(&logging)
+    init_tracing(&logging)
         .map_err(|err| (EXIT_STARTUP_ERROR, format!("logging init failed: {err}")))?;
 
     log_line(
@@ -84,7 +85,7 @@ fn run_command(config_path: &str) -> Result<u8, (u8, String)> {
         .block_on(async {
             run_with_shutdown(&config, async { wait_for_shutdown_signal().await }).await
         })
-        .map_err(|err| (EXIT_RUNTIME_ERROR, err))?;
+        .map_err(|err| (EXIT_RUNTIME_ERROR, err.to_string()))?;
 
     log_line(LogLevel::Info, "event=process_stop");
     Ok(EXIT_OK)

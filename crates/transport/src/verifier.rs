@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{BufReader, Cursor},
+    io::{self, BufReader, Cursor},
     path::Path,
     sync::Arc,
 };
@@ -11,7 +11,41 @@ use rustls::{
     pki_types::{CertificateDer, ServerName, UnixTime},
     ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme,
 };
-use veex_core::{ProxyError, Result};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum VerifierError {
+    #[error("failed to access certificate file {path}: {source}")]
+    Access {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("certificate path is not a file: {path}")]
+    NotAFile { path: String },
+    #[error("failed to read certificate file {path}: {source}")]
+    Read {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to parse certificate file {path} as PEM/DER: {message}")]
+    Parse { path: String, message: String },
+    #[error("certificate file does not contain any certificates: {path}")]
+    Empty { path: String },
+    #[error("failed to load system root certificates: {message}")]
+    LoadSystemRoots { message: String },
+    #[error("failed to add system root certificate: {message}")]
+    AddSystemRoot { message: String },
+    #[error("failed to add certificate to root store: {message}")]
+    AddToRootStore { message: String },
+    #[error("failed to build webpki verifier: {message}")]
+    BuildWebPki { message: String },
+    #[error("failed to configure TLS protocol versions: {message}")]
+    ConfigureProtocolVersions { message: String },
+}
+
+pub type Result<T> = std::result::Result<T, VerifierError>;
 
 #[derive(Clone, Debug, Default)]
 pub struct CertificateVerifierOptions {
@@ -40,9 +74,9 @@ pub fn build_client_config(options: &CertificateVerifierOptions) -> Result<Clien
         Some(path) => {
             let certificates = read_certificates(path)?;
             if certificates.is_empty() {
-                return Err(ProxyError::Tls(format!(
-                    "certificate file does not contain any certificates: {path}"
-                )));
+                return Err(VerifierError::Empty {
+                    path: path.to_string(),
+                });
             }
             add_certificates_to_root_store(&mut root_store, &certificates)?;
             Some(certificates[0].clone())
@@ -63,7 +97,9 @@ pub fn build_client_config(options: &CertificateVerifierOptions) -> Result<Clien
     } else if let Some(pinned_certificate) = pinned_certificate {
         let inner = rustls::client::WebPkiServerVerifier::builder(Arc::new(root_store.clone()))
             .build()
-            .map_err(|err| ProxyError::Tls(format!("failed to build webpki verifier: {err}")))?;
+            .map_err(|err| VerifierError::BuildWebPki {
+                message: err.to_string(),
+            })?;
         Arc::new(PinnedCertificateVerifier::new(
             inner,
             pinned_certificate,
@@ -72,13 +108,15 @@ pub fn build_client_config(options: &CertificateVerifierOptions) -> Result<Clien
     } else {
         rustls::client::WebPkiServerVerifier::builder(Arc::new(root_store))
             .build()
-            .map_err(|err| ProxyError::Tls(format!("failed to build webpki verifier: {err}")))?
+            .map_err(|err| VerifierError::BuildWebPki {
+                message: err.to_string(),
+            })?
     };
 
     let config = ClientConfig::builder_with_provider(provider.into())
         .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
-        .map_err(|err| {
-            ProxyError::Tls(format!("failed to configure TLS protocol versions: {err}"))
+        .map_err(|err| VerifierError::ConfigureProtocolVersions {
+            message: err.to_string(),
         })?
         .dangerous()
         .with_custom_certificate_verifier(verifier)
@@ -98,14 +136,12 @@ fn load_root_store() -> Result<RootCertStore> {
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join("; ");
-        return Err(ProxyError::Tls(format!(
-            "failed to load system root certificates: {details}"
-        )));
+        return Err(VerifierError::LoadSystemRoots { message: details });
     }
 
     for certificate in native.certs {
-        root_store.add(certificate).map_err(|err| {
-            ProxyError::Tls(format!("failed to add system root certificate: {err}"))
+        root_store.add(certificate).map_err(|err| VerifierError::AddSystemRoot {
+            message: err.to_string(),
         })?;
     }
 
@@ -117,20 +153,21 @@ fn add_certificates_to_root_store(
     certificates: &[CertificateDer<'static>],
 ) -> Result<()> {
     for certificate in certificates {
-        root_store.add(certificate.clone()).map_err(|err| {
-            ProxyError::Tls(format!("failed to add certificate to root store: {err}"))
+        root_store.add(certificate.clone()).map_err(|err| VerifierError::AddToRootStore {
+            message: err.to_string(),
         })?;
     }
     Ok(())
 }
 
 fn read_certificates(path: &str) -> Result<Vec<CertificateDer<'static>>> {
-    let content = fs::read(path)
-        .map_err(|err| ProxyError::Tls(format!("failed to read certificate file {path}: {err}")))?;
-    read_certificates_from_slice(&content).map_err(|err| {
-        ProxyError::Tls(format!(
-            "failed to parse certificate file {path} as PEM/DER: {err}"
-        ))
+    let content = fs::read(path).map_err(|err| VerifierError::Read {
+        path: path.to_string(),
+        source: err,
+    })?;
+    read_certificates_from_slice(&content).map_err(|err| VerifierError::Parse {
+        path: path.to_string(),
+        message: err.to_string(),
     })
 }
 
@@ -149,13 +186,14 @@ pub(crate) fn read_certificates_from_slice(
 }
 
 fn ensure_file_exists(path: &str) -> Result<()> {
-    let metadata = fs::metadata(Path::new(path)).map_err(|err| {
-        ProxyError::Tls(format!("failed to access certificate file {path}: {err}"))
+    let metadata = fs::metadata(Path::new(path)).map_err(|err| VerifierError::Access {
+        path: path.to_string(),
+        source: err,
     })?;
     if !metadata.is_file() {
-        return Err(ProxyError::Tls(format!(
-            "certificate path is not a file: {path}"
-        )));
+        return Err(VerifierError::NotAFile {
+            path: path.to_string(),
+        });
     }
     Ok(())
 }

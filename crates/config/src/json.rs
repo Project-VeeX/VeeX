@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::parse::ConfigError;
+use crate::error::ConfigError;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JsonValue {
@@ -84,6 +84,12 @@ impl<'a> Parser<'a> {
             self.expect_byte(b':', path)?;
             let child_path = format!("{path}.{key}");
             let value = self.parse_value(&child_path)?;
+            if object.contains_key(&key) {
+                return Err(ConfigError::json(
+                    path,
+                    format!("duplicate object key `{key}` at `{child_path}`"),
+                ));
+            }
             object.insert(key, value);
             self.skip_whitespace();
 
@@ -318,5 +324,22 @@ mod tests {
             }
             other => panic!("unexpected value: {other:?}"),
         }
+    }
+
+    #[test]
+    fn rejects_duplicate_object_keys_with_key_and_path() {
+        let err = parse_json(
+            r#"
+            {
+              "outbounds": [
+                { "tag": "direct", "tag": "proxy" }
+              ]
+            }
+            "#,
+        )
+        .expect_err("duplicate keys should fail");
+
+        assert!(err.to_string().contains("duplicate object key `tag`"));
+        assert!(err.to_string().contains("$.outbounds[0].tag"));
     }
 }

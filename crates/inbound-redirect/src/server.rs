@@ -12,11 +12,11 @@ use tokio::{
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
+use tracing::{error, info, warn};
 use veex_core::{
     parse_listen_addr, BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, Network,
     ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
 };
-use veex_observability::{log_line, LogLevel};
 
 use crate::{
     error::RedirectError, listener::create_redirect_listener, original_dst::resolve_original_dst,
@@ -146,13 +146,27 @@ impl RedirectInbound {
         peer: SocketAddr,
     ) -> Result<()> {
         let session_id = self.next_session_id();
-        let destination = (self.resolver)(&stream)?;
-        log_line(
-            LogLevel::Info,
-            &format!(
-                "event=session_start session_id={} inbound={} peer={} original_dst={}",
-                session_id, self.tag, peer, destination
-            ),
+        let destination = match (self.resolver)(&stream) {
+            Ok(destination) => destination,
+            Err(err) => {
+                warn!(
+                    event = "destination_resolve_failed",
+                    inbound = %self.tag,
+                    peer = %peer,
+                    error = %err,
+                    "redirect original destination lookup failed"
+                );
+                return Err(err.into());
+            }
+        };
+        info!(
+            event = "session_start",
+            session_id,
+            inbound = %self.tag,
+            peer = %peer,
+            destination = %destination,
+            network = "tcp",
+            "redirect session start"
         );
 
         let meta = SessionMeta {
@@ -160,12 +174,25 @@ impl RedirectInbound {
             network: Network::Tcp,
             inbound_tag: self.tag.clone(),
             peer,
-            destination,
+            destination: destination.clone(),
             start: Instant::now(),
         };
         let ctx = SessionContext::new(meta, Vec::new());
         let stream: BoxedAsyncStream = Box::new(stream);
-        dispatcher.dispatch(stream, ctx).await
+        let result = dispatcher.dispatch(stream, ctx).await;
+        if let Err(err) = &result {
+            warn!(
+                event = "session_failed",
+                session_id,
+                inbound = %self.tag,
+                peer = %peer,
+                destination = %destination,
+                error_kind = %err.kind(),
+                error = %err,
+                "redirect session failed"
+            );
+        }
+        result
     }
 
     async fn wait_for_shutdown(&self) {
@@ -200,25 +227,34 @@ impl Inbound for RedirectInbound {
                     accept_result = listener.accept(), if !shutting_down => {
                         let (stream, peer) = accept_result?;
                         let inbound = Arc::clone(&self);
+                        let inbound_tag = inbound.tag.clone();
                         let dispatcher = Arc::clone(&dispatcher);
 
                         connections.spawn(async move {
                             if let Err(err) = inbound.handle_connection(dispatcher, stream, peer).await {
-                                log_line(
-                                    LogLevel::Warn,
-                                    &format!(
-                                        "event=inbound_error inbound=redirect peer={} error_kind={} message={}",
-                                        peer,
-                                        err.kind(),
-                                        err
-                                    ),
+                                warn!(
+                                    event = "inbound_connection_failed",
+                                    inbound = %inbound_tag,
+                                    peer = %peer,
+                                    error_kind = %err.kind(),
+                                    error = %err,
+                                    "redirect inbound connection failed"
                                 );
                             }
                         });
                     }
                     maybe_task = connections.join_next(), if !connections.is_empty() => {
-                        if let Some(task_result) = maybe_task {
-                            let _ = task_result;
+                        if let Some(Err(err)) = maybe_task {
+                            error!(
+                                event = "task_join_failed",
+                                inbound = %self.tag,
+                                error = %err,
+                                "redirect connection task join failed"
+                            );
+                            return Err(ProxyError::protocol_ctx(
+                                "redirect inbound connection task join failed",
+                                err,
+                            ));
                         }
                     }
                 }

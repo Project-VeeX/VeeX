@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
-use veex_observability::{emit_session_summary, log_line, LogLevel, SessionSummary};
+use tracing::{info, warn};
+use veex_observability::SessionSummary;
 
 use crate::{
     error::ProxyError,
@@ -35,21 +36,19 @@ impl Dispatcher for SimpleDispatcher {
                 .clone()
                 .unwrap_or_else(|| decision.outbound_tag.clone());
 
-            if route_reason != RouteReason::Final {
-                log_line(
-                    LogLevel::Info,
-                    &format!(
-                        "event=route_select session_id={} inbound={} outbound={} reason={} dest={}",
-                        ctx.meta.id,
-                        ctx.meta.inbound_tag,
-                        outbound_tag,
-                        route_reason.as_str(),
-                        ctx.meta.destination,
-                    ),
-                );
-            }
+            info!(
+                event = "route_select",
+                session_id = ctx.meta.id,
+                inbound = %ctx.meta.inbound_tag,
+                peer = %ctx.meta.peer,
+                destination = %ctx.meta.destination,
+                outbound = %outbound_tag,
+                route_reason = route_reason.as_str(),
+                network = ctx.meta.network.as_str(),
+                "route selected"
+            );
             let outbound = self.outbounds.get(&outbound_tag).ok_or_else(|| {
-                ProxyError::Config(format!("missing outbound tag: {outbound_tag}"))
+                ProxyError::config(format!("missing outbound tag: {outbound_tag}"))
             })?;
 
             let result: crate::Result<_> = async {
@@ -83,7 +82,42 @@ impl Dispatcher for SimpleDispatcher {
                 ),
             };
 
-            emit_session_summary(&summary);
+            match &result {
+                Ok(_) => {
+                    info!(
+                        event = "session_finish",
+                        session_id = summary.session_id,
+                        inbound = %summary.inbound,
+                        peer = %summary.peer,
+                        destination = %summary.destination,
+                        outbound = %summary.outbound,
+                        route_reason = route_reason.as_str(),
+                        success = true,
+                        duration_ms = summary.duration.as_millis(),
+                        bytes_up = summary.bytes_up,
+                        bytes_down = summary.bytes_down,
+                        "session finished"
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        event = "session_finish",
+                        session_id = summary.session_id,
+                        inbound = %summary.inbound,
+                        peer = %summary.peer,
+                        destination = %summary.destination,
+                        outbound = %summary.outbound,
+                        route_reason = route_reason.as_str(),
+                        success = false,
+                        duration_ms = summary.duration.as_millis(),
+                        bytes_up = summary.bytes_up,
+                        bytes_down = summary.bytes_down,
+                        error_kind = %err.kind(),
+                        error = %err,
+                        "session finished with error"
+                    );
+                }
+            }
             result.map(|_| ())
         })
     }

@@ -8,6 +8,9 @@
 - `PROJECT_GUIDE.md`
   - stable project guide
   - use for repository boundary, target topology, workspace structure, runtime model, compatibility contract, and operational signals
+- `docs/observability-and-errors.md`
+  - stable engineering doc for thiserror / tracing closure
+  - use for canonical wording of current error-model and structured-event changes
 - `examples/socks-trojan.json`
 - `examples/redirect-trojan.json`
 - `examples/tproxy-compat.json`
@@ -19,6 +22,8 @@
   - phase-by-phase delivery summary
 - `references/repo-map.md`
   - crate ownership, dependency constraints, and landing zones
+- `references/observability-errors.md`
+  - distilled skill-facing summary of current error-model and tracing contracts
 - `references/architecture-closure.md`
   - internal boundary decisions that should remain stable
 - `references/config-contract.md`
@@ -33,6 +38,7 @@
 ## Usage Rules
 
 - Prefer `README.md` and `PROJECT_GUIDE.md` before opening internal references.
+- Prefer `docs/observability-and-errors.md` as the canonical repo document, and use `references/observability-errors.md` as the compact skill summary.
 - Do not depend on `.local` task files or temporary stage docs as active knowledge sources for this skill.
 - If important information exists only in temporary material, migrate it into a persistent doc or skill reference before relying on it.
 - If a fact appears in both a stable guide and an internal reference, prefer the stable guide unless the question is specifically about internal engineering constraints.

@@ -4,6 +4,7 @@ use tokio::{
     net::{lookup_host, TcpStream},
     time::timeout,
 };
+use tracing::debug;
 use veex_core::{Host, ProxyError, Result};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -15,15 +16,37 @@ pub async fn connect_host(host: &Host, port: u16, options: TcpConnectOptions) ->
     let addresses = resolve_host(host, port).await?;
     let mut last_error = None;
 
-    for address in addresses {
+    for (attempt_index, address) in addresses.into_iter().enumerate() {
+        if let Some(duration) = options.timeout {
+            debug!(
+                event = "tcp_connect_attempt",
+                host = %host,
+                port,
+                resolved_addr = %address,
+                timeout_ms = duration.as_millis(),
+                attempt_index = attempt_index + 1,
+                "tcp connect attempt"
+            );
+        } else {
+            debug!(
+                event = "tcp_connect_attempt",
+                host = %host,
+                port,
+                resolved_addr = %address,
+                attempt_index = attempt_index + 1,
+                "tcp connect attempt"
+            );
+        }
+
         match connect_socket(address, options).await {
             Ok(stream) => return Ok(stream),
             Err(err) => last_error = Some(err),
         }
     }
 
-    Err(last_error
-        .unwrap_or_else(|| ProxyError::Dial(format!("no reachable address for {host}:{port}"))))
+    Err(last_error.unwrap_or_else(|| {
+        ProxyError::dial(format!("no reachable address for {host}:{port}"))
+    }))
 }
 
 async fn resolve_host(host: &Host, port: u16) -> Result<Vec<SocketAddr>> {
@@ -31,11 +54,11 @@ async fn resolve_host(host: &Host, port: u16) -> Result<Vec<SocketAddr>> {
         Host::Ip(ip) => Ok(vec![SocketAddr::new(*ip, port)]),
         Host::Domain(domain) => {
             let addresses = lookup_host((domain.as_str(), port)).await.map_err(|err| {
-                ProxyError::Resolve(format!("failed to resolve {domain}:{port}: {err}"))
+                ProxyError::resolve_ctx(format!("failed to resolve {domain}:{port}"), err)
             })?;
             let addresses: Vec<_> = addresses.collect();
             if addresses.is_empty() {
-                return Err(ProxyError::Resolve(format!(
+                return Err(ProxyError::resolve(format!(
                     "resolver returned no addresses for {domain}:{port}"
                 )));
             }
@@ -50,10 +73,10 @@ async fn connect_socket(address: SocketAddr, options: TcpConnectOptions) -> Resu
     match options.timeout {
         Some(duration) => timeout(duration, connect_future)
             .await
-            .map_err(|_| ProxyError::Timeout(format!("tcp connect timeout to {address}")))?
-            .map_err(|err| ProxyError::Dial(format!("tcp connect failed to {address}: {err}"))),
+            .map_err(|_| ProxyError::timeout(format!("tcp connect timeout to {address}")))?
+            .map_err(|err| ProxyError::dial_ctx(format!("tcp connect failed to {address}"), err)),
         None => connect_future
             .await
-            .map_err(|err| ProxyError::Dial(format!("tcp connect failed to {address}: {err}"))),
+            .map_err(|err| ProxyError::dial_ctx(format!("tcp connect failed to {address}"), err)),
     }
 }

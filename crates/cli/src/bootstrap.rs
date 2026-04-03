@@ -1,8 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
+use thiserror::Error;
 use veex_config::{ProxyConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
 use veex_core::{
-    shutdown_channel, Dispatcher, Inbound, Outbound, ShutdownTrigger, SimpleDispatcher,
+    shutdown_channel, Dispatcher, Inbound, Outbound, ProxyError, ShutdownTrigger,
+    SimpleDispatcher,
 };
 
 use crate::factory::{build_inbounds, build_outbounds, build_router};
@@ -13,17 +15,31 @@ pub struct RuntimeState {
     pub shutdown: ShutdownTrigger,
 }
 
-pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, String> {
+#[derive(Debug, Error)]
+pub enum BootstrapError {
+    #[error("at least one inbound is required to run veex")]
+    MissingInbound,
+    #[error("failed to build inbound runtime state: {0}")]
+    InboundBuild(#[source] ProxyError),
+    #[error("failed to build outbound runtime state: {0}")]
+    OutboundBuild(#[source] ProxyError),
+    #[error("runtime references missing final outbound `{0}`")]
+    MissingFinalOutbound(String),
+    #[error("runtime requires direct outbound `{0}`")]
+    MissingDirectOutbound(String),
+}
+
+pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, BootstrapError> {
     if config.inbounds.is_empty() {
-        return Err("at least one inbound is required to run veex".into());
+        return Err(BootstrapError::MissingInbound);
     }
 
     let (shutdown, shutdown_signal) = shutdown_channel();
-    let outbounds = build_outbounds(config)?;
+    let outbounds = build_outbounds(config).map_err(BootstrapError::OutboundBuild)?;
     validate_runtime_outbounds(config, &outbounds)?;
     let dispatcher: Arc<dyn Dispatcher> =
         Arc::new(SimpleDispatcher::new(build_router(config), outbounds));
-    let inbounds = build_inbounds(config, shutdown_signal)?;
+    let inbounds = build_inbounds(config, shutdown_signal).map_err(BootstrapError::InboundBuild)?;
 
     Ok(RuntimeState {
         dispatcher,
@@ -35,18 +51,16 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, String>
 fn validate_runtime_outbounds(
     config: &ProxyConfig,
     outbounds: &HashMap<String, Arc<dyn Outbound>>,
-) -> Result<(), String> {
+) -> Result<(), BootstrapError> {
     if !outbounds.contains_key(&config.route.final_outbound) {
-        return Err(format!(
-            "runtime references missing final outbound '{}'",
-            config.route.final_outbound
+        return Err(BootstrapError::MissingFinalOutbound(
+            config.route.final_outbound.clone(),
         ));
     }
 
     if !outbounds.contains_key(DEFAULT_DIRECT_OUTBOUND_TAG) {
-        return Err(format!(
-            "runtime requires direct outbound '{}'",
-            DEFAULT_DIRECT_OUTBOUND_TAG
+        return Err(BootstrapError::MissingDirectOutbound(
+            DEFAULT_DIRECT_OUTBOUND_TAG.to_string(),
         ));
     }
 

@@ -8,6 +8,7 @@ use std::{
 use std::{mem::MaybeUninit, os::fd::AsRawFd};
 
 use tokio::net::TcpStream;
+use tracing::warn;
 
 #[cfg(target_os = "linux")]
 use crate::socket::{
@@ -108,14 +109,22 @@ fn get_original_dst_impl(stream: &TcpStream) -> Result<SocketAddr> {
     let local_addr = stream.local_addr()?;
     let peer_addr = stream.peer_addr().ok();
     let mut primary_error = None;
+    let options = original_dst_socket_options(local_addr, peer_addr);
 
-    for (index, (level, option)) in original_dst_socket_options(local_addr, peer_addr)
-        .into_iter()
-        .enumerate()
-    {
+    for (index, (level, option)) in options.into_iter().enumerate() {
         match get_original_dst_with_option(fd, level, option) {
             Ok(destination) => return Ok(destination),
             Err(err) if index == 0 && should_retry_original_dst_option(&err) => {
+                let retry_option = options[1];
+                warn!(
+                    event = "original_dst_retry",
+                    peer = ?peer_addr,
+                    local = %local_addr,
+                    first_option = original_dst_option_name(level, option),
+                    retry_option = original_dst_option_name(retry_option.0, retry_option.1),
+                    errno = retry_errno(&err),
+                    "retrying original destination lookup"
+                );
                 primary_error = Some(err);
             }
             Err(err) if primary_error.is_some() && should_retry_original_dst_option(&err) => {
@@ -197,6 +206,23 @@ fn should_retry_original_dst_option(err: &TransparentError) -> bool {
                 Some(libc::ENOENT) | Some(libc::ENOPROTOOPT) | Some(libc::EOPNOTSUPP)
             )
     )
+}
+
+#[cfg(target_os = "linux")]
+fn original_dst_option_name(level: i32, option: i32) -> &'static str {
+    match (level, option) {
+        (libc::SOL_IP, SO_ORIGINAL_DST) => "so_original_dst",
+        (libc::SOL_IPV6, IP6T_SO_ORIGINAL_DST) => "ip6t_so_original_dst",
+        _ => "unknown",
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn retry_errno(err: &TransparentError) -> i32 {
+    match err {
+        TransparentError::GetSockOpt { source, .. } => source.raw_os_error().unwrap_or(0),
+        _ => 0,
+    }
 }
 
 #[cfg(target_os = "linux")]

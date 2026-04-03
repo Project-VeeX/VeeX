@@ -26,6 +26,7 @@ Use this skill to align on VeeX project context before editing code or docs. The
    - Project positioning, target topology, milestone, or replacement-surface questions: read `references/project-positioning.md`
    - Phase-by-phase delivery or evolution questions: read `references/phase-map.md`
    - Code changes, crate ownership, dependency direction, or implementation landing zones: read `references/repo-map.md`
+   - Error-model closure, tracing event shape, or observability-boundary questions: read `references/observability-errors.md`
    - Stable repo sources, examples, and internal persistent references: read `references/source-map.md`, then open only the relevant files
    - Internal architecture-closure and validation-status questions: read `references/architecture-closure.md` or `references/validation-status.md`
    - Exact compatibility rules or validation evidence expectations: read `references/config-contract.md` or `references/validation-contract.md`
@@ -58,6 +59,7 @@ Use this skill to align on VeeX project context before editing code or docs. The
 - `references/project-positioning.md`: product role, supported surface, non-goals, and repository boundary.
 - `references/phase-map.md`: what each major phase delivered and which conclusions still carry forward.
 - `references/repo-map.md`: workspace structure, crate ownership, landing zones, and dependency constraints.
+- `references/observability-errors.md`: current error-model closure, tracing baseline, and observability non-goals.
 - `references/source-map.md`: stable sources, examples, and internal persistent references.
 - `references/architecture-closure.md`: internal boundary decisions that should keep guiding code changes.
 - `references/config-contract.md`: exact compatibility rules and accepted config forms.

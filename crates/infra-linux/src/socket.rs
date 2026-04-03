@@ -3,6 +3,8 @@ use std::{
     net::{Ipv4Addr, SocketAddr, TcpListener},
 };
 
+use tracing::{debug, warn};
+
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 
@@ -25,6 +27,13 @@ fn create_listener(addr: SocketAddr, transparent: bool) -> io::Result<TcpListene
         Ok(listener) => Ok(listener),
         Err(primary_err) => match ipv4_fallback_addr(addr) {
             Some(fallback_addr) => {
+                warn!(
+                    event = "listener_fallback",
+                    from = %addr,
+                    to = %fallback_addr,
+                    reason = %primary_err,
+                    "listener fallback"
+                );
                 create_listener_once(fallback_addr, transparent).map_err(|fallback_err| {
                     combine_listener_errors(
                         addr,
@@ -67,11 +76,28 @@ fn create_listener_once(addr: SocketAddr, transparent: bool) -> io::Result<TcpLi
 #[cfg(target_os = "linux")]
 fn apply_transparent_options(socket: &Socket, domain: Domain) -> io::Result<()> {
     if domain == Domain::IPV4 {
-        return set_sockopt_int(socket, libc::SOL_IP, libc::IP_TRANSPARENT, 1);
+        let ipv4_result = set_sockopt_int(socket, libc::SOL_IP, libc::IP_TRANSPARENT, 1);
+        debug!(
+            event = "transparent_socket_config",
+            socket_family = "ipv4",
+            dual_stack = false,
+            ipv4_transparent_result = %sockopt_result(&ipv4_result),
+            ipv6_transparent_result = "not_applicable",
+            "transparent socket configured"
+        );
+        return ipv4_result;
     }
 
     let ipv6_result = set_sockopt_int(socket, libc::SOL_IPV6, libc::IPV6_TRANSPARENT, 1);
     let ipv4_result = set_sockopt_int(socket, libc::SOL_IP, libc::IP_TRANSPARENT, 1);
+    debug!(
+        event = "transparent_socket_config",
+        socket_family = "ipv6",
+        dual_stack = true,
+        ipv4_transparent_result = %sockopt_result(&ipv4_result),
+        ipv6_transparent_result = %sockopt_result(&ipv6_result),
+        "transparent socket configured"
+    );
 
     match (ipv6_result, ipv4_result) {
         (Ok(()), Ok(())) | (Ok(()), Err(_)) | (Err(_), Ok(())) => Ok(()),
@@ -130,6 +156,14 @@ fn combine_listener_errors(
             "failed to create {listener_kind} on {primary_addr}: {primary_err}; ipv4 fallback on {fallback_addr} also failed: {fallback_err}"
         ),
     )
+}
+
+#[cfg(target_os = "linux")]
+fn sockopt_result(result: &io::Result<()>) -> String {
+    match result {
+        Ok(()) => "ok".to_string(),
+        Err(err) => err.to_string(),
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]

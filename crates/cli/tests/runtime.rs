@@ -1,8 +1,9 @@
 use std::{
+    collections::BTreeMap,
     fs,
     net::{Ipv4Addr, SocketAddr},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -17,13 +18,18 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::oneshot,
 };
+use tracing::{
+    field::{Field, Visit},
+    Event, Subscriber,
+};
+use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer};
 use tokio_rustls::TlsAcceptor;
-use veex_cli::runtime::run_with_shutdown;
+use veex_cli::runtime::{run_with_shutdown, RuntimeError};
 use veex_config::{
     DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
     SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
 };
-use veex_core::{Destination, Host};
+use veex_core::{Destination, ErrorKind, Host};
 use veex_outbound_trojan::build_trojan_request;
 
 #[tokio::test]
@@ -362,6 +368,216 @@ async fn runtime_starts_with_redirect_inbound() {
         .expect("runtime should stop cleanly");
 }
 
+#[tokio::test]
+async fn runtime_reports_listener_bind_failure_with_io_error_kind() {
+    let occupied = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("occupied listener should bind");
+    let occupied_addr = occupied
+        .local_addr()
+        .expect("occupied listener addr should exist");
+    let config = ProxyConfig {
+        log: LogConfig {
+            level: "info".into(),
+            disabled: false,
+        },
+        inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
+            tag: "socks-in".into(),
+            listen: "127.0.0.1".into(),
+            listen_port: occupied_addr.port(),
+        })],
+        outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
+            tag: "direct".into(),
+            routing_mark: None,
+        })],
+        route: RouteConfig {
+            final_outbound: "direct".into(),
+            bypass: vec![],
+        },
+    };
+    let (_guard, trace_buffer) = install_test_subscriber();
+
+    let err = tokio::time::timeout(
+        Duration::from_secs(2),
+        run_with_shutdown(&config, async { std::future::pending::<Result<(), String>>().await }),
+    )
+    .await
+    .expect("runtime should fail quickly")
+    .expect_err("bind failure should fail runtime");
+
+    match err {
+        RuntimeError::Task { inbound, source } => {
+            assert_eq!(inbound, "socks-in");
+            assert_eq!(source.kind(), ErrorKind::Io);
+        }
+        other => panic!("unexpected runtime error: {other}"),
+    }
+
+    let events = captured_events(&trace_buffer);
+    assert_has_event(
+        &events,
+        "inbound_service_failed",
+        &[("inbound", "socks-in"), ("error_kind", "io")],
+    );
+}
+
+#[tokio::test]
+async fn runtime_emits_session_start_and_finish_events() {
+    let echo_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("echo listener should bind");
+    let echo_addr = echo_listener
+        .local_addr()
+        .expect("echo listener should expose local addr");
+    let echo_task = tokio::spawn(async move {
+        let (mut stream, _) = echo_listener
+            .accept()
+            .await
+            .expect("echo accept should succeed");
+        let mut buf = [0u8; 4];
+        stream
+            .read_exact(&mut buf)
+            .await
+            .expect("echo server should read payload");
+        stream
+            .write_all(&buf)
+            .await
+            .expect("echo server should write payload");
+    });
+
+    let socks_addr = reserve_local_port().await;
+    let config = ProxyConfig {
+        log: LogConfig {
+            level: "info".into(),
+            disabled: false,
+        },
+        inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
+            tag: "socks-in".into(),
+            listen: "127.0.0.1".into(),
+            listen_port: socks_addr.port(),
+        })],
+        outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
+            tag: "direct".into(),
+            routing_mark: None,
+        })],
+        route: RouteConfig {
+            final_outbound: "direct".into(),
+            bypass: vec![],
+        },
+    };
+    let (_guard, trace_buffer) = install_test_subscriber();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runtime_task = tokio::spawn(async move {
+        run_with_shutdown(&config, async move {
+            shutdown_rx
+                .await
+                .map_err(|err| format!("shutdown channel failed: {err}"))?;
+            Ok(())
+        })
+        .await
+    });
+
+    wait_for_listener(socks_addr).await;
+    run_socks_client_round_trip(socks_addr, echo_addr)
+        .await
+        .expect("socks direct round-trip should succeed");
+
+    let _ = shutdown_tx.send(());
+    runtime_task
+        .await
+        .expect("runtime task should join")
+        .expect("runtime should stop cleanly");
+    echo_task.await.expect("echo task should join");
+
+    let events = captured_events(&trace_buffer);
+    assert_has_event(
+        &events,
+        "session_start",
+        &[("inbound", "socks-in"), ("network", "tcp")],
+    );
+    assert_has_event(
+        &events,
+        "session_finish",
+        &[("inbound", "socks-in"), ("success", "true")],
+    );
+}
+
+#[tokio::test]
+async fn invalid_socks_request_emits_handshake_failed_event() {
+    let socks_addr = reserve_local_port().await;
+    let config = ProxyConfig {
+        log: LogConfig {
+            level: "info".into(),
+            disabled: false,
+        },
+        inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
+            tag: "socks-in".into(),
+            listen: "127.0.0.1".into(),
+            listen_port: socks_addr.port(),
+        })],
+        outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
+            tag: "direct".into(),
+            routing_mark: None,
+        })],
+        route: RouteConfig {
+            final_outbound: "direct".into(),
+            bypass: vec![],
+        },
+    };
+    let (_guard, trace_buffer) = install_test_subscriber();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runtime_task = tokio::spawn(async move {
+        run_with_shutdown(&config, async move {
+            shutdown_rx
+                .await
+                .map_err(|err| format!("shutdown channel failed: {err}"))?;
+            Ok(())
+        })
+        .await
+    });
+
+    wait_for_listener(socks_addr).await;
+    let mut stream = TcpStream::connect(socks_addr)
+        .await
+        .expect("socks listener should accept connections");
+    stream
+        .write_all(&[0x05, 0x01, 0x00])
+        .await
+        .expect("greeting should be written");
+    let mut method = [0u8; 2];
+    stream
+        .read_exact(&mut method)
+        .await
+        .expect("method selection should be readable");
+    assert_eq!(method, [0x05, 0x00]);
+
+    stream
+        .write_all(&[0x04, 0x01, 0x00, 0x01, 1, 2, 3, 4, 0x00, 0x50])
+        .await
+        .expect("invalid request should be written");
+    let mut reply = [0u8; 10];
+    stream
+        .read_exact(&mut reply)
+        .await
+        .expect("failure reply should be readable");
+    assert_eq!(reply[1], 0x01);
+
+    let _ = shutdown_tx.send(());
+    runtime_task
+        .await
+        .expect("runtime task should join")
+        .expect("runtime should stop cleanly");
+
+    let events = captured_events(&trace_buffer);
+    assert_has_event(
+        &events,
+        "handshake_failed",
+        &[("inbound", "socks-in"), ("stage", "request_decode")],
+    );
+}
+
 async fn reserve_local_port() -> SocketAddr {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
@@ -378,6 +594,92 @@ async fn wait_for_listener(addr: SocketAddr) {
     }
 
     panic!("listener did not become ready on {addr}");
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct CapturedEvent {
+    fields: BTreeMap<String, String>,
+}
+
+#[derive(Default)]
+struct EventVisitor {
+    fields: BTreeMap<String, String>,
+}
+
+impl Visit for EventVisitor {
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.fields.insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.fields.insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.fields.insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.fields.insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.fields
+            .insert(field.name().to_string(), format!("{value:?}"));
+    }
+}
+
+#[derive(Clone)]
+struct CaptureLayer {
+    events: Arc<Mutex<Vec<CapturedEvent>>>,
+}
+
+impl<S> Layer<S> for CaptureLayer
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let mut visitor = EventVisitor::default();
+        event.record(&mut visitor);
+        self.events
+            .lock()
+            .expect("captured events lock should not be poisoned")
+            .push(CapturedEvent {
+                fields: visitor.fields,
+            });
+    }
+}
+
+fn install_test_subscriber() -> (tracing::subscriber::DefaultGuard, Arc<Mutex<Vec<CapturedEvent>>>) {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(CaptureLayer {
+        events: Arc::clone(&events),
+    });
+
+    (tracing::subscriber::set_default(subscriber), events)
+}
+
+fn captured_events(buffer: &Arc<Mutex<Vec<CapturedEvent>>>) -> Vec<CapturedEvent> {
+    buffer
+        .lock()
+        .expect("captured events lock should not be poisoned")
+        .clone()
+}
+
+fn assert_has_event(events: &[CapturedEvent], event_name: &str, expected_fields: &[(&str, &str)]) {
+    let matched = events.iter().any(|event| {
+        event.fields.get("event").map(String::as_str) == Some(event_name)
+            && expected_fields.iter().all(|(key, expected)| {
+                event.fields.get(*key).map(String::as_str) == Some(*expected)
+            })
+    });
+
+    assert!(
+        matched,
+        "expected event `{event_name}` with fields {:?}, captured events: {:?}",
+        expected_fields,
+        events
+    );
 }
 
 async fn run_socks_client_round_trip(

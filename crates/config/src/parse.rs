@@ -1,7 +1,8 @@
-use std::{collections::BTreeMap, fs, io, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
 use crate::{
     defaults::DEFAULT_LOG_LEVEL,
+    error::{display_path, ConfigError},
     json::{parse_json, JsonValue},
     schema::{
         DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
@@ -11,60 +12,16 @@ use crate::{
     validate::validate_config,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ExitCodeHint {
-    Config = 2,
-}
-
-#[derive(Debug)]
-pub enum ConfigError {
-    Io(io::Error),
-    Json { path: String, message: String },
-    Validation { path: String, message: String },
-}
-
-impl ConfigError {
-    pub fn json(path: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::Json {
-            path: path.into(),
-            message: message.into(),
-        }
-    }
-
-    pub fn validation(path: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::Validation {
-            path: path.into(),
-            message: message.into(),
-        }
-    }
-
-    pub fn exit_code_hint(&self) -> ExitCodeHint {
-        ExitCodeHint::Config
-    }
-}
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(err) => write!(f, "failed to read config file: {err}"),
-            Self::Json { path, message } => write!(f, "json parse error at {path}: {message}"),
-            Self::Validation { path, message } => {
-                write!(f, "config validation error at {path}: {message}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {}
-
-impl From<io::Error> for ConfigError {
-    fn from(value: io::Error) -> Self {
-        Self::Io(value)
-    }
-}
-
 pub fn load_from_path(path: impl AsRef<Path>) -> Result<ProxyConfig, ConfigError> {
-    let content = fs::read_to_string(path)?;
+    let path = path.as_ref();
+    if path.as_os_str().is_empty() {
+        return Err(ConfigError::file_path(
+            display_path(path),
+            "path must not be empty",
+        ));
+    }
+
+    let content = fs::read_to_string(path).map_err(|err| ConfigError::io_path(path, err))?;
     parse_config(&content)
 }
 

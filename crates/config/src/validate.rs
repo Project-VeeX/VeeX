@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::{
     defaults::DEFAULT_DIRECT_OUTBOUND_TAG,
-    parse::ConfigError,
+    error::ConfigError,
     schema::{OutboundConfig, ProxyConfig},
 };
 
@@ -22,7 +22,7 @@ pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
     for outbound in &config.outbounds {
         let tag = outbound.tag();
         if !outbound_tags.insert(tag.to_string()) {
-            return Err(ConfigError::validation(
+            return Err(ConfigError::semantic(
                 "$.outbounds",
                 format!("duplicate outbound tag '{tag}'"),
             ));
@@ -30,14 +30,14 @@ pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
 
         if let OutboundConfig::Trojan(trojan) = outbound {
             if !trojan.tls.enabled {
-                return Err(ConfigError::validation(
+                return Err(ConfigError::semantic(
                     format!("$.outbounds[{tag}].tls.enabled"),
                     "trojan outbound requires TLS to be enabled",
                 ));
             }
 
             if trojan.tls.disable_sni && !trojan.tls.insecure && trojan.tls.server_name.is_none() {
-                return Err(ConfigError::validation(
+                return Err(ConfigError::semantic(
                     format!("$.outbounds[{tag}].tls"),
                     "disable_sni=true requires server_name or insecure=true",
                 ));
@@ -46,7 +46,7 @@ pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
     }
 
     if !outbound_tags.contains(&config.route.final_outbound) {
-        return Err(ConfigError::validation(
+        return Err(ConfigError::semantic(
             "$.route.final",
             format!(
                 "route.final points to missing outbound '{}'",
@@ -56,7 +56,7 @@ pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
     }
 
     if !outbound_tags.contains(DEFAULT_DIRECT_OUTBOUND_TAG) {
-        return Err(ConfigError::validation(
+        return Err(ConfigError::semantic(
             "$.outbounds",
             format!(
                 "required direct outbound tag '{}' is missing",

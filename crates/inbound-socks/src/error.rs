@@ -1,31 +1,27 @@
-use std::{error::Error, fmt, io};
+use std::io;
 
+use thiserror::Error;
 use veex_core::ProxyError;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum SocksError {
+    #[error("i/o error: {0}")]
     Io(io::Error),
+    #[error("protocol error: {0}")]
     Protocol(String),
+    #[error("no supported authentication method")]
     UnsupportedAuthMethods,
+    #[error("unsupported command: 0x{0:02x}")]
     UnsupportedCommand(u8),
+    #[error("unsupported address type: 0x{0:02x}")]
     UnsupportedAddressType(u8),
 }
 
-impl fmt::Display for SocksError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(err) => write!(f, "i/o error: {err}"),
-            Self::Protocol(message) => write!(f, "protocol error: {message}"),
-            Self::UnsupportedAuthMethods => f.write_str("no supported authentication method"),
-            Self::UnsupportedCommand(cmd) => write!(f, "unsupported command: 0x{cmd:02x}"),
-            Self::UnsupportedAddressType(atyp) => {
-                write!(f, "unsupported address type: 0x{atyp:02x}")
-            }
-        }
+impl SocksError {
+    pub fn protocol(message: impl Into<String>) -> Self {
+        Self::Protocol(message.into())
     }
 }
-
-impl Error for SocksError {}
 
 impl From<io::Error> for SocksError {
     fn from(value: io::Error) -> Self {
@@ -37,16 +33,7 @@ impl From<SocksError> for ProxyError {
     fn from(value: SocksError) -> Self {
         match value {
             SocksError::Io(err) => ProxyError::Io(err),
-            SocksError::Protocol(message) => ProxyError::Protocol(message),
-            SocksError::UnsupportedAuthMethods => {
-                ProxyError::Protocol("no supported authentication method".into())
-            }
-            SocksError::UnsupportedCommand(cmd) => {
-                ProxyError::Protocol(format!("unsupported SOCKS command: 0x{cmd:02x}"))
-            }
-            SocksError::UnsupportedAddressType(atyp) => {
-                ProxyError::Protocol(format!("unsupported SOCKS address type: 0x{atyp:02x}"))
-            }
+            other => ProxyError::protocol(other.to_string()),
         }
     }
 }

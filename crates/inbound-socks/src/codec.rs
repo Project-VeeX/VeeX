@@ -42,11 +42,11 @@ pub struct Request {
 
 pub fn decode_greeting(bytes: &[u8]) -> Result<Greeting, SocksError> {
     if bytes.len() < 2 {
-        return Err(SocksError::Protocol("greeting is too short".into()));
+        return Err(SocksError::protocol("greeting is too short"));
     }
 
     if bytes[0] != SOCKS_VERSION {
-        return Err(SocksError::Protocol(format!(
+        return Err(SocksError::protocol(format!(
             "unsupported SOCKS version: 0x{:02x}",
             bytes[0]
         )));
@@ -54,9 +54,7 @@ pub fn decode_greeting(bytes: &[u8]) -> Result<Greeting, SocksError> {
 
     let method_len = bytes[1] as usize;
     if bytes.len() != method_len + 2 {
-        return Err(SocksError::Protocol(
-            "greeting method list length mismatch".into(),
-        ));
+        return Err(SocksError::protocol("greeting method list length mismatch"));
     }
 
     Ok(Greeting {
@@ -66,20 +64,18 @@ pub fn decode_greeting(bytes: &[u8]) -> Result<Greeting, SocksError> {
 
 pub fn decode_request(bytes: &[u8]) -> Result<Request, SocksError> {
     if bytes.len() < 4 {
-        return Err(SocksError::Protocol("request is too short".into()));
+        return Err(SocksError::protocol("request is too short"));
     }
 
     if bytes[0] != SOCKS_VERSION {
-        return Err(SocksError::Protocol(format!(
+        return Err(SocksError::protocol(format!(
             "unsupported SOCKS version: 0x{:02x}",
             bytes[0]
         )));
     }
 
     if bytes[2] != 0x00 {
-        return Err(SocksError::Protocol(
-            "request reserved field must be 0x00".into(),
-        ));
+        return Err(SocksError::protocol("request reserved field must be 0x00"));
     }
 
     let command = match bytes[1] {
@@ -91,29 +87,30 @@ pub fn decode_request(bytes: &[u8]) -> Result<Request, SocksError> {
     let (host, port_index) = match atyp {
         x if x == AddressType::V4 as u8 => {
             if bytes.len() != 10 {
-                return Err(SocksError::Protocol("ipv4 request length mismatch".into()));
+                return Err(SocksError::protocol("ipv4 request length mismatch"));
             }
             let ip = Ipv4Addr::new(bytes[4], bytes[5], bytes[6], bytes[7]);
             (Host::Ip(IpAddr::V4(ip)), 8)
         }
         x if x == AddressType::Domain as u8 => {
             if bytes.len() < 7 {
-                return Err(SocksError::Protocol("domain request is too short".into()));
+                return Err(SocksError::protocol("domain request is too short"));
             }
             let domain_len = bytes[4] as usize;
+            if domain_len == 0 {
+                return Err(SocksError::protocol("domain must not be empty"));
+            }
             let expected = 4 + 1 + domain_len + 2;
             if bytes.len() != expected {
-                return Err(SocksError::Protocol(
-                    "domain request length mismatch".into(),
-                ));
+                return Err(SocksError::protocol("domain request length mismatch"));
             }
             let domain = std::str::from_utf8(&bytes[5..5 + domain_len])
-                .map_err(|_| SocksError::Protocol("domain is not valid UTF-8".into()))?;
+                .map_err(|_| SocksError::protocol("domain is not valid UTF-8"))?;
             (Host::Domain(domain.to_string()), 5 + domain_len)
         }
         x if x == AddressType::V6 as u8 => {
             if bytes.len() != 22 {
-                return Err(SocksError::Protocol("ipv6 request length mismatch".into()));
+                return Err(SocksError::protocol("ipv6 request length mismatch"));
             }
             let mut octets = [0u8; 16];
             octets.copy_from_slice(&bytes[4..20]);
@@ -233,5 +230,21 @@ mod tests {
     fn encodes_reply_with_default_bound_addr() {
         let reply = encode_reply(ReplyCode::Succeeded, None);
         assert_eq!(reply, vec![0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn rejects_empty_domain_request() {
+        let err = decode_request(&[
+            SOCKS_VERSION,
+            0x01,
+            0x00,
+            AddressType::Domain as u8,
+            0,
+            0x01,
+            0xbb,
+        ])
+        .expect_err("empty domain should fail");
+
+        assert!(err.to_string().contains("domain must not be empty"));
     }
 }

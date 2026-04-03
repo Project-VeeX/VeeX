@@ -18,6 +18,14 @@ pub enum Network {
     Tcp,
 }
 
+impl Network {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tcp => "tcp",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Host {
     Ip(IpAddr),
