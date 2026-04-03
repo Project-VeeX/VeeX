@@ -14,8 +14,10 @@ pub fn build_outbounds(
     for outbound in &config.outbounds {
         match outbound {
             OutboundConfig::Direct(direct) => {
-                let instance: Arc<dyn Outbound> =
-                    Arc::new(DirectOutbound::new(direct.tag.clone(), direct.routing_mark)?);
+                let instance: Arc<dyn Outbound> = Arc::new(DirectOutbound::new(
+                    direct.tag.clone(),
+                    direct.routing_mark,
+                )?);
                 outbounds.insert(direct.tag.clone(), instance);
             }
             OutboundConfig::Trojan(trojan) => {

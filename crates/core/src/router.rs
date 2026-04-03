@@ -125,6 +125,8 @@ fn is_configured_bypass(
     bypass_domains: &BTreeSet<String>,
     bypass_ips: &BTreeSet<IpAddr>,
 ) -> bool {
+    // `route.bypass` currently supports exact domain and exact IP matches only.
+    // It does not implement suffix matching, wildcard expansion, or regex rules.
     match host {
         Host::Ip(ip) => bypass_ips.contains(ip),
         Host::Domain(_) => normalize_domain(host)

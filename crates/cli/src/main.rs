@@ -1,12 +1,14 @@
 use std::{env, process::ExitCode};
 
+use tracing::info;
 use veex_cli::{
     command::{parse_args, Command},
     logging::init_tracing,
     runtime::run_with_shutdown,
 };
 use veex_config::{load_from_path, ConfigError};
-use veex_observability::{log_line, LogLevel, LoggingOptions};
+use veex_core::sanitize_field;
+use veex_observability::{LogLevel, LoggingOptions};
 
 const EXIT_OK: u8 = 0;
 const EXIT_CONFIG_ERROR: u8 = 2;
@@ -61,14 +63,12 @@ fn run_command(config_path: &str) -> Result<u8, (u8, String)> {
     init_tracing(&logging)
         .map_err(|err| (EXIT_STARTUP_ERROR, format!("logging init failed: {err}")))?;
 
-    log_line(
-        LogLevel::Info,
-        &format!(
-            "event=process_start inbounds={} outbounds={} final={}",
-            config.inbounds.len(),
-            config.outbounds.len(),
-            config.route.final_outbound
-        ),
+    info!(
+        event = "process_start",
+        inbounds = config.inbounds.len(),
+        outbounds = config.outbounds.len(),
+        final_outbound = %sanitize_field(config.route.final_outbound.as_str()),
+        "process start"
     );
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -87,7 +87,7 @@ fn run_command(config_path: &str) -> Result<u8, (u8, String)> {
         })
         .map_err(|err| (EXIT_RUNTIME_ERROR, err.to_string()))?;
 
-    log_line(LogLevel::Info, "event=process_stop");
+    info!(event = "process_stop", "process stop");
     Ok(EXIT_OK)
 }
 

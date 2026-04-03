@@ -151,6 +151,7 @@ Route and compatibility notes:
 
 - `route.bypass` currently supports exact domain and exact IP matches
 - `route.bypass` does not currently support CIDR ranges, suffix matching, or a rule engine
+- wildcard and suffix-style bypass entries such as `*.example.com` and `.example.com` are rejected as unsupported patterns
 - built-in bypass order is loopback, private, link-local, configured bypass, then final outbound
 - built-in bypass still applies before configured bypass
 - ignored fields must not be described as supported features

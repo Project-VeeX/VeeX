@@ -140,9 +140,11 @@ fn load_root_store() -> Result<RootCertStore> {
     }
 
     for certificate in native.certs {
-        root_store.add(certificate).map_err(|err| VerifierError::AddSystemRoot {
-            message: err.to_string(),
-        })?;
+        root_store
+            .add(certificate)
+            .map_err(|err| VerifierError::AddSystemRoot {
+                message: err.to_string(),
+            })?;
     }
 
     Ok(root_store)
@@ -153,9 +155,11 @@ fn add_certificates_to_root_store(
     certificates: &[CertificateDer<'static>],
 ) -> Result<()> {
     for certificate in certificates {
-        root_store.add(certificate.clone()).map_err(|err| VerifierError::AddToRootStore {
-            message: err.to_string(),
-        })?;
+        root_store
+            .add(certificate.clone())
+            .map_err(|err| VerifierError::AddToRootStore {
+                message: err.to_string(),
+            })?;
     }
     Ok(())
 }

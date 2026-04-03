@@ -14,8 +14,8 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 use veex_core::{
-    parse_listen_addr, BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, Network,
-    ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
+    parse_listen_addr, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher,
+    Inbound, Network, ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
 };
 
 use crate::{
@@ -146,26 +146,31 @@ impl RedirectInbound {
         peer: SocketAddr,
     ) -> Result<()> {
         let session_id = self.next_session_id();
+        let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
+        let peer_field = peer.to_string();
+        let peer_field = sanitize_field(&peer_field).into_owned();
         let destination = match (self.resolver)(&stream) {
             Ok(destination) => destination,
             Err(err) => {
                 warn!(
                     event = "destination_resolve_failed",
-                    inbound = %self.tag,
-                    peer = %peer,
+                    inbound = %inbound_field,
+                    peer = %peer_field,
                     error = %err,
                     "redirect original destination lookup failed"
                 );
                 return Err(err.into());
             }
         };
+        let destination_field = destination.to_string();
+        let destination_field = sanitize_field(&destination_field).into_owned();
         info!(
             event = "session_start",
             session_id,
-            inbound = %self.tag,
-            peer = %peer,
-            destination = %destination,
-            network = "tcp",
+            inbound = %inbound_field,
+            peer = %peer_field,
+            destination = %destination_field,
+            network = %"tcp",
             "redirect session start"
         );
 
@@ -184,10 +189,10 @@ impl RedirectInbound {
             warn!(
                 event = "session_failed",
                 session_id,
-                inbound = %self.tag,
-                peer = %peer,
-                destination = %destination,
-                error_kind = %err.kind(),
+                inbound = %inbound_field,
+                peer = %peer_field,
+                destination = %destination_field,
+                error_kind = ?err.kind(),
                 error = %err,
                 "redirect session failed"
             );
@@ -227,16 +232,18 @@ impl Inbound for RedirectInbound {
                     accept_result = listener.accept(), if !shutting_down => {
                         let (stream, peer) = accept_result?;
                         let inbound = Arc::clone(&self);
-                        let inbound_tag = inbound.tag.clone();
+                        let inbound_tag = sanitize_field(inbound.tag.as_str()).into_owned();
                         let dispatcher = Arc::clone(&dispatcher);
 
                         connections.spawn(async move {
                             if let Err(err) = inbound.handle_connection(dispatcher, stream, peer).await {
+                                let peer_field = peer.to_string();
+                                let peer_field = sanitize_field(&peer_field).into_owned();
                                 warn!(
                                     event = "inbound_connection_failed",
                                     inbound = %inbound_tag,
-                                    peer = %peer,
-                                    error_kind = %err.kind(),
+                                    peer = %peer_field,
+                                    error_kind = ?err.kind(),
                                     error = %err,
                                     "redirect inbound connection failed"
                                 );
@@ -245,9 +252,10 @@ impl Inbound for RedirectInbound {
                     }
                     maybe_task = connections.join_next(), if !connections.is_empty() => {
                         if let Some(Err(err)) = maybe_task {
+                            let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
                             error!(
                                 event = "task_join_failed",
-                                inbound = %self.tag,
+                                inbound = %inbound_field,
                                 error = %err,
                                 "redirect connection task join failed"
                             );

@@ -34,6 +34,13 @@ Goals:
 
 The current output stays simple text via `tracing-subscriber`. This round does not add JSON logging, file appenders, metrics, or OpenTelemetry.
 
+Field rendering rules in the current baseline:
+
+- human-readable host, domain, and tag fields should stay in structured fields and use display-style rendering
+- structured values and error kinds should use debug-style rendering
+- user-controlled string fields should not be emitted via hand-built `key=value` strings
+- line breaks in string-like log fields should be sanitized so text output does not break event structure
+
 ## Structured Events Added
 
 Main-path events now emitted as structured tracing events include:
@@ -60,8 +67,17 @@ Important field alignment in this round:
 - `session_start`: `session_id`, `inbound`, `peer`, `destination`, `network`
 - `route_select`: `session_id`, `inbound`, `peer`, `destination`, `outbound`, `route_reason`
 - `session_finish`: `session_id`, `inbound`, `peer`, `destination`, `outbound`, `route_reason`, `success`, `duration_ms`, `bytes_up`, `bytes_down`
+- `session_finish.bytes_up` and `session_finish.bytes_down` are observed relay bytes; relay failures may report partial non-zero stats and must not be normalized back to `0/0`
 - failure events carry `error_kind` and `error` where the boundary already has a `ProxyError`
 - TLS handshake failures include `host`, `server_name`, `insecure`, `disable_sni`
+- `transparent_socket_config` includes `socket_family`, `local_addr`, `peer_addr`, `ipv4_transparent_ok`, `ipv4_transparent_errno`, `ipv6_transparent_ok`, `ipv6_transparent_errno`
+- `listener_fallback` includes `from`, `to`, `reason`, `errno`
+
+Relay termination rules in the current baseline:
+
+- EOF in one direction is a normal completion path, not a relay error
+- EOF still attempts `shutdown()` on the opposite writer before that direction returns success
+- true relay errors fail fast and may return the latest observed progress snapshot instead of waiting indefinitely for the peer direction to finish
 
 ## What This Round Did Not Do
 

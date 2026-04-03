@@ -9,3 +9,6 @@ libc = "0.2"
 socket2 = "0.5"
 tokio.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

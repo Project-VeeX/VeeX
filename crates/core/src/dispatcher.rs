@@ -5,6 +5,7 @@ use veex_observability::SessionSummary;
 
 use crate::{
     error::ProxyError,
+    logging::sanitize_field,
     relay::relay_bidirectional,
     router::Router,
     traits::{BoxFuture, Dispatcher, Outbound},
@@ -35,55 +36,84 @@ impl Dispatcher for SimpleDispatcher {
                 .selected_outbound
                 .clone()
                 .unwrap_or_else(|| decision.outbound_tag.clone());
+            let inbound_field = sanitize_field(ctx.meta.inbound_tag.as_str()).into_owned();
+            let outbound_field = sanitize_field(outbound_tag.as_str()).into_owned();
+            let peer_field = ctx.meta.peer.to_string();
+            let peer_field = sanitize_field(&peer_field).into_owned();
+            let destination_field = ctx.meta.destination.to_string();
+            let destination_field = sanitize_field(&destination_field).into_owned();
 
             info!(
                 event = "route_select",
                 session_id = ctx.meta.id,
-                inbound = %ctx.meta.inbound_tag,
-                peer = %ctx.meta.peer,
-                destination = %ctx.meta.destination,
-                outbound = %outbound_tag,
-                route_reason = route_reason.as_str(),
-                network = ctx.meta.network.as_str(),
+                inbound = %inbound_field,
+                peer = %peer_field,
+                destination = %destination_field,
+                outbound = %outbound_field,
+                route_reason = %route_reason.as_str(),
+                network = %ctx.meta.network.as_str(),
                 "route selected"
             );
             let outbound = self.outbounds.get(&outbound_tag).ok_or_else(|| {
                 ProxyError::config(format!("missing outbound tag: {outbound_tag}"))
             })?;
 
-            let result: crate::Result<_> = async {
-                let outbound_stream = outbound.connect(&ctx).await?;
-                let stats = relay_bidirectional(inbound_stream, outbound_stream).await?;
-                Ok(stats)
-            }
-            .await;
-
-            let summary = match &result {
-                Ok(stats) => SessionSummary::success(
-                    ctx.meta.id,
-                    ctx.meta.inbound_tag.as_str(),
-                    outbound_tag.as_str(),
-                    ctx.meta.peer.to_string(),
-                    ctx.meta.destination.to_string(),
-                    stats.bytes_up,
-                    stats.bytes_down,
-                    ctx.meta.start.elapsed(),
-                ),
-                Err(err) => SessionSummary::failure(
-                    ctx.meta.id,
-                    ctx.meta.inbound_tag.as_str(),
-                    outbound_tag.as_str(),
-                    ctx.meta.peer.to_string(),
-                    ctx.meta.destination.to_string(),
-                    0,
-                    0,
-                    ctx.meta.start.elapsed(),
-                    err.kind(),
-                ),
+            let (summary, result) = match outbound.connect(&ctx).await {
+                Ok(outbound_stream) => {
+                    match relay_bidirectional(inbound_stream, outbound_stream).await {
+                        Ok(stats) => (
+                            SessionSummary::success(
+                                ctx.meta.id,
+                                inbound_field.as_str(),
+                                outbound_field.as_str(),
+                                peer_field.as_str(),
+                                destination_field.as_str(),
+                                stats.bytes_up,
+                                stats.bytes_down,
+                                ctx.meta.start.elapsed(),
+                            ),
+                            Ok(()),
+                        ),
+                        Err(relay_err) => {
+                            let error_kind = relay_err.error.kind();
+                            (
+                                SessionSummary::failure(
+                                    ctx.meta.id,
+                                    inbound_field.as_str(),
+                                    outbound_field.as_str(),
+                                    peer_field.as_str(),
+                                    destination_field.as_str(),
+                                    relay_err.stats.bytes_up,
+                                    relay_err.stats.bytes_down,
+                                    ctx.meta.start.elapsed(),
+                                    error_kind,
+                                ),
+                                Err(relay_err.error),
+                            )
+                        }
+                    }
+                }
+                Err(err) => {
+                    let error_kind = err.kind();
+                    (
+                        SessionSummary::failure(
+                            ctx.meta.id,
+                            inbound_field.as_str(),
+                            outbound_field.as_str(),
+                            peer_field.as_str(),
+                            destination_field.as_str(),
+                            0,
+                            0,
+                            ctx.meta.start.elapsed(),
+                            error_kind,
+                        ),
+                        Err(err),
+                    )
+                }
             };
 
             match &result {
-                Ok(_) => {
+                Ok(()) => {
                     info!(
                         event = "session_finish",
                         session_id = summary.session_id,
@@ -91,7 +121,7 @@ impl Dispatcher for SimpleDispatcher {
                         peer = %summary.peer,
                         destination = %summary.destination,
                         outbound = %summary.outbound,
-                        route_reason = route_reason.as_str(),
+                        route_reason = %route_reason.as_str(),
                         success = true,
                         duration_ms = summary.duration.as_millis(),
                         bytes_up = summary.bytes_up,
@@ -107,18 +137,18 @@ impl Dispatcher for SimpleDispatcher {
                         peer = %summary.peer,
                         destination = %summary.destination,
                         outbound = %summary.outbound,
-                        route_reason = route_reason.as_str(),
+                        route_reason = %route_reason.as_str(),
                         success = false,
                         duration_ms = summary.duration.as_millis(),
                         bytes_up = summary.bytes_up,
                         bytes_down = summary.bytes_down,
-                        error_kind = %err.kind(),
+                        error_kind = ?err.kind(),
                         error = %err,
                         "session finished with error"
                     );
                 }
             }
-            result.map(|_| ())
+            result
         })
     }
 }
@@ -126,7 +156,10 @@ impl Dispatcher for SimpleDispatcher {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeMap,
         collections::HashMap,
+        collections::VecDeque,
+        io,
         pin::Pin,
         sync::{Arc, Mutex},
         task::{Context, Poll},
@@ -134,12 +167,19 @@ mod tests {
     };
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+    use tracing::{
+        field::{Field, Visit},
+        Event, Subscriber,
+    };
+    use tracing_subscriber::{
+        layer::Context as LayerContext, prelude::*, registry::LookupSpan, Layer,
+    };
 
     use super::SimpleDispatcher;
     use crate::{
         traits::{Dispatcher, Outbound},
-        BoxFuture, BoxedAsyncStream, Destination, Network, RouteReason, Router, SessionContext,
-        SessionMeta, SessionRoute, SessionState,
+        BoxFuture, BoxedAsyncStream, Destination, ErrorKind, Network, RouteReason, Router,
+        SessionContext, SessionMeta, SessionRoute, SessionState,
     };
 
     struct ClosedStream;
@@ -160,6 +200,64 @@ mod tests {
             _cx: &mut Context<'_>,
             buf: &[u8],
         ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    enum ReadStep {
+        Data(&'static [u8]),
+        Error(io::Error),
+        Eof,
+    }
+
+    struct ScriptedStream {
+        read_steps: VecDeque<ReadStep>,
+        written: Vec<u8>,
+    }
+
+    impl ScriptedStream {
+        fn new(read_steps: impl IntoIterator<Item = ReadStep>) -> Self {
+            Self {
+                read_steps: read_steps.into_iter().collect(),
+                written: Vec::new(),
+            }
+        }
+    }
+
+    impl AsyncRead for ScriptedStream {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            match self.read_steps.pop_front().unwrap_or(ReadStep::Eof) {
+                ReadStep::Data(data) => {
+                    buf.put_slice(data);
+                    Poll::Ready(Ok(()))
+                }
+                ReadStep::Error(err) => {
+                    Poll::Ready(Err(io::Error::new(err.kind(), err.to_string())))
+                }
+                ReadStep::Eof => Poll::Ready(Ok(())),
+            }
+        }
+    }
+
+    impl AsyncWrite for ScriptedStream {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            self.written.extend_from_slice(buf);
             Poll::Ready(Ok(buf.len()))
         }
 
@@ -215,6 +313,126 @@ mod tests {
         }
     }
 
+    struct ScriptedOutbound {
+        tag: String,
+        stream: Mutex<Option<BoxedAsyncStream>>,
+    }
+
+    impl ScriptedOutbound {
+        fn new(tag: impl Into<String>, stream: BoxedAsyncStream) -> Self {
+            Self {
+                tag: tag.into(),
+                stream: Mutex::new(Some(stream)),
+            }
+        }
+    }
+
+    impl Outbound for ScriptedOutbound {
+        fn tag(&self) -> &str {
+            &self.tag
+        }
+
+        fn connect(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+            let stream = self
+                .stream
+                .lock()
+                .expect("scripted stream lock poisoned")
+                .take()
+                .expect("scripted stream should only be taken once");
+
+            Box::pin(async move { Ok(stream) })
+        }
+    }
+
+    #[derive(Clone, Debug, Default, Eq, PartialEq)]
+    struct CapturedEvent {
+        fields: BTreeMap<String, String>,
+    }
+
+    #[derive(Default)]
+    struct EventVisitor {
+        fields: BTreeMap<String, String>,
+    }
+
+    impl Visit for EventVisitor {
+        fn record_bool(&mut self, field: &Field, value: bool) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .insert(field.name().to_string(), format!("{value:?}"));
+        }
+    }
+
+    #[derive(Clone)]
+    struct CaptureLayer {
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    impl<S> Layer<S> for CaptureLayer
+    where
+        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    {
+        fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
+            let mut visitor = EventVisitor::default();
+            event.record(&mut visitor);
+            self.events
+                .lock()
+                .expect("captured events lock poisoned")
+                .push(CapturedEvent {
+                    fields: visitor.fields,
+                });
+        }
+    }
+
+    fn install_test_subscriber() -> (
+        tracing::subscriber::DefaultGuard,
+        Arc<Mutex<Vec<CapturedEvent>>>,
+    ) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(CaptureLayer {
+            events: Arc::clone(&events),
+        });
+
+        (tracing::subscriber::set_default(subscriber), events)
+    }
+
+    fn assert_has_event(
+        events: &[CapturedEvent],
+        event_name: &str,
+        expected_fields: &[(&str, &str)],
+    ) {
+        let matched = events.iter().any(|event| {
+            event.fields.get("event").map(String::as_str) == Some(event_name)
+                && expected_fields.iter().all(|(key, expected)| {
+                    event.fields.get(*key).map(String::as_str) == Some(*expected)
+                })
+        });
+
+        assert!(
+            matched,
+            "expected event `{event_name}` with fields {:?}, captured events: {:?}",
+            expected_fields, events
+        );
+    }
+
     #[tokio::test]
     async fn dispatcher_writes_route_and_passes_state_to_outbound() {
         let (outbound, captured) = CaptureOutbound::new("proxy");
@@ -246,5 +464,54 @@ mod tests {
         assert_eq!(captured.route.selected_outbound.as_deref(), Some("proxy"));
         assert_eq!(captured.route.reason, Some(RouteReason::Final));
         assert_eq!(captured.state.buffered_payload, b"hello");
+    }
+
+    #[tokio::test]
+    async fn dispatcher_preserves_partial_relay_stats_on_failure() {
+        let (_guard, events) = install_test_subscriber();
+        let outbound: Arc<dyn Outbound> = Arc::new(ScriptedOutbound::new(
+            "proxy",
+            Box::new(ScriptedStream::new([
+                ReadStep::Data(b"pong"),
+                ReadStep::Eof,
+            ])),
+        ));
+        let mut outbounds: HashMap<String, Arc<dyn Outbound>> = HashMap::new();
+        outbounds.insert("proxy".into(), outbound);
+        let dispatcher = SimpleDispatcher::new(Router::new("proxy", "direct"), outbounds);
+        let ctx = SessionContext::new(
+            SessionMeta {
+                id: 9,
+                network: Network::Tcp,
+                inbound_tag: "socks-in".into(),
+                peer: std::net::SocketAddr::from(([127, 0, 0, 1], 30000)),
+                destination: Destination::from_domain("example.com", 443),
+                start: Instant::now(),
+            },
+            Vec::new(),
+        );
+
+        let err = dispatcher
+            .dispatch(
+                Box::new(ScriptedStream::new([
+                    ReadStep::Data(b"ping"),
+                    ReadStep::Error(io::Error::other("boom")),
+                ])),
+                ctx,
+            )
+            .await
+            .expect_err("dispatch should surface relay failure");
+
+        assert_eq!(err.kind(), ErrorKind::Relay);
+
+        let events = events
+            .lock()
+            .expect("captured events lock poisoned")
+            .clone();
+        assert_has_event(
+            &events,
+            "session_finish",
+            &[("success", "false"), ("bytes_up", "4"), ("bytes_down", "4")],
+        );
     }
 }

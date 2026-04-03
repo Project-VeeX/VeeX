@@ -65,5 +65,15 @@ pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
         ));
     }
 
+    for (index, bypass) in config.route.bypass.iter().enumerate() {
+        let bypass = bypass.trim();
+        if bypass.starts_with("*.") || bypass.starts_with('.') {
+            return Err(ConfigError::semantic(
+                format!("$.route.bypass[{index}]"),
+                "unsupported bypass pattern",
+            ));
+        }
+    }
+
     Ok(())
 }

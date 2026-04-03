@@ -222,9 +222,9 @@ fn assert_output_has_event(output: &str, event_name: &str, expected_fields: &[(&
     let matched = output.lines().any(|line| {
         let fields = parse_output_fields(line);
         fields.get("event").map(String::as_str) == Some(event_name)
-            && expected_fields.iter().all(|(key, expected)| {
-                fields.get(*key).map(String::as_str) == Some(*expected)
-            })
+            && expected_fields
+                .iter()
+                .all(|(key, expected)| fields.get(*key).map(String::as_str) == Some(*expected))
     });
 
     assert!(

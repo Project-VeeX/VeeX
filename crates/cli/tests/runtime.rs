@@ -18,12 +18,12 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::oneshot,
 };
+use tokio_rustls::TlsAcceptor;
 use tracing::{
     field::{Field, Visit},
     Event, Subscriber,
 };
 use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer};
-use tokio_rustls::TlsAcceptor;
 use veex_cli::runtime::{run_with_shutdown, RuntimeError};
 use veex_config::{
     DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
@@ -399,7 +399,9 @@ async fn runtime_reports_listener_bind_failure_with_io_error_kind() {
 
     let err = tokio::time::timeout(
         Duration::from_secs(2),
-        run_with_shutdown(&config, async { std::future::pending::<Result<(), String>>().await }),
+        run_with_shutdown(&config, async {
+            std::future::pending::<Result<(), String>>().await
+        }),
     )
     .await
     .expect("runtime should fail quickly")
@@ -496,6 +498,7 @@ async fn runtime_emits_session_start_and_finish_events() {
         "session_start",
         &[("inbound", "socks-in"), ("network", "tcp")],
     );
+    assert_event_has_fields(&events, "session_start", &["peer", "destination"]);
     assert_has_event(
         &events,
         "session_finish",
@@ -608,19 +611,23 @@ struct EventVisitor {
 
 impl Visit for EventVisitor {
     fn record_bool(&mut self, field: &Field, value: bool) {
-        self.fields.insert(field.name().to_string(), value.to_string());
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
     }
 
     fn record_i64(&mut self, field: &Field, value: i64) {
-        self.fields.insert(field.name().to_string(), value.to_string());
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
     }
 
     fn record_u64(&mut self, field: &Field, value: u64) {
-        self.fields.insert(field.name().to_string(), value.to_string());
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
     }
 
     fn record_str(&mut self, field: &Field, value: &str) {
-        self.fields.insert(field.name().to_string(), value.to_string());
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
@@ -650,7 +657,10 @@ where
     }
 }
 
-fn install_test_subscriber() -> (tracing::subscriber::DefaultGuard, Arc<Mutex<Vec<CapturedEvent>>>) {
+fn install_test_subscriber() -> (
+    tracing::subscriber::DefaultGuard,
+    Arc<Mutex<Vec<CapturedEvent>>>,
+) {
     let events = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(CaptureLayer {
         events: Arc::clone(&events),
@@ -677,8 +687,22 @@ fn assert_has_event(events: &[CapturedEvent], event_name: &str, expected_fields:
     assert!(
         matched,
         "expected event `{event_name}` with fields {:?}, captured events: {:?}",
-        expected_fields,
-        events
+        expected_fields, events
+    );
+}
+
+fn assert_event_has_fields(events: &[CapturedEvent], event_name: &str, expected_fields: &[&str]) {
+    let matched = events.iter().any(|event| {
+        event.fields.get("event").map(String::as_str) == Some(event_name)
+            && expected_fields
+                .iter()
+                .all(|field| event.fields.contains_key(*field))
+    });
+
+    assert!(
+        matched,
+        "expected event `{event_name}` with fields {:?}, captured events: {:?}",
+        expected_fields, events
     );
 }
 

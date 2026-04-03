@@ -13,6 +13,18 @@ fn password_hash_has_expected_length() {
 }
 
 #[test]
+fn password_hash_matches_sha224_test_vectors() {
+    assert_eq!(
+        password_hash_hex(""),
+        "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f"
+    );
+    assert_eq!(
+        password_hash_hex("abc"),
+        "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7"
+    );
+}
+
+#[test]
 fn encodes_ipv4_destination() {
     let request = build_trojan_request(
         "secret",

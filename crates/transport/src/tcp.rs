@@ -5,7 +5,7 @@ use tokio::{
     time::timeout,
 };
 use tracing::debug;
-use veex_core::{Host, ProxyError, Result};
+use veex_core::{sanitize_field, Host, ProxyError, Result};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct TcpConnectOptions {
@@ -15,12 +15,14 @@ pub struct TcpConnectOptions {
 pub async fn connect_host(host: &Host, port: u16, options: TcpConnectOptions) -> Result<TcpStream> {
     let addresses = resolve_host(host, port).await?;
     let mut last_error = None;
+    let host_field = host.to_string();
+    let host_field = sanitize_field(&host_field).into_owned();
 
     for (attempt_index, address) in addresses.into_iter().enumerate() {
         if let Some(duration) = options.timeout {
             debug!(
                 event = "tcp_connect_attempt",
-                host = %host,
+                host = %host_field,
                 port,
                 resolved_addr = %address,
                 timeout_ms = duration.as_millis(),
@@ -30,7 +32,7 @@ pub async fn connect_host(host: &Host, port: u16, options: TcpConnectOptions) ->
         } else {
             debug!(
                 event = "tcp_connect_attempt",
-                host = %host,
+                host = %host_field,
                 port,
                 resolved_addr = %address,
                 attempt_index = attempt_index + 1,
@@ -44,9 +46,8 @@ pub async fn connect_host(host: &Host, port: u16, options: TcpConnectOptions) ->
         }
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        ProxyError::dial(format!("no reachable address for {host}:{port}"))
-    }))
+    Err(last_error
+        .unwrap_or_else(|| ProxyError::dial(format!("no reachable address for {host}:{port}"))))
 }
 
 async fn resolve_host(host: &Host, port: u16) -> Result<Vec<SocketAddr>> {

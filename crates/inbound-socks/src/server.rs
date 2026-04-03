@@ -15,8 +15,8 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 use veex_core::{
-    format_listen_addr, BoxFuture, BoxedAsyncStream, Dispatcher, Inbound, Network, ProxyError,
-    Result, SessionContext, SessionMeta, ShutdownSignal,
+    format_listen_addr, sanitize_field, BoxFuture, BoxedAsyncStream, Dispatcher, Inbound, Network,
+    ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
 };
 
 use crate::{
@@ -204,13 +204,18 @@ impl SocksInbound {
 
         let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
         let destination = request.destination.clone();
+        let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
+        let peer_field = peer.to_string();
+        let peer_field = sanitize_field(&peer_field).into_owned();
+        let destination_field = destination.to_string();
+        let destination_field = sanitize_field(&destination_field).into_owned();
         info!(
             event = "session_start",
             session_id,
-            inbound = %self.tag,
-            peer = %peer,
-            destination = %destination,
-            network = "tcp",
+            inbound = %inbound_field,
+            peer = %peer_field,
+            destination = %destination_field,
+            network = %"tcp",
             "socks session start"
         );
 
@@ -229,10 +234,10 @@ impl SocksInbound {
             warn!(
                 event = "session_failed",
                 session_id,
-                inbound = %self.tag,
-                peer = %peer,
-                destination = %destination,
-                error_kind = %err.kind(),
+                inbound = %inbound_field,
+                peer = %peer_field,
+                destination = %destination_field,
+                error_kind = ?err.kind(),
                 error = %err,
                 "socks session failed"
             );
@@ -248,11 +253,14 @@ impl SocksInbound {
     }
 
     fn log_handshake_failed(&self, peer: SocketAddr, stage: &'static str, err: &SocksError) {
+        let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
+        let peer_field = peer.to_string();
+        let peer_field = sanitize_field(&peer_field).into_owned();
         warn!(
             event = "handshake_failed",
-            inbound = %self.tag,
-            peer = %peer,
-            stage = stage,
+            inbound = %inbound_field,
+            peer = %peer_field,
+            stage = %stage,
             error = %err,
             "socks handshake failed"
         );
@@ -291,9 +299,10 @@ impl Inbound for SocksInbound {
                     }
                     maybe_task = connections.join_next(), if !connections.is_empty() => {
                         if let Some(Err(err)) = maybe_task {
+                            let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
                             error!(
                                 event = "task_join_failed",
-                                inbound = %self.tag,
+                                inbound = %inbound_field,
                                 error = %err,
                                 "socks connection task join failed"
                             );

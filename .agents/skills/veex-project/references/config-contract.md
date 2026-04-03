@@ -39,7 +39,10 @@ It does not currently support:
 
 - CIDR ranges
 - domain suffix matching
+- wildcard matching
 - a rule execution engine
+
+Patterns such as `*.example.com` and `.example.com` are rejected as unsupported bypass patterns.
 
 The router applies built-in bypass before configured bypass:
 

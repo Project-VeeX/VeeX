@@ -13,7 +13,7 @@ use tokio::{
 };
 use tokio_rustls::TlsConnector;
 use tracing::warn;
-use veex_core::{BoxedAsyncStream, Host, ProxyError, Result};
+use veex_core::{sanitize_field, BoxedAsyncStream, Host, ProxyError, Result};
 
 use crate::verifier::{
     build_client_config, validate_certificate_paths, CertificateVerifierOptions, VerifierError,
@@ -38,7 +38,10 @@ pub enum TlsError {
     #[error("tls verifier configuration failed: {0}")]
     Verifier(#[from] VerifierError),
     #[error("invalid tls server_name `{server_name}`: {message}")]
-    InvalidServerName { server_name: String, message: String },
+    InvalidServerName {
+        server_name: String,
+        message: String,
+    },
     #[error(
         "tls handshake failed for host={host} server_name={server_name} insecure={insecure} disable_sni={disable_sni}: {source}"
     )]
@@ -129,25 +132,31 @@ pub async fn connect_tls(
             message: err.to_string(),
         })
     })?;
+    let host_field = host.to_string();
+    let host_field = sanitize_field(&host_field).into_owned();
+    let server_name_field = sanitize_field(&server_name).into_owned();
 
-    let stream = connector.connect(tls_server_name, stream).await.map_err(|err| {
-        warn!(
-            event = "tls_handshake_failed",
-            host = %host,
-            server_name = %server_name,
-            insecure = options.insecure,
-            disable_sni = options.disable_sni,
-            error = %err,
-            "tls handshake failed"
-        );
-        ProxyError::from(TlsError::Handshake {
-            host: host.to_string(),
-            server_name: server_name.clone(),
-            insecure: options.insecure,
-            disable_sni: options.disable_sni,
-            source: err,
-        })
-    })?;
+    let stream = connector
+        .connect(tls_server_name, stream)
+        .await
+        .map_err(|err| {
+            warn!(
+                event = "tls_handshake_failed",
+                host = %host_field,
+                server_name = %server_name_field,
+                insecure = options.insecure,
+                disable_sni = options.disable_sni,
+                error = %err,
+                "tls handshake failed"
+            );
+            ProxyError::from(TlsError::Handshake {
+                host: host.to_string(),
+                server_name: server_name.clone(),
+                insecure: options.insecure,
+                disable_sni: options.disable_sni,
+                source: err,
+            })
+        })?;
 
     Ok(Box::new(TlsCloseNotifyTolerantStream::new(stream)))
 }

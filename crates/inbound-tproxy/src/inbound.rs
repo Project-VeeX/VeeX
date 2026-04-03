@@ -14,8 +14,8 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 use veex_core::{
-    parse_listen_addr, BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, Network,
-    ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
+    parse_listen_addr, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher,
+    Inbound, Network, ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
 };
 use veex_infra_linux::get_tproxy_dst;
 
@@ -155,32 +155,38 @@ impl TProxyInbound {
         let socket_family = local_addr
             .map(|addr| if addr.is_ipv4() { "ipv4" } else { "ipv6" })
             .unwrap_or("unknown");
+        let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
+        let listen_field = sanitize_field(self.listen.as_str()).into_owned();
+        let peer_field = peer.to_string();
+        let peer_field = sanitize_field(&peer_field).into_owned();
         let destination = match (self.resolver)(&stream) {
             Ok(destination) => destination,
             Err(err) => {
                 warn!(
                     event = "destination_resolve_failed",
-                    inbound = %self.tag,
-                    listen = %self.listen,
-                    peer = %peer,
+                    inbound = %inbound_field,
+                    listen = %listen_field,
+                    peer = %peer_field,
                     local_addr = ?local_addr,
-                    socket_family = socket_family,
+                    socket_family = %socket_family,
                     error = %err,
                     "tproxy destination lookup failed"
                 );
                 return Err(err.into());
             }
         };
+        let destination_field = destination.to_string();
+        let destination_field = sanitize_field(&destination_field).into_owned();
         info!(
             event = "session_start",
             session_id,
-            inbound = %self.tag,
-            listen = %self.listen,
-            peer = %peer,
+            inbound = %inbound_field,
+            listen = %listen_field,
+            peer = %peer_field,
             local_addr = ?local_addr,
-            destination = %destination,
-            socket_family = socket_family,
-            network = "tcp",
+            destination = %destination_field,
+            socket_family = %socket_family,
+            network = %"tcp",
             "tproxy session start"
         );
 
@@ -199,13 +205,13 @@ impl TProxyInbound {
             warn!(
                 event = "session_failed",
                 session_id,
-                inbound = %self.tag,
-                listen = %self.listen,
-                peer = %peer,
+                inbound = %inbound_field,
+                listen = %listen_field,
+                peer = %peer_field,
                 local_addr = ?local_addr,
-                destination = %destination,
-                socket_family = socket_family,
-                error_kind = %err.kind(),
+                destination = %destination_field,
+                socket_family = %socket_family,
+                error_kind = ?err.kind(),
                 error = %err,
                 "tproxy session failed"
             );
@@ -245,16 +251,18 @@ impl Inbound for TProxyInbound {
                     accept_result = listener.accept(), if !shutting_down => {
                         let (stream, peer) = accept_result?;
                         let inbound = Arc::clone(&self);
-                        let inbound_tag = inbound.tag.clone();
+                        let inbound_tag = sanitize_field(inbound.tag.as_str()).into_owned();
                         let dispatcher = Arc::clone(&dispatcher);
 
                         connections.spawn(async move {
                             if let Err(err) = inbound.handle_connection(dispatcher, stream, peer).await {
+                                let peer_field = peer.to_string();
+                                let peer_field = sanitize_field(&peer_field).into_owned();
                                 warn!(
                                     event = "inbound_connection_failed",
                                     inbound = %inbound_tag,
-                                    peer = %peer,
-                                    error_kind = %err.kind(),
+                                    peer = %peer_field,
+                                    error_kind = ?err.kind(),
                                     error = %err,
                                     "tproxy inbound connection failed"
                                 );
@@ -263,9 +271,10 @@ impl Inbound for TProxyInbound {
                     }
                     maybe_task = connections.join_next(), if !connections.is_empty() => {
                         if let Some(Err(err)) = maybe_task {
+                            let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
                             error!(
                                 event = "task_join_failed",
-                                inbound = %self.tag,
+                                inbound = %inbound_field,
                                 error = %err,
                                 "tproxy connection task join failed"
                             );

@@ -3,8 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
 use veex_config::{ProxyConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
 use veex_core::{
-    shutdown_channel, Dispatcher, Inbound, Outbound, ProxyError, ShutdownTrigger,
-    SimpleDispatcher,
+    shutdown_channel, Dispatcher, Inbound, Outbound, ProxyError, ShutdownTrigger, SimpleDispatcher,
 };
 
 use crate::factory::{build_inbounds, build_outbounds, build_router};

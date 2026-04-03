@@ -4,7 +4,7 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 use veex_config::ProxyConfig;
-use veex_core::ProxyError;
+use veex_core::{sanitize_field, ProxyError};
 
 use crate::bootstrap::{build_runtime_state, BootstrapError, RuntimeState};
 
@@ -62,16 +62,17 @@ where
         event = "runtime_start",
         inbounds = config.inbounds.len(),
         outbounds = config.outbounds.len(),
-        final_outbound = %config.route.final_outbound,
+        final_outbound = %sanitize_field(config.route.final_outbound.as_str()),
         "runtime start"
     );
 
     for inbound in inbounds {
         let inbound_tag = inbound.tag().to_string();
         let dispatcher = Arc::clone(&dispatcher);
+        let inbound_field = sanitize_field(&inbound_tag).into_owned();
         info!(
             event = "service_start",
-            inbound = %inbound_tag,
+            inbound = %inbound_field,
             "starting inbound service"
         );
         tasks.spawn(async move {
@@ -100,10 +101,11 @@ where
                 match maybe_task {
                     Some(Ok((_inbound, Ok(())))) => continue,
                     Some(Ok((inbound, Err(err)))) => {
+                        let inbound_field = sanitize_field(&inbound).into_owned();
                         warn!(
                             event = "inbound_service_failed",
-                            inbound = %inbound,
-                            error_kind = %err.kind(),
+                            inbound = %inbound_field,
+                            error_kind = ?err.kind(),
                             error = %err,
                             "inbound service failed"
                         );

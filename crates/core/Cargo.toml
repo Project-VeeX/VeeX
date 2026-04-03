@@ -9,3 +9,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 veex-observability = { path = "../observability" }
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

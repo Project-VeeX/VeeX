@@ -24,6 +24,9 @@ The canonical repository document is `docs/observability-and-errors.md`. This re
 - Prefer structured tracing fields over hand-built `key=value` strings on the hot path.
 - Keep event names and core field names stable unless there is a strong reason to change them.
 - Text output via `tracing-subscriber` is the current baseline. Do not assume JSON logging, file appenders, metrics, or OpenTelemetry exist.
+- Human-readable host, domain, and tag fields should use display-style rendering.
+- Structured values and error kinds should use debug-style rendering.
+- Line breaks in string-like fields should be sanitized so text output does not break event structure.
 
 ## Structured Events Present In Current Baseline
 
@@ -73,12 +76,32 @@ The canonical repository document is `docs/observability-and-errors.md`. This re
   - `duration_ms`
   - `bytes_up`
   - `bytes_down`
+- `session_finish.bytes_up` and `session_finish.bytes_down` are observed relay bytes; relay failures may report partial non-zero stats instead of `0/0`.
 - failure-side events should carry `error_kind` and `error` when the boundary already has a `ProxyError`.
 - TLS handshake failures should carry:
   - `host`
   - `server_name`
   - `insecure`
   - `disable_sni`
+- `transparent_socket_config` should carry:
+  - `socket_family`
+  - `local_addr`
+  - `peer_addr`
+  - `ipv4_transparent_ok`
+  - `ipv4_transparent_errno`
+  - `ipv6_transparent_ok`
+  - `ipv6_transparent_errno`
+- `listener_fallback` should carry:
+  - `from`
+  - `to`
+  - `reason`
+  - `errno`
+
+## Relay Termination Rules
+
+- EOF in one direction is a normal completion path, not a relay error.
+- EOF still attempts `shutdown()` on the opposite writer before that direction returns success.
+- True relay errors fail fast and may return the latest observed progress snapshot instead of waiting indefinitely for the peer direction to finish.
 
 ## Non-Goals Carried Forward
 

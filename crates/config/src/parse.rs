@@ -638,6 +638,50 @@ mod tests {
     }
 
     #[test]
+    fn rejects_route_bypass_wildcard_patterns() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "bypass": ["*.example.com"]
+          }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("wildcard bypass should fail");
+        assert!(err.to_string().contains("$.route.bypass[0]"));
+        assert!(err.to_string().contains("unsupported bypass pattern"));
+    }
+
+    #[test]
+    fn rejects_route_bypass_suffix_patterns() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "bypass": [".example.com"]
+          }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("suffix bypass should fail");
+        assert!(err.to_string().contains("$.route.bypass[0]"));
+        assert!(err.to_string().contains("unsupported bypass pattern"));
+    }
+
+    #[test]
     fn parses_tproxy_compat_example_with_ignored_fields() {
         let input = include_str!("../../../examples/tproxy-compat.json");
 
