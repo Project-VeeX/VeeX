@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Hardened dual-stack transparent proxy handling for `redirect` and `tproxy` validation paths.
+- Fixed `listen="::"` and bracketed IPv6 listen parsing for transparent-proxy inbounds.
+- Improved original-destination recovery for IPv4-mapped IPv6 sockets and aligned transparent-proxy docs with the Phase3.1 behavior.
+
 ## 0.3.0
 
 - Added TCP-only `tproxy` inbound support for the Phase3 transparent proxy path.
