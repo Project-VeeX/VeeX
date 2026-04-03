@@ -47,6 +47,7 @@ You need all of the following before testing:
 Conservative example assumptions:
 
 - `tproxy` listen port: `1041`
+- listener: `::` for dual-stack validation
 - client: `192.168.7.150`
 - external target: `185.45.5.35:443`
 - LAN interface: `br-lan`
@@ -60,11 +61,25 @@ ip rule add fwmark 0x1/0x1 lookup 100
 ip route add local 0.0.0.0/0 dev lo table 100
 ```
 
+If you validate a dual-stack config whose `tproxy` inbound listens on `::`, add the IPv6 policy-routing pair as well:
+
+```sh
+ip -6 rule add fwmark 0x1/0x1 lookup 100
+ip -6 route add local ::/0 dev lo table 100
+```
+
 Verify them:
 
 ```sh
 ip rule show
 ip route show table 100
+```
+
+Optional dual-stack verification:
+
+```sh
+ip -6 rule show
+ip -6 route show table 100
 ```
 
 Expected shape:
@@ -94,6 +109,8 @@ Confirm the listener:
 ```sh
 ss -ltnp | grep 1041
 ```
+
+For dual-stack `listen="::"` validation, `ss` output may show either `[::]:1041` or `*:1041`.
 
 ## iptables TPROXY Example
 
@@ -149,6 +166,11 @@ Expected evidence:
 - `event=session_start` shows the expected `original_dst`
 - `event=session_finish` ends with `error_kind=none`
 
+If you are validating IPv6 interception too, also confirm:
+
+- `ip -6 rule show` still contains the `lookup 100` rule
+- `ip -6 route show table 100` still shows the local route
+
 For direct/private validation, expected log shape is:
 
 ```text
@@ -174,12 +196,15 @@ iptables -t mangle -X VEEX_TPROXY 2>/dev/null || true
 nft delete table inet veex_tproxy 2>/dev/null || true
 ip rule del fwmark 0x1/0x1 lookup 100 2>/dev/null || true
 ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
+ip -6 rule del fwmark 0x1/0x1 lookup 100 2>/dev/null || true
+ip -6 route del local ::/0 dev lo table 100 2>/dev/null || true
 kill -TERM "$(cat /tmp/veex-tproxy.pid 2>/dev/null)" 2>/dev/null || true
 ```
 
 ## Notes
 
 - Start with `PREROUTING` only. Do not broaden to router-originated traffic until the conservative LAN path is green.
+- `listen="::"` is supported for dual-stack transparent-proxy validation and does not rely on the system `bindv6only` default.
 - If TPROXY does not work, fall back to the existing `REDIRECT` guides first:
   - `docs/transparent-proxy-iptables.md`
   - `docs/transparent-proxy-fw4.md`

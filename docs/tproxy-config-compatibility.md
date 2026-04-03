@@ -10,6 +10,10 @@ Current supported configuration surface:
   - `socks`
   - `redirect`
   - `tproxy`
+- inbound `listen` values:
+  - IPv4 literals such as `0.0.0.0`
+  - IPv6 literals such as `::`
+  - bracketed IPv6 literals such as `[::]`
 - `tproxy.network`
   - omitted: treated as TCP
   - `"tcp"`: accepted
@@ -62,6 +66,8 @@ Known fields remain strictly typed. An unsupported type on a known field is stil
 Use the repository example as the single-source compatibility fixture:
 
 - `examples/tproxy-compat.json`
+
+That example intentionally uses `listen="::"` to match dual-stack OpenWrt/Passwall-style validation more closely.
 
 Validate it with:
 

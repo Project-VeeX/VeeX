@@ -1,6 +1,6 @@
 # Transparent Proxy Troubleshooting
 
-This document focuses on the failure modes that matter during Phase2 validation.
+This document focuses on the failure modes that matter during transparent proxy validation, especially the `redirect` and `tproxy` TCP paths.
 
 ## Service Does Not Start
 
@@ -18,6 +18,8 @@ ss -ltnp | grep 10080
 ```
 
 If `check` fails, fix the config before looking at firewall rules.
+
+If you are validating a dual-stack `tproxy` config whose inbound listens on `::`, expect the listener to appear as either `[::]:<port>` or `*:<port>` depending on the userspace tools on that router.
 
 ## Rules Do Not Match
 
@@ -60,6 +62,8 @@ Common causes:
 - the socket was not actually redirected
 - the test used the wrong firewall hook
 - the listener accepted a plain local connection instead of a redirected one
+
+If logs show an IPv4-mapped peer such as `[::ffff:192.168.x.x]:port`, current `veex` retries the IPv4 original-destination socket option automatically. Persistent failure usually means the firewall delivery path is still wrong rather than a simple address-family mismatch.
 
 ## Trojan Outbound Fails
 

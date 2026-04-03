@@ -56,6 +56,13 @@ ip rule add fwmark 0x1/0x1 lookup 100
 ip route add local 0.0.0.0/0 dev lo table 100
 ```
 
+If `/tmp/tproxy-compat.json` listens on `::` and you want dual-stack validation, add the IPv6 pair too:
+
+```sh
+ip -6 rule add fwmark 0x1/0x1 lookup 100
+ip -6 route add local ::/0 dev lo table 100
+```
+
 Verify them:
 
 ```sh
@@ -75,6 +82,8 @@ Verify the listener:
 ```sh
 ss -ltnp | grep 1041
 ```
+
+For a dual-stack `::` listener, `ss` may show either `[::]:1041` or `*:1041`.
 
 ## 5. Add Temporary TPROXY Rules
 
@@ -102,6 +111,8 @@ Useful checks:
 curl --resolve www.google.com:443:185.45.5.35 -I https://www.google.com
 ip rule show
 ip route show table 100
+ip -6 rule show
+ip -6 route show table 100
 logread | grep 'event=session_start'
 logread | grep 'event=route_select'
 logread | grep 'event=session_finish'
@@ -148,6 +159,8 @@ iptables -t mangle -X VEEX_TPROXY 2>/dev/null || true
 nft delete table inet veex_tproxy 2>/dev/null || true
 ip rule del fwmark 0x1/0x1 lookup 100 2>/dev/null || true
 ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
+ip -6 rule del fwmark 0x1/0x1 lookup 100 2>/dev/null || true
+ip -6 route del local ::/0 dev lo table 100 2>/dev/null || true
 kill -TERM "$(cat /tmp/veex-tproxy.pid 2>/dev/null)" 2>/dev/null || true
 ```
 

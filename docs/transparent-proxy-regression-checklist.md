@@ -36,6 +36,8 @@ Use this checklist before treating a Phase3 build as releasable for transparent 
 - TPROXY rule counters increase during validation
 - `ip rule show` includes the expected interception rule
 - `ip route show table 100` includes the expected local route
+- if `listen="::"` is used, the listener binds successfully without changing system `bindv6only`
+- if dual-stack validation is in scope, IPv4-mapped and native IPv6 cases are both exercised
 
 ## Route Selection And Logs
 

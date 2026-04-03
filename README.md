@@ -12,6 +12,7 @@ Current user-facing scope:
 
 - SOCKS5 inbound for TCP `CONNECT`
 - Linux redirect inbound for TCP transparent proxy validation
+- Linux TPROXY inbound for TCP transparent proxy validation
 - Trojan outbound over TLS
 - direct outbound for bypass and local destinations
 - foreground daemon with config validation and graceful shutdown
@@ -101,16 +102,25 @@ Top-level fields:
 Currently supported inbound types:
 
 - `socks`
+- `redirect`
+- `tproxy`
 
 Currently supported outbound types:
 
 - `trojan`
 - `direct`
 
+Transparent proxy listener notes:
+
+- `redirect` and `tproxy` listen addresses accept IPv4 and IPv6 literals
+- `listen="::"` is supported for dual-stack transparent-proxy validation
+- bracketed IPv6 listen literals such as `[::]` are also accepted
+
 Example configs:
 
 - `examples/socks-trojan.json`
 - `examples/redirect-trojan.json`
+- `examples/tproxy-compat.json`
 
 ## Roadmap
 
@@ -118,6 +128,7 @@ Current milestone:
 
 - stable SOCKS5 -> Trojan -> remote TCP path
 - stable Linux redirect -> Trojan/direct path
+- stable Linux TPROXY -> Trojan/direct path
 - config validation through `veex check`
 - process-level smoke coverage for `veex run` and `veex check`
 - transparent proxy validation guides for OpenWrt-class systems

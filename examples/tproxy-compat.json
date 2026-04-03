@@ -18,7 +18,7 @@
     {
       "type": "tproxy",
       "tag": "tproxy-in",
-      "listen": "0.0.0.0",
+      "listen": "::",
       "listen_port": 1041,
       "network": "tcp"
     }
