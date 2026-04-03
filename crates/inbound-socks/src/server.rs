@@ -14,8 +14,8 @@ use tokio::{
     task::JoinSet,
 };
 use veex_core::{
-    BoxFuture, BoxedAsyncStream, Dispatcher, Inbound, Network, ProxyError, Result, SessionContext,
-    SessionMeta, ShutdownSignal,
+    format_listen_addr, BoxFuture, BoxedAsyncStream, Dispatcher, Inbound, Network, ProxyError,
+    Result, SessionContext, SessionMeta, ShutdownSignal,
 };
 
 use crate::{
@@ -96,7 +96,7 @@ impl SocksInbound {
     }
 
     fn bind_addr(&self) -> String {
-        format!("{}:{}", self.listen, self.listen_port)
+        format_listen_addr(&self.listen, self.listen_port)
     }
 
     async fn handle_connection(

@@ -2,6 +2,7 @@
 
 pub mod dispatcher;
 pub mod error;
+pub mod listen;
 pub mod relay;
 pub mod router;
 pub mod shutdown;
@@ -10,6 +11,7 @@ pub mod types;
 
 pub use dispatcher::SimpleDispatcher;
 pub use error::{ErrorKind, ProxyError, Result};
+pub use listen::{format_listen_addr, parse_listen_addr};
 pub use relay::{relay_bidirectional, RelayStats};
 pub use router::{RouteDecision, Router};
 pub use shutdown::{shutdown_channel, ShutdownSignal, ShutdownTrigger};

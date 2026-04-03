@@ -13,8 +13,8 @@ use tokio::{
     task::JoinSet,
 };
 use veex_core::{
-    BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, Network, ProxyError, Result,
-    SessionContext, SessionMeta, ShutdownSignal,
+    parse_listen_addr, BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, Network,
+    ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
 };
 use veex_infra_linux::get_tproxy_dst;
 use veex_observability::{log_line, LogLevel};
@@ -133,13 +133,11 @@ impl TProxyInbound {
     }
 
     fn bind_addr(&self) -> Result<SocketAddr> {
-        format!("{}:{}", self.listen, self.listen_port)
-            .parse()
-            .map_err(|err| {
-                ProxyError::Config(format!(
-                    "tproxy inbound listen must be a valid socket address: {err}"
-                ))
-            })
+        parse_listen_addr(&self.listen, self.listen_port).map_err(|err| {
+            ProxyError::Config(format!(
+                "tproxy inbound listen must be a valid socket address: {err}"
+            ))
+        })
     }
 
     fn next_session_id(&self) -> u64 {
@@ -244,7 +242,7 @@ fn resolve_tproxy_destination(stream: &TcpStream) -> TProxyResult<Destination> {
 #[cfg(test)]
 mod tests {
     use std::{
-        net::{IpAddr, Ipv4Addr, SocketAddr},
+        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
         sync::{Arc, Mutex},
         time::Duration,
     };
@@ -342,6 +340,28 @@ mod tests {
             .expect("serve task should stop after shutdown")
             .expect("serve task should not panic")
             .expect("serve task should succeed");
+    }
+
+    #[test]
+    fn parses_unspecified_ipv6_listen_addr() {
+        let inbound = TProxyInbound::new("tproxy-in", "::", 1041);
+        assert_eq!(
+            inbound
+                .bind_addr()
+                .expect("unspecified ipv6 listen should parse"),
+            SocketAddr::from((Ipv6Addr::UNSPECIFIED, 1041))
+        );
+    }
+
+    #[test]
+    fn parses_bracketed_ipv6_listen_addr() {
+        let inbound = TProxyInbound::new("tproxy-in", "[::]", 1041);
+        assert_eq!(
+            inbound
+                .bind_addr()
+                .expect("bracketed ipv6 listen should parse"),
+            SocketAddr::from((Ipv6Addr::UNSPECIFIED, 1041))
+        );
     }
 
     async fn reserve_local_port() -> SocketAddr {

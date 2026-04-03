@@ -13,15 +13,19 @@ use tokio::{
     task::JoinSet,
 };
 use veex_core::{
-    BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, Network, ProxyError, Result,
-    SessionContext, SessionMeta, ShutdownSignal,
+    parse_listen_addr, BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, Network,
+    ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
 };
 use veex_observability::{log_line, LogLevel};
 
-use crate::{error::RedirectError, original_dst::resolve_original_dst};
+use crate::{
+    error::RedirectError, listener::create_redirect_listener, original_dst::resolve_original_dst,
+};
 
 type ResolveOriginalDst =
     dyn Fn(&TcpStream) -> std::result::Result<Destination, RedirectError> + Send + Sync;
+type ListenerFactory =
+    dyn Fn(SocketAddr) -> std::result::Result<TcpListener, RedirectError> + Send + Sync;
 
 pub struct RedirectInbound {
     tag: String,
@@ -29,6 +33,7 @@ pub struct RedirectInbound {
     listen_port: u16,
     next_session_id: AtomicU64,
     resolver: Arc<ResolveOriginalDst>,
+    listener_factory: Arc<ListenerFactory>,
     shutdown: Option<ShutdownSignal>,
 }
 
@@ -39,6 +44,7 @@ impl RedirectInbound {
             listen,
             listen_port,
             Arc::new(resolve_original_dst),
+            Arc::new(create_redirect_listener),
             None,
         )
     }
@@ -54,18 +60,20 @@ impl RedirectInbound {
             listen,
             listen_port,
             Arc::new(resolve_original_dst),
+            Arc::new(create_redirect_listener),
             Some(shutdown),
         )
     }
 
     #[cfg(test)]
-    fn new_with_resolver(
+    fn new_with_hooks(
         tag: impl Into<String>,
         listen: impl Into<String>,
         listen_port: u16,
         resolver: Arc<ResolveOriginalDst>,
+        listener_factory: Arc<ListenerFactory>,
     ) -> Self {
-        Self::new_internal(tag, listen, listen_port, resolver, None)
+        Self::new_internal(tag, listen, listen_port, resolver, listener_factory, None)
     }
 
     fn new_internal(
@@ -73,6 +81,7 @@ impl RedirectInbound {
         listen: impl Into<String>,
         listen_port: u16,
         resolver: Arc<ResolveOriginalDst>,
+        listener_factory: Arc<ListenerFactory>,
         shutdown: Option<ShutdownSignal>,
     ) -> Self {
         Self {
@@ -81,6 +90,7 @@ impl RedirectInbound {
             listen_port,
             next_session_id: AtomicU64::new(1),
             resolver,
+            listener_factory,
             shutdown,
         }
     }
@@ -113,11 +123,16 @@ impl RedirectInbound {
                 "redirect inbound listen_port must be within 1..=65535".into(),
             ));
         }
+        let _ = self.bind_addr()?;
         Ok(())
     }
 
-    fn bind_addr(&self) -> String {
-        format!("{}:{}", self.listen, self.listen_port)
+    fn bind_addr(&self) -> Result<SocketAddr> {
+        parse_listen_addr(&self.listen, self.listen_port).map_err(|err| {
+            ProxyError::Config(format!(
+                "redirect inbound listen must be a valid socket address: {err}"
+            ))
+        })
     }
 
     fn next_session_id(&self) -> u64 {
@@ -169,7 +184,7 @@ impl Inbound for RedirectInbound {
     fn serve(self: Arc<Self>, dispatcher: Arc<dyn Dispatcher>) -> BoxFuture<'static, ()> {
         Box::pin(async move {
             self.validate()?;
-            let listener = TcpListener::bind(self.bind_addr()).await?;
+            let listener = (self.listener_factory)(self.bind_addr()?)?;
             let mut connections = JoinSet::new();
             let mut shutting_down = false;
 
@@ -217,7 +232,7 @@ impl Inbound for RedirectInbound {
 #[cfg(test)]
 mod tests {
     use std::{
-        net::{IpAddr, Ipv4Addr, SocketAddr},
+        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
         sync::{Arc, Mutex},
         time::Duration,
     };
@@ -225,7 +240,7 @@ mod tests {
     use tokio::{net::TcpStream, sync::oneshot};
     use veex_core::{BoxFuture, Destination, Dispatcher, Host, Inbound};
 
-    use super::RedirectInbound;
+    use super::{ListenerFactory, RedirectInbound};
 
     struct RecordingDispatcher {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,
@@ -253,11 +268,17 @@ mod tests {
         let listen_addr = reserve_local_port().await;
         let expected = Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5))), 443);
         let resolver_destination = expected.clone();
-        let inbound = Arc::new(RedirectInbound::new_with_resolver(
+        let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
+            let listener = std::net::TcpListener::bind(addr)?;
+            listener.set_nonblocking(true)?;
+            Ok(tokio::net::TcpListener::from_std(listener)?)
+        });
+        let inbound = Arc::new(RedirectInbound::new_with_hooks(
             "redirect-in",
             "127.0.0.1",
             listen_addr.port(),
             Arc::new(move |_| Ok(resolver_destination.clone())),
+            listener_factory,
         ));
         let (tx, rx) = oneshot::channel();
         let dispatcher: Arc<dyn Dispatcher> = Arc::new(RecordingDispatcher {
@@ -274,6 +295,17 @@ mod tests {
 
         serve_task.abort();
         let _ = serve_task.await;
+    }
+
+    #[test]
+    fn redirect_inbound_accepts_unspecified_ipv6_listen_addr() {
+        let inbound = RedirectInbound::new("redirect-in", "::", 1041);
+        assert_eq!(
+            inbound
+                .bind_addr()
+                .expect("redirect ipv6 listen should parse"),
+            SocketAddr::from((Ipv6Addr::UNSPECIFIED, 1041))
+        );
     }
 
     async fn reserve_local_port() -> SocketAddr {
