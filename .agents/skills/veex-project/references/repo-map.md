@@ -1,0 +1,93 @@
+# VeeX Repo Map
+
+## Workspace Snapshot
+
+- Current workspace version: `0.3.1`
+- Root crates:
+  - `crates/cli`
+  - `crates/config`
+  - `crates/core`
+  - `crates/infra-linux`
+  - `crates/inbound-redirect`
+  - `crates/inbound-socks`
+  - `crates/inbound-tproxy`
+  - `crates/observability`
+  - `crates/outbound-direct`
+  - `crates/outbound-trojan`
+  - `crates/transport`
+
+## Crate Ownership
+
+- `crates/cli`
+  - CLI contract
+  - runtime / bootstrap / factory wiring
+  - process startup, signal handling, foreground lifecycle
+- `crates/config`
+  - minimal JSON-subset parser
+  - schema, parse, validate
+  - config compatibility boundary
+- `crates/core`
+  - core types such as `Destination`, `Host`, and `SessionContext`
+  - error model and `ErrorKind`
+  - `Router`, `Dispatcher`, and `relay`
+  - platform-agnostic core contracts
+- `crates/infra-linux`
+  - Linux transparent-socket capabilities
+  - original-destination and transparent helper functions
+  - shared system-facing functionality for transparent inbounds
+- `crates/inbound-socks`
+  - SOCKS5 CONNECT inbound
+- `crates/inbound-redirect`
+  - REDIRECT inbound lifecycle
+  - original-destination recovery via shared Linux infrastructure
+- `crates/inbound-tproxy`
+  - TCP-only TPROXY inbound
+  - transparent listener and `SessionContext` construction
+- `crates/outbound-direct`
+  - direct outbound
+  - Linux `SO_MARK` path and no-loop egress behavior
+- `crates/outbound-trojan`
+  - Trojan outbound
+  - wiring to TLS / transport
+- `crates/transport`
+  - TCP / TLS abstractions
+  - transport layer used by Trojan TLS
+- `crates/observability`
+  - session observation and logging support
+
+## Dependency Constraints
+
+- `core` must stay platform-agnostic and must not absorb Linux transparent-socket details.
+- `Router` stays pure computation: no I/O and no DNS resolution during construction.
+- `routing_mark` belongs to direct outbound config and implementation; it should not become a `core` trait or routing abstraction.
+- runtime, factory, and bootstrap orchestration stay in `cli`; do not bloat `runtime.rs` or `core` again.
+- `crates/config/src/json.rs` is a controlled minimal JSON-subset parser, not a general-purpose JSON implementation.
+
+## Common Landing Zones
+
+- New or changed config fields:
+  - `crates/config`
+  - `crates/cli` factory wiring
+  - `examples/`
+  - `PROJECT_GUIDE.md`
+- Transparent proxy, original destination, or dual-stack issues:
+  - `crates/infra-linux`
+  - `crates/inbound-redirect`
+  - `crates/inbound-tproxy`
+  - `PROJECT_GUIDE.md`
+  - `references/validation-contract.md`
+- Direct no-loop and `routing_mark` behavior:
+  - `crates/outbound-direct`
+  - `crates/config`
+  - `PROJECT_GUIDE.md`
+  - `references/validation-contract.md`
+- Session failure semantics, summaries, or logging:
+  - `crates/core`
+  - `crates/observability`
+  - CLI smoke or related tests
+
+## Default Decision Rule
+
+- Decide first whether the problem is a project-boundary issue or an implementation issue.
+- If a proposal pushes Linux details back into `core` or drags non-goals into the main path, step back to the boundary discussion first.
+- If the problem is purely language-level Rust detail, switch to a narrower Rust skill.

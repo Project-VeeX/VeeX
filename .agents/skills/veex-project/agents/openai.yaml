@@ -1,0 +1,4 @@
+interface:
+  display_name: "VeeX Project"
+  short_description: "Load VeeX scope, crate boundaries, doc routing, and phase constraints"
+  default_prompt: "Use $veex-project to classify scope, choose the right VeeX crates or docs, and respect current transparent-proxy and compatibility boundaries before making changes."
