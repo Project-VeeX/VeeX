@@ -1,4 +1,5 @@
 use std::{
+    io,
     net::SocketAddr,
     time::{Duration, Instant},
 };
@@ -7,7 +8,7 @@ use tokio::{
     net::{lookup_host, TcpStream},
     time::timeout,
 };
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use veex_core::{sanitize_field, Host, ProxyError, Result};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -70,15 +71,17 @@ async fn connect_addresses(
                     address,
                     attempt_index,
                     start.elapsed(),
-                    &err,
+                    err.error_kind,
+                    &err.error,
                 );
-                last_error = Some(err);
+                last_error = Some(err.error);
             }
         }
     }
 
-    Err(last_error
-        .unwrap_or_else(|| ProxyError::dial(format!("no reachable address for {host_field}:{port}"))))
+    Err(last_error.unwrap_or_else(|| {
+        ProxyError::dial(format!("no reachable address for {host_field}:{port}"))
+    }))
 }
 
 async fn resolve_host(host: &Host, port: u16) -> Result<Vec<SocketAddr>> {
@@ -102,17 +105,47 @@ async fn resolve_host(host: &Host, port: u16) -> Result<Vec<SocketAddr>> {
 async fn connect_socket(
     address: SocketAddr,
     timeout_duration: Option<Duration>,
-) -> Result<TcpStream> {
+) -> std::result::Result<TcpStream, TcpConnectError> {
     let connect_future = TcpStream::connect(address);
 
     match timeout_duration {
         Some(duration) => timeout(duration, connect_future)
             .await
-            .map_err(|_| ProxyError::timeout(format!("tcp connect timeout to {address}")))?
-            .map_err(|err| ProxyError::dial_ctx(format!("tcp connect failed to {address}"), err)),
+            .map_err(|_| TcpConnectError {
+                error: ProxyError::timeout(format!("tcp connect timeout to {address}")),
+                error_kind: "timeout",
+            })?
+            .map_err(|err| TcpConnectError::from_io(address, err)),
         None => connect_future
             .await
-            .map_err(|err| ProxyError::dial_ctx(format!("tcp connect failed to {address}"), err)),
+            .map_err(|err| TcpConnectError::from_io(address, err)),
+    }
+}
+
+#[derive(Debug)]
+struct TcpConnectError {
+    error: ProxyError,
+    error_kind: &'static str,
+}
+
+impl TcpConnectError {
+    fn from_io(address: SocketAddr, err: io::Error) -> Self {
+        Self {
+            error: ProxyError::dial_ctx(format!("tcp connect failed to {address}"), &err),
+            error_kind: classify_tcp_connect_error_kind(err.kind()),
+        }
+    }
+}
+
+fn classify_tcp_connect_error_kind(kind: io::ErrorKind) -> &'static str {
+    match kind {
+        io::ErrorKind::TimedOut => "timeout",
+        io::ErrorKind::ConnectionRefused => "refused",
+        io::ErrorKind::HostUnreachable
+        | io::ErrorKind::NetworkUnreachable
+        | io::ErrorKind::AddrNotAvailable
+        | io::ErrorKind::NotConnected => "unreachable",
+        _ => "other",
     }
 }
 
@@ -188,7 +221,7 @@ fn log_tcp_connect_success(
 ) {
     match trace {
         Some(trace) => {
-            debug!(
+            info!(
                 event = "tcp_connect_success",
                 session_id = trace.session_id,
                 outbound = %sanitize_field(&trace.outbound),
@@ -202,7 +235,7 @@ fn log_tcp_connect_success(
             );
         }
         None => {
-            debug!(
+            info!(
                 event = "tcp_connect_success",
                 network = "tcp",
                 host = %host_field,
@@ -223,6 +256,7 @@ fn log_tcp_connect_failed(
     address: SocketAddr,
     attempt_index: u64,
     elapsed: Duration,
+    error_kind: &'static str,
     err: &ProxyError,
 ) {
     match trace {
@@ -237,6 +271,7 @@ fn log_tcp_connect_failed(
                 resolved_addr = %address,
                 attempt_index,
                 elapsed_ms = elapsed.as_millis() as u64,
+                error_kind,
                 error = %err,
                 "tcp connect failed"
             );
@@ -250,6 +285,7 @@ fn log_tcp_connect_failed(
                 resolved_addr = %address,
                 attempt_index,
                 elapsed_ms = elapsed.as_millis() as u64,
+                error_kind,
                 error = %err,
                 "tcp connect failed"
             );
@@ -327,6 +363,9 @@ mod tests {
         fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
             let mut visitor = EventVisitor::default();
             event.record(&mut visitor);
+            visitor
+                .fields
+                .insert("level".to_string(), event.metadata().level().to_string());
             self.events
                 .lock()
                 .expect("captured events lock poisoned")
@@ -411,6 +450,7 @@ mod tests {
                 ("outbound", "proxy"),
                 ("network", "tcp"),
                 ("attempt_index", "1"),
+                ("level", "DEBUG"),
             ],
         );
         assert_has_event(
@@ -421,6 +461,7 @@ mod tests {
                 ("outbound", "proxy"),
                 ("network", "tcp"),
                 ("attempt_index", "1"),
+                ("level", "INFO"),
             ],
         );
     }
@@ -459,6 +500,7 @@ mod tests {
                 ("outbound", "proxy"),
                 ("network", "tcp"),
                 ("attempt_index", "1"),
+                ("level", "DEBUG"),
             ],
         );
         assert_has_event(
@@ -469,6 +511,8 @@ mod tests {
                 ("outbound", "proxy"),
                 ("network", "tcp"),
                 ("attempt_index", "1"),
+                ("error_kind", "refused"),
+                ("level", "WARN"),
             ],
         );
     }
@@ -506,12 +550,20 @@ mod tests {
         assert_has_event(
             &events,
             "tcp_connect_failed",
-            &[("session_id", "9"), ("attempt_index", "1")],
+            &[
+                ("session_id", "9"),
+                ("attempt_index", "1"),
+                ("level", "WARN"),
+            ],
         );
         assert_has_event(
             &events,
             "tcp_connect_success",
-            &[("session_id", "9"), ("attempt_index", "2")],
+            &[
+                ("session_id", "9"),
+                ("attempt_index", "2"),
+                ("level", "INFO"),
+            ],
         );
     }
 }

@@ -1,5 +1,5 @@
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
 
@@ -20,6 +20,7 @@ pub struct RelayErrorWithStats {
     pub stats: RelayStats,
     pub error: ProxyError,
     pub direction: &'static str,
+    pub has_half_close: bool,
 }
 
 pub type RelayResult = std::result::Result<RelayStats, RelayErrorWithStats>;
@@ -97,6 +98,7 @@ pub(crate) async fn relay_bidirectional_with_trace(
     let (outbound_reader, outbound_writer) = tokio::io::split(outbound_stream);
     let upstream_progress = Arc::new(AtomicU64::new(0));
     let downstream_progress = Arc::new(AtomicU64::new(0));
+    let half_close_seen = Arc::new(AtomicBool::new(false));
 
     let upstream = tokio::spawn(relay_one_way(
         inbound_reader,
@@ -104,6 +106,7 @@ pub(crate) async fn relay_bidirectional_with_trace(
         Direction::Upstream,
         Arc::clone(&upstream_progress),
         trace,
+        Arc::clone(&half_close_seen),
     ));
     let downstream = tokio::spawn(relay_one_way(
         outbound_reader,
@@ -111,6 +114,7 @@ pub(crate) async fn relay_bidirectional_with_trace(
         Direction::Downstream,
         Arc::clone(&downstream_progress),
         trace,
+        Arc::clone(&half_close_seen),
     ));
 
     wait_for_relay_tasks(
@@ -118,6 +122,7 @@ pub(crate) async fn relay_bidirectional_with_trace(
         downstream,
         &upstream_progress,
         &downstream_progress,
+        &half_close_seen,
     )
     .await
 }
@@ -128,6 +133,7 @@ async fn relay_one_way<R, W>(
     direction: Direction,
     progress: Arc<AtomicU64>,
     trace: Option<RelayTraceContext>,
+    half_close_seen: Arc<AtomicBool>,
 ) -> OneWayRelayResult
 where
     R: AsyncRead + Unpin,
@@ -151,6 +157,7 @@ where
             })?;
 
         if read == 0 {
+            half_close_seen.store(true, Ordering::Relaxed);
             if let Some(trace) = trace {
                 debug!(
                     event = "relay_half_close",
@@ -196,6 +203,7 @@ async fn wait_for_relay_tasks(
     mut downstream: tokio::task::JoinHandle<OneWayRelayResult>,
     upstream_progress: &AtomicU64,
     downstream_progress: &AtomicU64,
+    half_close_seen: &AtomicBool,
 ) -> RelayResult {
     tokio::select! {
         upstream_join = &mut upstream => {
@@ -212,6 +220,7 @@ async fn wait_for_relay_tasks(
                         downstream_result,
                         upstream_progress,
                         downstream_progress,
+                        half_close_seen,
                     )
                 }
                 Err(err) => {
@@ -226,6 +235,7 @@ async fn wait_for_relay_tasks(
                         },
                         error: err.error,
                         direction: err.direction,
+                        has_half_close: half_close_seen.load(Ordering::Relaxed),
                     })
                 }
             }
@@ -248,6 +258,7 @@ async fn wait_for_relay_tasks(
                         downstream_result,
                         upstream_progress,
                         downstream_progress,
+                        half_close_seen,
                     )
                 }
                 Err(err) => {
@@ -262,6 +273,7 @@ async fn wait_for_relay_tasks(
                         },
                         error: err.error,
                         direction: err.direction,
+                        has_half_close: half_close_seen.load(Ordering::Relaxed),
                     })
                 }
             }
@@ -293,6 +305,7 @@ fn finish_after_both_completed(
     downstream_result: OneWayRelayResult,
     upstream_progress: &AtomicU64,
     downstream_progress: &AtomicU64,
+    half_close_seen: &AtomicBool,
 ) -> RelayResult {
     let stats = stats_from_results(
         &upstream_result,
@@ -306,6 +319,7 @@ fn finish_after_both_completed(
             stats,
             error: err.error,
             direction: err.direction,
+            has_half_close: half_close_seen.load(Ordering::Relaxed),
         }),
     }
 }
@@ -339,10 +353,7 @@ mod tests {
         collections::VecDeque,
         io,
         pin::Pin,
-        sync::{
-            atomic::AtomicU64,
-            Arc, Mutex,
-        },
+        sync::{atomic::AtomicU64, Arc, Mutex},
         task::{Context, Poll},
     };
 
@@ -435,6 +446,9 @@ mod tests {
         fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
             let mut visitor = EventVisitor::default();
             event.record(&mut visitor);
+            visitor
+                .fields
+                .insert("level".to_string(), event.metadata().level().to_string());
             self.events
                 .lock()
                 .expect("captured events lock poisoned")
@@ -612,12 +626,22 @@ mod tests {
         assert_has_event(
             &events,
             "relay_half_close",
-            &[("session_id", "15"), ("direction", "upstream"), ("bytes_transferred", "4")],
+            &[
+                ("session_id", "15"),
+                ("direction", "upstream"),
+                ("bytes_transferred", "4"),
+                ("level", "DEBUG"),
+            ],
         );
         assert_has_event(
             &events,
             "relay_half_close",
-            &[("session_id", "15"), ("direction", "downstream"), ("bytes_transferred", "4")],
+            &[
+                ("session_id", "15"),
+                ("direction", "downstream"),
+                ("bytes_transferred", "4"),
+                ("level", "DEBUG"),
+            ],
         );
     }
 
@@ -683,6 +707,7 @@ mod tests {
         assert_eq!(err.stats.bytes_up, 0);
         assert_eq!(err.stats.bytes_down, 0);
         assert_eq!(err.direction, "downstream_read");
+        assert!(!err.has_half_close);
         assert_eq!(err.error.kind(), crate::ErrorKind::Relay);
     }
 }

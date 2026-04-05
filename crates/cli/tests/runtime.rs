@@ -193,7 +193,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
     assert_has_event(
         &events,
         "tcp_connect_success",
-        &[("outbound", "proxy"), ("network", "tcp")],
+        &[("outbound", "proxy"), ("network", "tcp"), ("level", "INFO")],
     );
     assert_event_has_fields(
         &events,
@@ -203,7 +203,11 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
     assert_has_event(
         &events,
         "tls_handshake_start",
-        &[("outbound", "proxy"), ("host", "127.0.0.1")],
+        &[
+            ("outbound", "proxy"),
+            ("host", "127.0.0.1"),
+            ("level", "INFO"),
+        ],
     );
     assert_event_has_fields(
         &events,
@@ -213,7 +217,11 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
     assert_has_event(
         &events,
         "tls_handshake_success",
-        &[("outbound", "proxy"), ("host", "127.0.0.1")],
+        &[
+            ("outbound", "proxy"),
+            ("host", "127.0.0.1"),
+            ("level", "INFO"),
+        ],
     );
     assert_event_has_fields(
         &events,
@@ -223,13 +231,22 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
     assert_has_event(
         &events,
         "relay_start",
-        &[("inbound", "socks-in"), ("outbound", "proxy")],
+        &[
+            ("inbound", "socks-in"),
+            ("outbound", "proxy"),
+            ("level", "INFO"),
+        ],
     );
     assert_event_has_fields(&events, "relay_start", &["session_id", "destination"]);
     assert_has_event(
         &events,
         "session_finish",
-        &[("inbound", "socks-in"), ("outbound", "proxy"), ("success", "true")],
+        &[
+            ("inbound", "socks-in"),
+            ("outbound", "proxy"),
+            ("success", "true"),
+            ("level", "INFO"),
+        ],
     );
 }
 
@@ -274,6 +291,7 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
             bypass: vec![],
         },
     };
+    let (_guard, trace_buffer) = install_test_subscriber();
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let runtime_task = tokio::spawn(async move {
@@ -314,6 +332,40 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
     );
     assert_eq!(received.payload, b"ping");
     let _ = fs::remove_file(trojan_server.certificate_path);
+
+    let events = captured_events(&trace_buffer);
+    assert_has_event(
+        &events,
+        "tcp_connect_success",
+        &[("outbound", "proxy"), ("network", "tcp"), ("level", "INFO")],
+    );
+    assert_has_event(
+        &events,
+        "tls_handshake_start",
+        &[
+            ("outbound", "proxy"),
+            ("host", "127.0.0.1"),
+            ("level", "INFO"),
+        ],
+    );
+    assert_has_event(
+        &events,
+        "tls_handshake_success",
+        &[
+            ("outbound", "proxy"),
+            ("host", "127.0.0.1"),
+            ("level", "INFO"),
+        ],
+    );
+    assert_has_event(
+        &events,
+        "relay_start",
+        &[
+            ("inbound", "socks-in"),
+            ("outbound", "proxy"),
+            ("level", "INFO"),
+        ],
+    );
 }
 
 #[tokio::test]
@@ -370,17 +422,31 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
     assert_has_event(
         &events,
         "direct_connect_attempt",
-        &[("outbound", "direct")],
+        &[
+            ("outbound", "direct"),
+            ("routing_mark", ""),
+            ("level", "INFO"),
+        ],
     );
     assert_event_has_fields(
         &events,
         "direct_connect_attempt",
-        &["session_id", "destination", "resolved_addr", "attempt_index", "routing_mark"],
+        &[
+            "session_id",
+            "destination",
+            "resolved_addr",
+            "attempt_index",
+            "routing_mark",
+        ],
     );
     assert_has_event(
         &events,
         "direct_connect_failed",
-        &[("outbound", "direct")],
+        &[
+            ("outbound", "direct"),
+            ("routing_mark", ""),
+            ("level", "WARN"),
+        ],
     );
     assert_event_has_fields(
         &events,
@@ -397,7 +463,12 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
     assert_has_event(
         &events,
         "session_finish",
-        &[("inbound", "socks-in"), ("outbound", "direct"), ("success", "false")],
+        &[
+            ("inbound", "socks-in"),
+            ("outbound", "direct"),
+            ("success", "false"),
+            ("level", "WARN"),
+        ],
     );
 }
 
@@ -591,32 +662,60 @@ async fn runtime_emits_session_start_and_finish_events() {
     assert_has_event(
         &events,
         "session_finish",
-        &[("inbound", "socks-in"), ("success", "true")],
+        &[
+            ("inbound", "socks-in"),
+            ("success", "true"),
+            ("level", "INFO"),
+        ],
     );
     assert_has_event(
         &events,
         "direct_connect_attempt",
-        &[("outbound", "direct")],
+        &[
+            ("outbound", "direct"),
+            ("routing_mark", ""),
+            ("level", "INFO"),
+        ],
     );
     assert_event_has_fields(
         &events,
         "direct_connect_attempt",
-        &["session_id", "destination", "resolved_addr", "attempt_index", "routing_mark"],
+        &[
+            "session_id",
+            "destination",
+            "resolved_addr",
+            "attempt_index",
+            "routing_mark",
+        ],
     );
     assert_has_event(
         &events,
         "direct_connect_success",
-        &[("outbound", "direct")],
+        &[
+            ("outbound", "direct"),
+            ("routing_mark", ""),
+            ("level", "INFO"),
+        ],
     );
     assert_event_has_fields(
         &events,
         "direct_connect_success",
-        &["session_id", "destination", "resolved_addr", "attempt_index", "routing_mark"],
+        &[
+            "session_id",
+            "destination",
+            "resolved_addr",
+            "attempt_index",
+            "routing_mark",
+        ],
     );
     assert_has_event(
         &events,
         "relay_start",
-        &[("inbound", "socks-in"), ("outbound", "direct")],
+        &[
+            ("inbound", "socks-in"),
+            ("outbound", "direct"),
+            ("level", "INFO"),
+        ],
     );
     assert_event_has_fields(&events, "relay_start", &["session_id", "destination"]);
 }
@@ -763,6 +862,9 @@ where
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let mut visitor = EventVisitor::default();
         event.record(&mut visitor);
+        visitor
+            .fields
+            .insert("level".to_string(), event.metadata().level().to_string());
         self.events
             .lock()
             .expect("captured events lock should not be poisoned")

@@ -13,7 +13,7 @@ use tokio::{
     net::{lookup_host, TcpStream},
     time::timeout,
 };
-use tracing::{debug, warn};
+use tracing::{info, warn};
 use veex_core::{
     error::{ProxyError, Result},
     sanitize_field,
@@ -89,15 +89,13 @@ impl Outbound for DirectOutbound {
             for (idx, address) in addresses.into_iter().enumerate() {
                 let attempt_index = (idx + 1) as u64;
                 let start = Instant::now();
-                debug!(
-                    event = "direct_connect_attempt",
+                log_direct_connect_attempt(
                     session_id,
-                    outbound = %outbound_field,
-                    destination = %destination_field,
-                    resolved_addr = %address,
+                    &outbound_field,
+                    &destination_field,
+                    address,
                     attempt_index,
-                    routing_mark = ?routing_mark,
-                    "direct connect attempt"
+                    routing_mark,
                 );
 
                 match connect_socket(
@@ -109,31 +107,27 @@ impl Outbound for DirectOutbound {
                 .await
                 {
                     Ok(stream) => {
-                        debug!(
-                            event = "direct_connect_success",
+                        log_direct_connect_success(
                             session_id,
-                            outbound = %outbound_field,
-                            destination = %destination_field,
-                            resolved_addr = %address,
+                            &outbound_field,
+                            &destination_field,
+                            address,
                             attempt_index,
-                            routing_mark = ?routing_mark,
-                            elapsed_ms = start.elapsed().as_millis() as u64,
-                            "direct connect success"
+                            routing_mark,
+                            start.elapsed().as_millis() as u64,
                         );
                         return Ok(Box::new(stream) as BoxedAsyncStream);
                     }
                     Err(err) => {
-                        warn!(
-                            event = "direct_connect_failed",
+                        log_direct_connect_failed(
                             session_id,
-                            outbound = %outbound_field,
-                            destination = %destination_field,
-                            resolved_addr = %address,
+                            &outbound_field,
+                            &destination_field,
+                            address,
                             attempt_index,
-                            routing_mark = ?routing_mark,
-                            elapsed_ms = start.elapsed().as_millis() as u64,
-                            error = %err,
-                            "direct connect failed"
+                            routing_mark,
+                            start.elapsed().as_millis() as u64,
+                            &err,
                         );
                         last_error = Some(err);
                     }
@@ -147,6 +141,123 @@ impl Outbound for DirectOutbound {
                 ))
             }))
         })
+    }
+}
+
+fn log_direct_connect_attempt(
+    session_id: u64,
+    outbound_field: &str,
+    destination_field: &str,
+    address: SocketAddr,
+    attempt_index: u64,
+    routing_mark: Option<u32>,
+) {
+    match routing_mark {
+        Some(mark) => {
+            info!(
+                event = "direct_connect_attempt",
+                session_id,
+                outbound = %outbound_field,
+                destination = %destination_field,
+                resolved_addr = %address,
+                attempt_index,
+                routing_mark = mark,
+                "direct connect attempt"
+            );
+        }
+        None => {
+            info!(
+                event = "direct_connect_attempt",
+                session_id,
+                outbound = %outbound_field,
+                destination = %destination_field,
+                resolved_addr = %address,
+                attempt_index,
+                routing_mark = "",
+                "direct connect attempt"
+            );
+        }
+    }
+}
+
+fn log_direct_connect_success(
+    session_id: u64,
+    outbound_field: &str,
+    destination_field: &str,
+    address: SocketAddr,
+    attempt_index: u64,
+    routing_mark: Option<u32>,
+    elapsed_ms: u64,
+) {
+    match routing_mark {
+        Some(mark) => {
+            info!(
+                event = "direct_connect_success",
+                session_id,
+                outbound = %outbound_field,
+                destination = %destination_field,
+                resolved_addr = %address,
+                attempt_index,
+                routing_mark = mark,
+                elapsed_ms,
+                "direct connect success"
+            );
+        }
+        None => {
+            info!(
+                event = "direct_connect_success",
+                session_id,
+                outbound = %outbound_field,
+                destination = %destination_field,
+                resolved_addr = %address,
+                attempt_index,
+                routing_mark = "",
+                elapsed_ms,
+                "direct connect success"
+            );
+        }
+    }
+}
+
+fn log_direct_connect_failed(
+    session_id: u64,
+    outbound_field: &str,
+    destination_field: &str,
+    address: SocketAddr,
+    attempt_index: u64,
+    routing_mark: Option<u32>,
+    elapsed_ms: u64,
+    err: &ProxyError,
+) {
+    match routing_mark {
+        Some(mark) => {
+            warn!(
+                event = "direct_connect_failed",
+                session_id,
+                outbound = %outbound_field,
+                destination = %destination_field,
+                resolved_addr = %address,
+                attempt_index,
+                routing_mark = mark,
+                elapsed_ms,
+                error = %err,
+                "direct connect failed"
+            );
+        }
+        None => {
+            warn!(
+                event = "direct_connect_failed",
+                session_id,
+                outbound = %outbound_field,
+                destination = %destination_field,
+                resolved_addr = %address,
+                attempt_index,
+                routing_mark = "",
+                elapsed_ms,
+                error = %err,
+                "direct connect failed"
+            );
+        }
     }
 }
 
@@ -347,6 +458,9 @@ mod tests {
         fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
             let mut visitor = EventVisitor::default();
             event.record(&mut visitor);
+            visitor
+                .fields
+                .insert("level".to_string(), event.metadata().level().to_string());
             self.events
                 .lock()
                 .expect("captured events lock poisoned")
@@ -465,7 +579,8 @@ mod tests {
                 ("session_id", "1"),
                 ("outbound", "direct"),
                 ("attempt_index", "1"),
-                ("routing_mark", "Some(9)"),
+                ("routing_mark", "9"),
+                ("level", "INFO"),
             ],
         );
         assert_has_event(
@@ -475,7 +590,8 @@ mod tests {
                 ("session_id", "1"),
                 ("outbound", "direct"),
                 ("attempt_index", "1"),
-                ("routing_mark", "Some(9)"),
+                ("routing_mark", "9"),
+                ("level", "INFO"),
             ],
         );
     }
@@ -523,7 +639,8 @@ mod tests {
                 ("session_id", "2"),
                 ("outbound", "direct"),
                 ("attempt_index", "1"),
-                ("routing_mark", "Some(255)"),
+                ("routing_mark", "255"),
+                ("level", "INFO"),
             ],
         );
         assert_has_event(
@@ -533,7 +650,8 @@ mod tests {
                 ("session_id", "2"),
                 ("outbound", "direct"),
                 ("attempt_index", "1"),
-                ("routing_mark", "Some(255)"),
+                ("routing_mark", "255"),
+                ("level", "WARN"),
             ],
         );
     }

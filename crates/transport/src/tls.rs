@@ -13,7 +13,7 @@ use tokio::{
     net::TcpStream,
 };
 use tokio_rustls::TlsConnector;
-use tracing::{debug, warn};
+use tracing::{info, warn};
 use veex_core::{sanitize_field, BoxedAsyncStream, Host, ProxyError, Result};
 
 use crate::tcp::ConnectTraceContext;
@@ -176,7 +176,7 @@ fn log_tls_handshake_start(
 ) {
     match trace {
         Some(trace) => {
-            debug!(
+            info!(
                 event = "tls_handshake_start",
                 session_id = trace.session_id,
                 outbound = %sanitize_field(&trace.outbound),
@@ -188,7 +188,7 @@ fn log_tls_handshake_start(
             );
         }
         None => {
-            debug!(
+            info!(
                 event = "tls_handshake_start",
                 host = %host_field,
                 server_name = %server_name_field,
@@ -208,7 +208,7 @@ fn log_tls_handshake_success(
 ) {
     match trace {
         Some(trace) => {
-            debug!(
+            info!(
                 event = "tls_handshake_success",
                 session_id = trace.session_id,
                 outbound = %sanitize_field(&trace.outbound),
@@ -219,7 +219,7 @@ fn log_tls_handshake_success(
             );
         }
         None => {
-            debug!(
+            info!(
                 event = "tls_handshake_success",
                 host = %host_field,
                 server_name = %server_name_field,
@@ -536,6 +536,9 @@ mod tests {
         fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
             let mut visitor = EventVisitor::default();
             event.record(&mut visitor);
+            visitor
+                .fields
+                .insert("level".to_string(), event.metadata().level().to_string());
             self.events
                 .lock()
                 .expect("captured events lock poisoned")
@@ -618,6 +621,7 @@ mod tests {
                 ("outbound", "proxy"),
                 ("host", "localhost"),
                 ("server_name", "localhost"),
+                ("level", "INFO"),
             ],
         );
         assert_has_event(
@@ -628,6 +632,7 @@ mod tests {
                 ("outbound", "proxy"),
                 ("host", "localhost"),
                 ("server_name", "localhost"),
+                ("level", "INFO"),
             ],
         );
     }
@@ -682,6 +687,7 @@ mod tests {
                 ("outbound", "proxy"),
                 ("host", "localhost"),
                 ("server_name", "localhost"),
+                ("level", "INFO"),
             ],
         );
         assert_has_event(
@@ -692,6 +698,7 @@ mod tests {
                 ("outbound", "proxy"),
                 ("host", "localhost"),
                 ("server_name", "localhost"),
+                ("level", "WARN"),
             ],
         );
     }

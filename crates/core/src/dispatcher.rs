@@ -98,6 +98,7 @@ impl Dispatcher for SimpleDispatcher {
                                 outbound = %outbound_field,
                                 destination = %destination_field,
                                 direction = relay_err.direction,
+                                has_half_close = relay_err.has_half_close,
                                 bytes_up = relay_err.stats.bytes_up,
                                 bytes_down = relay_err.stats.bytes_down,
                                 error_kind = ?relay_err.error.kind(),
@@ -422,6 +423,9 @@ mod tests {
         fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
             let mut visitor = EventVisitor::default();
             event.record(&mut visitor);
+            visitor
+                .fields
+                .insert("level".to_string(), event.metadata().level().to_string());
             self.events
                 .lock()
                 .expect("captured events lock poisoned")
@@ -545,6 +549,7 @@ mod tests {
                 ("inbound", "socks-in"),
                 ("outbound", "proxy"),
                 ("destination", "example.com:443"),
+                ("level", "INFO"),
             ],
         );
         assert_has_event(
@@ -554,8 +559,10 @@ mod tests {
                 ("session_id", "9"),
                 ("outbound", "proxy"),
                 ("direction", "upstream_read"),
+                ("has_half_close", "true"),
                 ("bytes_up", "4"),
                 ("bytes_down", "4"),
+                ("level", "WARN"),
             ],
         );
         assert_has_event(
