@@ -3,6 +3,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
+    time::Instant,
 };
 
 use rustls::pki_types::ServerName;
@@ -12,9 +13,10 @@ use tokio::{
     net::TcpStream,
 };
 use tokio_rustls::TlsConnector;
-use tracing::warn;
+use tracing::{debug, warn};
 use veex_core::{sanitize_field, BoxedAsyncStream, Host, ProxyError, Result};
 
+use crate::tcp::ConnectTraceContext;
 use crate::verifier::{
     build_client_config, validate_certificate_paths, CertificateVerifierOptions, VerifierError,
 };
@@ -109,6 +111,7 @@ pub async fn connect_tls(
     stream: TcpStream,
     host: &Host,
     options: &TlsClientOptions,
+    trace: Option<&ConnectTraceContext>,
 ) -> Result<BoxedAsyncStream> {
     if !options.enabled {
         return Ok(Box::new(stream));
@@ -135,19 +138,21 @@ pub async fn connect_tls(
     let host_field = host.to_string();
     let host_field = sanitize_field(&host_field).into_owned();
     let server_name_field = sanitize_field(&server_name).into_owned();
+    let tls_start = Instant::now();
+
+    log_tls_handshake_start(trace, &host_field, &server_name_field, options);
 
     let stream = connector
         .connect(tls_server_name, stream)
         .await
         .map_err(|err| {
-            warn!(
-                event = "tls_handshake_failed",
-                host = %host_field,
-                server_name = %server_name_field,
-                insecure = options.insecure,
-                disable_sni = options.disable_sni,
-                error = %err,
-                "tls handshake failed"
+            log_tls_handshake_failed(
+                trace,
+                &host_field,
+                &server_name_field,
+                options,
+                tls_start.elapsed(),
+                &err,
             );
             ProxyError::from(TlsError::Handshake {
                 host: host.to_string(),
@@ -158,7 +163,109 @@ pub async fn connect_tls(
             })
         })?;
 
+    log_tls_handshake_success(trace, &host_field, &server_name_field, tls_start.elapsed());
+
     Ok(Box::new(TlsCloseNotifyTolerantStream::new(stream)))
+}
+
+fn log_tls_handshake_start(
+    trace: Option<&ConnectTraceContext>,
+    host_field: &str,
+    server_name_field: &str,
+    options: &TlsClientOptions,
+) {
+    match trace {
+        Some(trace) => {
+            debug!(
+                event = "tls_handshake_start",
+                session_id = trace.session_id,
+                outbound = %sanitize_field(&trace.outbound),
+                host = %host_field,
+                server_name = %server_name_field,
+                insecure = options.insecure,
+                disable_sni = options.disable_sni,
+                "tls handshake start"
+            );
+        }
+        None => {
+            debug!(
+                event = "tls_handshake_start",
+                host = %host_field,
+                server_name = %server_name_field,
+                insecure = options.insecure,
+                disable_sni = options.disable_sni,
+                "tls handshake start"
+            );
+        }
+    }
+}
+
+fn log_tls_handshake_success(
+    trace: Option<&ConnectTraceContext>,
+    host_field: &str,
+    server_name_field: &str,
+    elapsed: std::time::Duration,
+) {
+    match trace {
+        Some(trace) => {
+            debug!(
+                event = "tls_handshake_success",
+                session_id = trace.session_id,
+                outbound = %sanitize_field(&trace.outbound),
+                host = %host_field,
+                server_name = %server_name_field,
+                elapsed_ms = elapsed.as_millis() as u64,
+                "tls handshake success"
+            );
+        }
+        None => {
+            debug!(
+                event = "tls_handshake_success",
+                host = %host_field,
+                server_name = %server_name_field,
+                elapsed_ms = elapsed.as_millis() as u64,
+                "tls handshake success"
+            );
+        }
+    }
+}
+
+fn log_tls_handshake_failed(
+    trace: Option<&ConnectTraceContext>,
+    host_field: &str,
+    server_name_field: &str,
+    options: &TlsClientOptions,
+    elapsed: std::time::Duration,
+    err: &io::Error,
+) {
+    match trace {
+        Some(trace) => {
+            warn!(
+                event = "tls_handshake_failed",
+                session_id = trace.session_id,
+                outbound = %sanitize_field(&trace.outbound),
+                host = %host_field,
+                server_name = %server_name_field,
+                insecure = options.insecure,
+                disable_sni = options.disable_sni,
+                elapsed_ms = elapsed.as_millis() as u64,
+                error = %err,
+                "tls handshake failed"
+            );
+        }
+        None => {
+            warn!(
+                event = "tls_handshake_failed",
+                host = %host_field,
+                server_name = %server_name_field,
+                insecure = options.insecure,
+                disable_sni = options.disable_sni,
+                elapsed_ms = elapsed.as_millis() as u64,
+                error = %err,
+                "tls handshake failed"
+            );
+        }
+    }
 }
 
 fn is_ignorable_tls_close_notify_error(err: &io::Error) -> bool {
@@ -220,10 +327,11 @@ where
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeMap,
         fs, io,
         net::IpAddr,
         path::PathBuf,
-        sync::Arc,
+        sync::{Arc, Mutex},
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -234,14 +342,22 @@ mod tests {
     };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
+        net::{TcpListener, TcpStream},
     };
     use tokio_rustls::TlsAcceptor;
+    use tracing::{
+        field::{Field, Visit},
+        Event, Subscriber,
+    };
+    use tracing_subscriber::{
+        layer::Context as LayerContext, prelude::*, registry::LookupSpan, Layer,
+    };
     use veex_core::Host;
 
     use super::{
         connect_tls, is_ignorable_tls_close_notify_error, server_name_for_tls, TlsClientOptions,
     };
+    use crate::tcp::ConnectTraceContext;
 
     #[test]
     fn derives_server_name_from_domain() {
@@ -280,6 +396,7 @@ mod tests {
                 insecure: true,
                 ..TlsClientOptions::default()
             },
+            None,
         )
         .await
         .expect("insecure tls should connect");
@@ -319,6 +436,7 @@ mod tests {
                 ca_path: Some(server.certificate_path.to_string_lossy().into_owned()),
                 ..TlsClientOptions::default()
             },
+            None,
         )
         .await
         .expect("ca_path should trust the self-signed certificate");
@@ -351,6 +469,7 @@ mod tests {
                 certificate_path: Some(server.certificate_path.to_string_lossy().into_owned()),
                 ..TlsClientOptions::default()
             },
+            None,
         )
         .await
         .expect("certificate_path should pin the server certificate");
@@ -366,6 +485,215 @@ mod tests {
             .await
             .expect("client read should succeed");
         assert_eq!(&response, b"pong");
+    }
+
+    #[derive(Clone, Debug, Default, Eq, PartialEq)]
+    struct CapturedEvent {
+        fields: BTreeMap<String, String>,
+    }
+
+    #[derive(Default)]
+    struct EventVisitor {
+        fields: BTreeMap<String, String>,
+    }
+
+    impl Visit for EventVisitor {
+        fn record_bool(&mut self, field: &Field, value: bool) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .insert(field.name().to_string(), format!("{value:?}"));
+        }
+    }
+
+    #[derive(Clone)]
+    struct CaptureLayer {
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    impl<S> Layer<S> for CaptureLayer
+    where
+        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    {
+        fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
+            let mut visitor = EventVisitor::default();
+            event.record(&mut visitor);
+            self.events
+                .lock()
+                .expect("captured events lock poisoned")
+                .push(CapturedEvent {
+                    fields: visitor.fields,
+                });
+        }
+    }
+
+    fn install_test_subscriber() -> (
+        tracing::subscriber::DefaultGuard,
+        Arc<Mutex<Vec<CapturedEvent>>>,
+    ) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(CaptureLayer {
+            events: Arc::clone(&events),
+        });
+
+        (tracing::subscriber::set_default(subscriber), events)
+    }
+
+    fn captured_events(buffer: &Arc<Mutex<Vec<CapturedEvent>>>) -> Vec<CapturedEvent> {
+        buffer
+            .lock()
+            .expect("captured events lock poisoned")
+            .clone()
+    }
+
+    fn assert_has_event(
+        events: &[CapturedEvent],
+        event_name: &str,
+        expected_fields: &[(&str, &str)],
+    ) {
+        let matched = events.iter().any(|event| {
+            event.fields.get("event").map(String::as_str) == Some(event_name)
+                && expected_fields.iter().all(|(key, expected)| {
+                    event.fields.get(*key).map(String::as_str) == Some(*expected)
+                })
+        });
+
+        assert!(
+            matched,
+            "expected event `{event_name}` with fields {:?}, captured events: {:?}",
+            expected_fields, events
+        );
+    }
+
+    #[tokio::test]
+    async fn tls_handshake_emits_start_and_success_with_trace_context() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let server = spawn_tls_server("localhost").await;
+        let stream = TcpStream::connect(server.addr)
+            .await
+            .expect("tcp connect should succeed");
+
+        let stream = connect_tls(
+            stream,
+            &Host::Domain("localhost".into()),
+            &TlsClientOptions {
+                enabled: true,
+                insecure: true,
+                server_name: Some("localhost".into()),
+                ..TlsClientOptions::default()
+            },
+            Some(&ConnectTraceContext {
+                session_id: 41,
+                outbound: "proxy".into(),
+            }),
+        )
+        .await
+        .expect("tls handshake should succeed");
+        drop(stream);
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "tls_handshake_start",
+            &[
+                ("session_id", "41"),
+                ("outbound", "proxy"),
+                ("host", "localhost"),
+                ("server_name", "localhost"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "tls_handshake_success",
+            &[
+                ("session_id", "41"),
+                ("outbound", "proxy"),
+                ("host", "localhost"),
+                ("server_name", "localhost"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn tls_handshake_failed_event_includes_trace_context() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept should succeed");
+            stream
+                .write_all(b"not-tls")
+                .await
+                .expect("server write should succeed");
+        });
+        let stream = TcpStream::connect(addr)
+            .await
+            .expect("tcp connect should succeed");
+
+        let err = match connect_tls(
+            stream,
+            &Host::Domain("localhost".into()),
+            &TlsClientOptions {
+                enabled: true,
+                insecure: true,
+                server_name: Some("localhost".into()),
+                ..TlsClientOptions::default()
+            },
+            Some(&ConnectTraceContext {
+                session_id: 42,
+                outbound: "proxy".into(),
+            }),
+        )
+        .await
+        {
+            Ok(_) => panic!("tls handshake should fail"),
+            Err(err) => err,
+        };
+        server.await.expect("server task should join");
+
+        assert_eq!(err.kind(), veex_core::ErrorKind::Tls);
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "tls_handshake_start",
+            &[
+                ("session_id", "42"),
+                ("outbound", "proxy"),
+                ("host", "localhost"),
+                ("server_name", "localhost"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "tls_handshake_failed",
+            &[
+                ("session_id", "42"),
+                ("outbound", "proxy"),
+                ("host", "localhost"),
+                ("server_name", "localhost"),
+            ],
+        );
     }
 
     struct TestTlsServer {

@@ -2,7 +2,9 @@ use std::{net::IpAddr, str::FromStr, time::Duration};
 
 use tokio::io::AsyncWriteExt;
 use veex_core::{BoxFuture, BoxedAsyncStream, Host, Outbound, ProxyError, Result, SessionContext};
-use veex_transport::{connect_host, connect_tls, TcpConnectOptions, TlsClientOptions};
+use veex_transport::{
+    connect_host, connect_tls, ConnectTraceContext, TcpConnectOptions, TlsClientOptions,
+};
 
 use crate::request::build_trojan_request;
 
@@ -83,22 +85,28 @@ impl Outbound for TrojanOutbound {
 
     fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
         let this = self.clone();
+        let session_id = ctx.meta.id;
         let destination = ctx.meta.destination.clone();
         let buffered_payload = ctx.state.buffered_payload.clone();
 
         Box::pin(async move {
             this.validate()?;
+            let trace = ConnectTraceContext {
+                session_id,
+                outbound: this.tag.clone(),
+            };
 
             let stream = connect_host(
                 &this.server,
                 this.server_port,
                 TcpConnectOptions {
                     timeout: this.connect_timeout,
+                    trace: Some(trace.clone()),
                 },
             )
             .await?;
 
-            let mut stream = connect_tls(stream, &this.server, &this.tls).await?;
+            let mut stream = connect_tls(stream, &this.server, &this.tls, Some(&trace)).await?;
             let request = build_trojan_request(&this.password, &destination, &buffered_payload)?;
             stream.write_all(&request).await.map_err(|err| {
                 ProxyError::Protocol(format!("failed to write trojan request: {err}"))

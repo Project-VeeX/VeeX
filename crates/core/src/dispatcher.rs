@@ -6,7 +6,7 @@ use veex_observability::SessionSummary;
 use crate::{
     error::ProxyError,
     logging::sanitize_field,
-    relay::relay_bidirectional,
+    relay::{relay_bidirectional_with_trace, RelayTraceContext},
     router::Router,
     traits::{BoxFuture, Dispatcher, Outbound},
     types::{BoxedAsyncStream, RouteReason, SessionContext},
@@ -60,7 +60,23 @@ impl Dispatcher for SimpleDispatcher {
 
             let (summary, result) = match outbound.connect(&ctx).await {
                 Ok(outbound_stream) => {
-                    match relay_bidirectional(inbound_stream, outbound_stream).await {
+                    info!(
+                        event = "relay_start",
+                        session_id = ctx.meta.id,
+                        inbound = %inbound_field,
+                        outbound = %outbound_field,
+                        destination = %destination_field,
+                        "relay started"
+                    );
+                    match relay_bidirectional_with_trace(
+                        inbound_stream,
+                        outbound_stream,
+                        Some(RelayTraceContext {
+                            session_id: ctx.meta.id,
+                        }),
+                    )
+                    .await
+                    {
                         Ok(stats) => (
                             SessionSummary::success(
                                 ctx.meta.id,
@@ -75,6 +91,19 @@ impl Dispatcher for SimpleDispatcher {
                             Ok(()),
                         ),
                         Err(relay_err) => {
+                            warn!(
+                                event = "relay_failed",
+                                session_id = ctx.meta.id,
+                                inbound = %inbound_field,
+                                outbound = %outbound_field,
+                                destination = %destination_field,
+                                direction = relay_err.direction,
+                                bytes_up = relay_err.stats.bytes_up,
+                                bytes_down = relay_err.stats.bytes_down,
+                                error_kind = ?relay_err.error.kind(),
+                                error = %relay_err.error,
+                                "relay failed"
+                            );
                             let error_kind = relay_err.error.kind();
                             (
                                 SessionSummary::failure(
@@ -508,6 +537,27 @@ mod tests {
             .lock()
             .expect("captured events lock poisoned")
             .clone();
+        assert_has_event(
+            &events,
+            "relay_start",
+            &[
+                ("session_id", "9"),
+                ("inbound", "socks-in"),
+                ("outbound", "proxy"),
+                ("destination", "example.com:443"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "relay_failed",
+            &[
+                ("session_id", "9"),
+                ("outbound", "proxy"),
+                ("direction", "upstream_read"),
+                ("bytes_up", "4"),
+                ("bytes_down", "4"),
+            ],
+        );
         assert_has_event(
             &events,
             "session_finish",

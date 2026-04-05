@@ -1,15 +1,22 @@
 //! Direct outbound implementation kept outside `veex-core` so platform-specific
 //! egress behavior can evolve without polluting core runtime abstractions.
 
-use std::{fmt, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::{
     net::{lookup_host, TcpStream},
     time::timeout,
 };
+use tracing::{debug, warn};
 use veex_core::{
     error::{ProxyError, Result},
+    sanitize_field,
     traits::{BoxFuture, Outbound},
     types::{BoxedAsyncStream, Host, SessionContext},
 };
@@ -68,6 +75,9 @@ impl Outbound for DirectOutbound {
 
     fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
         let destination = ctx.meta.destination.clone();
+        let destination_field = sanitize_field(&destination.to_string()).into_owned();
+        let outbound_field = sanitize_field(self.tag()).into_owned();
+        let session_id = ctx.meta.id;
         let timeout_duration = self.connect_timeout;
         let routing_mark = self.routing_mark;
         let marked_connector = Arc::clone(&self.marked_connector);
@@ -76,7 +86,20 @@ impl Outbound for DirectOutbound {
             let addresses = resolve_destination(&destination.host, destination.port).await?;
             let mut last_error = None;
 
-            for address in addresses {
+            for (idx, address) in addresses.into_iter().enumerate() {
+                let attempt_index = (idx + 1) as u64;
+                let start = Instant::now();
+                debug!(
+                    event = "direct_connect_attempt",
+                    session_id,
+                    outbound = %outbound_field,
+                    destination = %destination_field,
+                    resolved_addr = %address,
+                    attempt_index,
+                    routing_mark = ?routing_mark,
+                    "direct connect attempt"
+                );
+
                 match connect_socket(
                     address,
                     timeout_duration,
@@ -85,8 +108,35 @@ impl Outbound for DirectOutbound {
                 )
                 .await
                 {
-                    Ok(stream) => return Ok(Box::new(stream) as BoxedAsyncStream),
-                    Err(err) => last_error = Some(err),
+                    Ok(stream) => {
+                        debug!(
+                            event = "direct_connect_success",
+                            session_id,
+                            outbound = %outbound_field,
+                            destination = %destination_field,
+                            resolved_addr = %address,
+                            attempt_index,
+                            routing_mark = ?routing_mark,
+                            elapsed_ms = start.elapsed().as_millis() as u64,
+                            "direct connect success"
+                        );
+                        return Ok(Box::new(stream) as BoxedAsyncStream);
+                    }
+                    Err(err) => {
+                        warn!(
+                            event = "direct_connect_failed",
+                            session_id,
+                            outbound = %outbound_field,
+                            destination = %destination_field,
+                            resolved_addr = %address,
+                            attempt_index,
+                            routing_mark = ?routing_mark,
+                            elapsed_ms = start.elapsed().as_millis() as u64,
+                            error = %err,
+                            "direct connect failed"
+                        );
+                        last_error = Some(err);
+                    }
                 }
             }
 
@@ -228,17 +278,121 @@ async fn connect_marked_socket_impl(address: SocketAddr, _routing_mark: u32) -> 
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeMap,
         collections::HashMap,
         sync::{Arc, Mutex},
         time::Duration,
     };
 
     use tokio::net::{TcpListener, TcpStream};
+    use tracing::{
+        field::{Field, Visit},
+        Event, Subscriber,
+    };
+    use tracing_subscriber::{
+        layer::Context as LayerContext, prelude::*, registry::LookupSpan, Layer,
+    };
     use veex_core::{
         BoxFuture, Destination, Host, Network, Outbound, ProxyError, SessionContext, SessionMeta,
     };
 
     use super::DirectOutbound;
+
+    #[derive(Clone, Debug, Default, Eq, PartialEq)]
+    struct CapturedEvent {
+        fields: BTreeMap<String, String>,
+    }
+
+    #[derive(Default)]
+    struct EventVisitor {
+        fields: BTreeMap<String, String>,
+    }
+
+    impl Visit for EventVisitor {
+        fn record_bool(&mut self, field: &Field, value: bool) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .insert(field.name().to_string(), format!("{value:?}"));
+        }
+    }
+
+    #[derive(Clone)]
+    struct CaptureLayer {
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    impl<S> Layer<S> for CaptureLayer
+    where
+        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    {
+        fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
+            let mut visitor = EventVisitor::default();
+            event.record(&mut visitor);
+            self.events
+                .lock()
+                .expect("captured events lock poisoned")
+                .push(CapturedEvent {
+                    fields: visitor.fields,
+                });
+        }
+    }
+
+    fn install_test_subscriber() -> (
+        tracing::subscriber::DefaultGuard,
+        Arc<Mutex<Vec<CapturedEvent>>>,
+    ) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(CaptureLayer {
+            events: Arc::clone(&events),
+        });
+
+        (tracing::subscriber::set_default(subscriber), events)
+    }
+
+    fn captured_events(buffer: &Arc<Mutex<Vec<CapturedEvent>>>) -> Vec<CapturedEvent> {
+        buffer
+            .lock()
+            .expect("captured events lock poisoned")
+            .clone()
+    }
+
+    fn assert_has_event(
+        events: &[CapturedEvent],
+        event_name: &str,
+        expected_fields: &[(&str, &str)],
+    ) {
+        let matched = events.iter().any(|event| {
+            event.fields.get("event").map(String::as_str) == Some(event_name)
+                && expected_fields.iter().all(|(key, expected)| {
+                    event.fields.get(*key).map(String::as_str) == Some(*expected)
+                })
+        });
+
+        assert!(
+            matched,
+            "expected event `{event_name}` with fields {:?}, captured events: {:?}",
+            expected_fields, events
+        );
+    }
 
     #[test]
     fn direct_outbound_is_constructible_for_dispatcher_registration() {
@@ -252,6 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn direct_outbound_uses_marked_connector_when_routing_mark_is_set() {
+        let (_guard, trace_buffer) = install_test_subscriber();
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("listener should bind");
@@ -300,6 +455,86 @@ mod tests {
         assert_eq!(
             *captured_mark.lock().expect("mark mutex should lock"),
             Some(9)
+        );
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "direct_connect_attempt",
+            &[
+                ("session_id", "1"),
+                ("outbound", "direct"),
+                ("attempt_index", "1"),
+                ("routing_mark", "Some(9)"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "direct_connect_success",
+            &[
+                ("session_id", "1"),
+                ("outbound", "direct"),
+                ("attempt_index", "1"),
+                ("routing_mark", "Some(9)"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn direct_outbound_emits_failed_event_with_routing_mark() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let connector = Arc::new(move |_connect_address, routing_mark| {
+            Box::pin(async move {
+                Err(ProxyError::Dial(format!(
+                    "test marked connector rejected routing_mark={routing_mark}"
+                )))
+            }) as BoxFuture<'static, TcpStream>
+        });
+        let direct = DirectOutbound {
+            tag: "direct".into(),
+            connect_timeout: Some(Duration::from_secs(1)),
+            routing_mark: Some(255),
+            marked_connector: connector,
+        };
+        let ctx = SessionContext::new(
+            SessionMeta {
+                id: 2,
+                network: Network::Tcp,
+                inbound_tag: "socks-in".into(),
+                peer: "127.0.0.1:30000".parse().expect("peer addr should parse"),
+                destination: Destination::new(Host::Ip("127.0.0.1".parse().unwrap()), 8080),
+                start: std::time::Instant::now(),
+            },
+            Vec::new(),
+        );
+
+        let err = match direct.connect(&ctx).await {
+            Ok(_) => panic!("marked direct outbound should fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), veex_core::ErrorKind::Dial);
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "direct_connect_attempt",
+            &[
+                ("session_id", "2"),
+                ("outbound", "direct"),
+                ("attempt_index", "1"),
+                ("routing_mark", "Some(255)"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "direct_connect_failed",
+            &[
+                ("session_id", "2"),
+                ("outbound", "direct"),
+                ("attempt_index", "1"),
+                ("routing_mark", "Some(255)"),
+            ],
         );
     }
 }

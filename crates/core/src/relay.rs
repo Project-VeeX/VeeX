@@ -5,6 +5,7 @@ use std::sync::{
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::task::JoinError;
+use tracing::debug;
 
 use crate::{error::ProxyError, types::BoxedAsyncStream};
 
@@ -18,9 +19,15 @@ pub struct RelayStats {
 pub struct RelayErrorWithStats {
     pub stats: RelayStats,
     pub error: ProxyError,
+    pub direction: &'static str,
 }
 
 pub type RelayResult = std::result::Result<RelayStats, RelayErrorWithStats>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RelayTraceContext {
+    pub session_id: u64,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Direction {
@@ -35,11 +42,40 @@ impl Direction {
             Self::Downstream => "downstream",
         }
     }
+
+    fn read_failure(self) -> &'static str {
+        match self {
+            Self::Upstream => "upstream_read",
+            Self::Downstream => "downstream_read",
+        }
+    }
+
+    fn write_failure(self) -> &'static str {
+        match self {
+            Self::Upstream => "upstream_write",
+            Self::Downstream => "downstream_write",
+        }
+    }
+
+    fn shutdown_failure(self) -> &'static str {
+        match self {
+            Self::Upstream => "upstream_shutdown",
+            Self::Downstream => "downstream_shutdown",
+        }
+    }
+
+    fn join_failure(self) -> &'static str {
+        match self {
+            Self::Upstream => "upstream_task",
+            Self::Downstream => "downstream_task",
+        }
+    }
 }
 
 #[derive(Debug)]
 struct OneWayRelayError {
     partial_bytes: u64,
+    direction: &'static str,
     error: ProxyError,
 }
 
@@ -48,6 +84,14 @@ type OneWayRelayResult = std::result::Result<u64, OneWayRelayError>;
 pub async fn relay_bidirectional(
     inbound_stream: BoxedAsyncStream,
     outbound_stream: BoxedAsyncStream,
+) -> RelayResult {
+    relay_bidirectional_with_trace(inbound_stream, outbound_stream, None).await
+}
+
+pub(crate) async fn relay_bidirectional_with_trace(
+    inbound_stream: BoxedAsyncStream,
+    outbound_stream: BoxedAsyncStream,
+    trace: Option<RelayTraceContext>,
 ) -> RelayResult {
     let (inbound_reader, inbound_writer) = tokio::io::split(inbound_stream);
     let (outbound_reader, outbound_writer) = tokio::io::split(outbound_stream);
@@ -59,12 +103,14 @@ pub async fn relay_bidirectional(
         outbound_writer,
         Direction::Upstream,
         Arc::clone(&upstream_progress),
+        trace,
     ));
     let downstream = tokio::spawn(relay_one_way(
         outbound_reader,
         inbound_writer,
         Direction::Downstream,
         Arc::clone(&downstream_progress),
+        trace,
     ));
 
     wait_for_relay_tasks(
@@ -81,6 +127,7 @@ async fn relay_one_way<R, W>(
     mut writer: W,
     direction: Direction,
     progress: Arc<AtomicU64>,
+    trace: Option<RelayTraceContext>,
 ) -> OneWayRelayResult
 where
     R: AsyncRead + Unpin,
@@ -95,6 +142,7 @@ where
             .await
             .map_err(|err| OneWayRelayError {
                 partial_bytes: transferred,
+                direction: direction.read_failure(),
                 error: ProxyError::relay(format!(
                     "{} relay read failed: {}",
                     direction.as_str(),
@@ -103,8 +151,18 @@ where
             })?;
 
         if read == 0 {
+            if let Some(trace) = trace {
+                debug!(
+                    event = "relay_half_close",
+                    session_id = trace.session_id,
+                    direction = direction.as_str(),
+                    bytes_transferred = transferred,
+                    "relay half close"
+                );
+            }
             writer.shutdown().await.map_err(|err| OneWayRelayError {
                 partial_bytes: transferred,
+                direction: direction.shutdown_failure(),
                 error: ProxyError::relay(format!(
                     "{} relay shutdown failed after eof: {}",
                     direction.as_str(),
@@ -120,6 +178,7 @@ where
             .await
             .map_err(|err| OneWayRelayError {
                 partial_bytes: transferred,
+                direction: direction.write_failure(),
                 error: ProxyError::relay(format!(
                     "{} relay write failed: {}",
                     direction.as_str(),
@@ -166,6 +225,7 @@ async fn wait_for_relay_tasks(
                             bytes_down: downstream_progress.load(Ordering::Relaxed),
                         },
                         error: err.error,
+                        direction: err.direction,
                     })
                 }
             }
@@ -201,6 +261,7 @@ async fn wait_for_relay_tasks(
                                 .max(downstream_progress.load(Ordering::Relaxed)),
                         },
                         error: err.error,
+                        direction: err.direction,
                     })
                 }
             }
@@ -217,6 +278,7 @@ fn map_join_result(
         Ok(result) => result,
         Err(err) => Err(OneWayRelayError {
             partial_bytes: progress.load(Ordering::Relaxed),
+            direction: direction.join_failure(),
             error: ProxyError::relay(format!(
                 "{} relay task join failed: {}",
                 direction.as_str(),
@@ -243,6 +305,7 @@ fn finish_after_both_completed(
         (Err(err), _) | (_, Err(err)) => Err(RelayErrorWithStats {
             stats,
             error: err.error,
+            direction: err.direction,
         }),
     }
 }
@@ -272,10 +335,14 @@ fn stats_from_results(
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeMap,
         collections::VecDeque,
         io,
         pin::Pin,
-        sync::atomic::AtomicU64,
+        sync::{
+            atomic::AtomicU64,
+            Arc, Mutex,
+        },
         task::{Context, Poll},
     };
 
@@ -283,8 +350,18 @@ mod tests {
         io::{AsyncRead, AsyncWrite, ReadBuf},
         time::Duration,
     };
+    use tracing::{
+        field::{Field, Visit},
+        Event, Subscriber,
+    };
+    use tracing_subscriber::{
+        layer::Context as LayerContext, prelude::*, registry::LookupSpan, Layer,
+    };
 
-    use super::{map_join_result, relay_bidirectional, Direction, OneWayRelayError};
+    use super::{
+        map_join_result, relay_bidirectional, relay_bidirectional_with_trace, Direction,
+        OneWayRelayError, RelayTraceContext,
+    };
     use crate::types::BoxedAsyncStream;
 
     enum ReadStep {
@@ -308,6 +385,102 @@ mod tests {
     }
 
     struct PendingStream;
+
+    #[derive(Clone, Debug, Default, Eq, PartialEq)]
+    struct CapturedEvent {
+        fields: BTreeMap<String, String>,
+    }
+
+    #[derive(Default)]
+    struct EventVisitor {
+        fields: BTreeMap<String, String>,
+    }
+
+    impl Visit for EventVisitor {
+        fn record_bool(&mut self, field: &Field, value: bool) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .insert(field.name().to_string(), format!("{value:?}"));
+        }
+    }
+
+    #[derive(Clone)]
+    struct CaptureLayer {
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    impl<S> Layer<S> for CaptureLayer
+    where
+        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    {
+        fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
+            let mut visitor = EventVisitor::default();
+            event.record(&mut visitor);
+            self.events
+                .lock()
+                .expect("captured events lock poisoned")
+                .push(CapturedEvent {
+                    fields: visitor.fields,
+                });
+        }
+    }
+
+    fn install_test_subscriber() -> (
+        tracing::subscriber::DefaultGuard,
+        Arc<Mutex<Vec<CapturedEvent>>>,
+    ) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(CaptureLayer {
+            events: Arc::clone(&events),
+        });
+
+        (tracing::subscriber::set_default(subscriber), events)
+    }
+
+    fn captured_events(buffer: &Arc<Mutex<Vec<CapturedEvent>>>) -> Vec<CapturedEvent> {
+        buffer
+            .lock()
+            .expect("captured events lock poisoned")
+            .clone()
+    }
+
+    fn assert_has_event(
+        events: &[CapturedEvent],
+        event_name: &str,
+        expected_fields: &[(&str, &str)],
+    ) {
+        let matched = events.iter().any(|event| {
+            event.fields.get("event").map(String::as_str) == Some(event_name)
+                && expected_fields.iter().all(|(key, expected)| {
+                    event.fields.get(*key).map(String::as_str) == Some(*expected)
+                })
+        });
+
+        assert!(
+            matched,
+            "expected event `{event_name}` with fields {:?}, captured events: {:?}",
+            expected_fields, events
+        );
+    }
 
     impl AsyncRead for ScriptedStream {
         fn poll_read(
@@ -413,6 +586,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn relay_half_close_event_is_emitted_on_eof() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let inbound: BoxedAsyncStream = Box::new(ScriptedStream::new([
+            ReadStep::Data(b"ping"),
+            ReadStep::Eof,
+        ]));
+        let outbound: BoxedAsyncStream = Box::new(ScriptedStream::new([
+            ReadStep::Data(b"pong"),
+            ReadStep::Eof,
+        ]));
+
+        let stats = relay_bidirectional_with_trace(
+            inbound,
+            outbound,
+            Some(RelayTraceContext { session_id: 15 }),
+        )
+        .await
+        .expect("relay should succeed");
+
+        assert_eq!(stats.bytes_up, 4);
+        assert_eq!(stats.bytes_down, 4);
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "relay_half_close",
+            &[("session_id", "15"), ("direction", "upstream"), ("bytes_transferred", "4")],
+        );
+        assert_has_event(
+            &events,
+            "relay_half_close",
+            &[("session_id", "15"), ("direction", "downstream"), ("bytes_transferred", "4")],
+        );
+    }
+
+    #[tokio::test]
     async fn downstream_failure_keeps_partial_stats() {
         let inbound: BoxedAsyncStream = Box::new(ScriptedStream::new([
             ReadStep::Data(b"ping"),
@@ -445,6 +654,7 @@ mod tests {
             .expect_err("join error should map to relay error");
 
         assert_eq!(err.partial_bytes, 0);
+        assert_eq!(err.direction, "upstream_task");
         assert_eq!(err.error.kind(), crate::ErrorKind::Relay);
         assert!(
             err.error
@@ -472,6 +682,7 @@ mod tests {
 
         assert_eq!(err.stats.bytes_up, 0);
         assert_eq!(err.stats.bytes_down, 0);
+        assert_eq!(err.direction, "downstream_read");
         assert_eq!(err.error.kind(), crate::ErrorKind::Relay);
     }
 }

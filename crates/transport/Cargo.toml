@@ -16,4 +16,5 @@ tokio-rustls.workspace = true
 
 [dev-dependencies]
 rcgen = "0.13"
+tracing-subscriber.workspace = true
 

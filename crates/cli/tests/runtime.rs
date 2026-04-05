@@ -141,6 +141,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
             bypass: vec![],
         },
     };
+    let (_guard, trace_buffer) = install_test_subscriber();
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let runtime_task = tokio::spawn(async move {
@@ -177,6 +178,59 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
     );
     assert_eq!(received.payload, b"ping");
     let _ = fs::remove_file(trojan_server.certificate_path);
+
+    let events = captured_events(&trace_buffer);
+    assert_has_event(
+        &events,
+        "tcp_connect_attempt",
+        &[("outbound", "proxy"), ("network", "tcp")],
+    );
+    assert_event_has_fields(
+        &events,
+        "tcp_connect_attempt",
+        &["session_id", "resolved_addr", "attempt_index"],
+    );
+    assert_has_event(
+        &events,
+        "tcp_connect_success",
+        &[("outbound", "proxy"), ("network", "tcp")],
+    );
+    assert_event_has_fields(
+        &events,
+        "tcp_connect_success",
+        &["session_id", "resolved_addr", "attempt_index"],
+    );
+    assert_has_event(
+        &events,
+        "tls_handshake_start",
+        &[("outbound", "proxy"), ("host", "127.0.0.1")],
+    );
+    assert_event_has_fields(
+        &events,
+        "tls_handshake_start",
+        &["session_id", "server_name"],
+    );
+    assert_has_event(
+        &events,
+        "tls_handshake_success",
+        &[("outbound", "proxy"), ("host", "127.0.0.1")],
+    );
+    assert_event_has_fields(
+        &events,
+        "tls_handshake_success",
+        &["session_id", "server_name"],
+    );
+    assert_has_event(
+        &events,
+        "relay_start",
+        &[("inbound", "socks-in"), ("outbound", "proxy")],
+    );
+    assert_event_has_fields(&events, "relay_start", &["session_id", "destination"]);
+    assert_has_event(
+        &events,
+        "session_finish",
+        &[("inbound", "socks-in"), ("outbound", "proxy"), ("success", "true")],
+    );
 }
 
 #[tokio::test]
@@ -285,6 +339,7 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
             bypass: vec![],
         },
     };
+    let (_guard, trace_buffer) = install_test_subscriber();
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let runtime_task = tokio::spawn(async move {
@@ -310,6 +365,40 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
         .await
         .expect("runtime task should join")
         .expect("runtime should stop cleanly");
+
+    let events = captured_events(&trace_buffer);
+    assert_has_event(
+        &events,
+        "direct_connect_attempt",
+        &[("outbound", "direct")],
+    );
+    assert_event_has_fields(
+        &events,
+        "direct_connect_attempt",
+        &["session_id", "destination", "resolved_addr", "attempt_index", "routing_mark"],
+    );
+    assert_has_event(
+        &events,
+        "direct_connect_failed",
+        &[("outbound", "direct")],
+    );
+    assert_event_has_fields(
+        &events,
+        "direct_connect_failed",
+        &[
+            "session_id",
+            "destination",
+            "resolved_addr",
+            "attempt_index",
+            "routing_mark",
+            "error",
+        ],
+    );
+    assert_has_event(
+        &events,
+        "session_finish",
+        &[("inbound", "socks-in"), ("outbound", "direct"), ("success", "false")],
+    );
 }
 
 #[tokio::test]
@@ -504,6 +593,32 @@ async fn runtime_emits_session_start_and_finish_events() {
         "session_finish",
         &[("inbound", "socks-in"), ("success", "true")],
     );
+    assert_has_event(
+        &events,
+        "direct_connect_attempt",
+        &[("outbound", "direct")],
+    );
+    assert_event_has_fields(
+        &events,
+        "direct_connect_attempt",
+        &["session_id", "destination", "resolved_addr", "attempt_index", "routing_mark"],
+    );
+    assert_has_event(
+        &events,
+        "direct_connect_success",
+        &[("outbound", "direct")],
+    );
+    assert_event_has_fields(
+        &events,
+        "direct_connect_success",
+        &["session_id", "destination", "resolved_addr", "attempt_index", "routing_mark"],
+    );
+    assert_has_event(
+        &events,
+        "relay_start",
+        &[("inbound", "socks-in"), ("outbound", "direct")],
+    );
+    assert_event_has_fields(&events, "relay_start", &["session_id", "destination"]);
 }
 
 #[tokio::test]
