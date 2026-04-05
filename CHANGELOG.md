@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1
+
+- Added session-aware tracing for Trojan transport connect and TLS handshake paths so a session can be followed from route selection into transport setup.
+- Added structured direct outbound connect events, including stable `routing_mark` fields suitable for non-debug log collection and grep-based diagnostics.
+- Added `relay_start`, `relay_failed`, and `relay_half_close` coverage while preserving existing relay partial-byte accounting and abort semantics.
+- Raised critical session-path tracing to `info` or `warn` where appropriate, and normalized transport failure fields for real-device troubleshooting.
+
 ## 0.4.0
 
 - Added structured tracing coverage across runtime, session, TLS, and transparent-socket paths with stable field contracts.
