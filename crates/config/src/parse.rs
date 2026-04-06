@@ -692,4 +692,33 @@ mod tests {
             vec!["trojan.example.com".to_string(), "192.168.0.1".to_string()]
         );
     }
+
+    #[test]
+    fn preserves_utf8_tags_and_route_targets() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "入口", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            {
+              "type": "trojan",
+              "tag": "日用 [0.2]",
+              "server": "example.com",
+              "server_port": 443,
+              "password": "secret",
+              "tls": { "server_name": "example.com" }
+            }
+          ],
+          "route": { "final": "日用 [0.2]" }
+        }
+        "#;
+
+        let config = parse_config(input).expect("config should parse");
+        assert_eq!(config.route.final_outbound, "日用 [0.2]");
+        assert_eq!(config.inbounds[0].tag(), "入口");
+        assert_eq!(config.outbounds[0].tag(), "direct");
+        assert_eq!(config.outbounds[1].tag(), "日用 [0.2]");
+    }
 }

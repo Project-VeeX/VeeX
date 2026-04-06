@@ -132,11 +132,16 @@ impl<'a> Parser<'a> {
     fn parse_string(&mut self, path: &str) -> Result<String, ConfigError> {
         self.expect_byte(b'"', path)?;
         let mut output = String::new();
+        let mut chunk_start = self.pos;
 
         while let Some(byte) = self.next() {
             match byte {
-                b'"' => return Ok(output),
+                b'"' => {
+                    self.push_string_chunk(&mut output, chunk_start, self.pos - 1, path)?;
+                    return Ok(output);
+                }
                 b'\\' => {
+                    self.push_string_chunk(&mut output, chunk_start, self.pos - 1, path)?;
                     let escaped = self.next().ok_or_else(|| {
                         ConfigError::json(path, "unterminated escape sequence in string")
                     })?;
@@ -163,6 +168,7 @@ impl<'a> Parser<'a> {
                             ));
                         }
                     }
+                    chunk_start = self.pos;
                 }
                 0x00..=0x1F => {
                     return Err(ConfigError::json(
@@ -170,11 +176,28 @@ impl<'a> Parser<'a> {
                         "control characters are not allowed in strings",
                     ));
                 }
-                byte => output.push(byte as char),
+                _ => {}
             }
         }
 
         Err(ConfigError::json(path, "unterminated string"))
+    }
+
+    fn push_string_chunk(
+        &self,
+        output: &mut String,
+        start: usize,
+        end: usize,
+        path: &str,
+    ) -> Result<(), ConfigError> {
+        if start == end {
+            return Ok(());
+        }
+
+        let chunk = std::str::from_utf8(&self.input[start..end])
+            .map_err(|_| ConfigError::json(path, "string token is not valid UTF-8"))?;
+        output.push_str(chunk);
+        Ok(())
     }
 
     fn parse_number(&mut self, path: &str) -> Result<i64, ConfigError> {
@@ -341,5 +364,34 @@ mod tests {
 
         assert!(err.to_string().contains("duplicate object key `tag`"));
         assert!(err.to_string().contains("$.outbounds[0].tag"));
+    }
+
+    #[test]
+    fn parses_raw_utf8_strings_without_mojibake() {
+        let json = r#"{"tag":"日用"}"#;
+        let value = parse_json(json).expect("json should parse");
+
+        match value {
+            JsonValue::Object(map) => {
+                assert_eq!(map.get("tag"), Some(&JsonValue::String("日用".into())));
+            }
+            other => panic!("unexpected value: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_mixed_utf8_and_escaped_strings() {
+        let json = r#"{"tag":"日用\n专线 \"香港\""}"#;
+        let value = parse_json(json).expect("json should parse");
+
+        match value {
+            JsonValue::Object(map) => {
+                assert_eq!(
+                    map.get("tag"),
+                    Some(&JsonValue::String("日用\n专线 \"香港\"".into()))
+                );
+            }
+            other => panic!("unexpected value: {other:?}"),
+        }
     }
 }
