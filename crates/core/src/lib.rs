@@ -7,6 +7,8 @@ pub mod logging;
 pub mod relay;
 pub mod router;
 pub mod shutdown;
+#[cfg(test)]
+mod test_support;
 pub mod traits;
 pub mod types;
 

@@ -2,19 +2,24 @@ use veex_config::{OutboundConfig, ProxyConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
 use veex_core::Router;
 
 pub fn build_router(config: &ProxyConfig) -> Router {
-    let mut router = Router::new(
+    Router::new(
         config.route.final_outbound.clone(),
         DEFAULT_DIRECT_OUTBOUND_TAG,
     )
-    .with_bypass_hosts(config.route.bypass.iter().cloned());
+    .with_bypass_hosts(router_bypass_hosts(config))
+}
 
-    for outbound in &config.outbounds {
-        if let OutboundConfig::Trojan(trojan) = outbound {
-            router = router.with_bypass_host(trojan.server.clone());
-        }
+fn router_bypass_hosts(config: &ProxyConfig) -> Vec<String> {
+    let mut hosts = config.route.bypass.clone();
+    hosts.extend(config.outbounds.iter().filter_map(implicit_bypass_host));
+    hosts
+}
+
+fn implicit_bypass_host(outbound: &OutboundConfig) -> Option<String> {
+    match outbound {
+        OutboundConfig::Trojan(trojan) => Some(trojan.server.clone()),
+        OutboundConfig::Direct(_) => None,
     }
-
-    router
 }
 
 #[cfg(test)]

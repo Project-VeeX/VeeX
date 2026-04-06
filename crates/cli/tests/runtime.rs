@@ -212,7 +212,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
     assert_event_has_fields(
         &events,
         "tls_handshake_start",
-        &["session_id", "server_name"],
+        &["session_id", "server_name", "port", "resolved_addr"],
     );
     assert_has_event(
         &events,
@@ -226,7 +226,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
     assert_event_has_fields(
         &events,
         "tls_handshake_success",
-        &["session_id", "server_name"],
+        &["session_id", "server_name", "port", "resolved_addr"],
     );
     assert_has_event(
         &events,
@@ -445,6 +445,7 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
         &[
             ("outbound", "direct"),
             ("routing_mark", ""),
+            ("error_kind", "dial"),
             ("level", "WARN"),
         ],
     );
@@ -457,6 +458,7 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
             "resolved_addr",
             "attempt_index",
             "routing_mark",
+            "error_kind",
             "error",
         ],
     );

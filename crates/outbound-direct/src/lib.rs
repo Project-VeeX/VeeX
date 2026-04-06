@@ -74,6 +74,8 @@ impl Outbound for DirectOutbound {
     }
 
     fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        // Direct outbound owns destination-level dialing details such as SO_MARK,
+        // so it keeps its own outbound-scoped connect tracing here.
         let destination = ctx.meta.destination.clone();
         let destination_field = sanitize_field(&destination.to_string()).into_owned();
         let outbound_field = sanitize_field(self.tag()).into_owned();
@@ -240,6 +242,7 @@ fn log_direct_connect_failed(
                 attempt_index,
                 routing_mark = mark,
                 elapsed_ms,
+                error_kind = %err.kind(),
                 error = %err,
                 "direct connect failed"
             );
@@ -254,6 +257,7 @@ fn log_direct_connect_failed(
                 attempt_index,
                 routing_mark = "",
                 elapsed_ms,
+                error_kind = %err.kind(),
                 error = %err,
                 "direct connect failed"
             );
@@ -651,6 +655,7 @@ mod tests {
                 ("outbound", "direct"),
                 ("attempt_index", "1"),
                 ("routing_mark", "255"),
+                ("error_kind", "dial"),
                 ("level", "WARN"),
             ],
         );

@@ -13,6 +13,12 @@ use crate::{
 };
 
 pub fn load_from_path(path: impl AsRef<Path>) -> Result<ProxyConfig, ConfigError> {
+    let config = load_from_path_unvalidated(path)?;
+    validate_config(&config)?;
+    Ok(config)
+}
+
+pub fn load_from_path_unvalidated(path: impl AsRef<Path>) -> Result<ProxyConfig, ConfigError> {
     let path = path.as_ref();
     if path.as_os_str().is_empty() {
         return Err(ConfigError::file_path(
@@ -22,16 +28,16 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Result<ProxyConfig, ConfigError
     }
 
     let content = fs::read_to_string(path).map_err(|err| ConfigError::io_path(path, err))?;
-    parse_config(&content)
+    parse_config_unvalidated(&content)
 }
 
 pub fn parse_config(input: &str) -> Result<ProxyConfig, ConfigError> {
-    let config = parse_proxy_config(input)?;
+    let config = parse_config_unvalidated(input)?;
     validate_config(&config)?;
     Ok(config)
 }
 
-fn parse_proxy_config(input: &str) -> Result<ProxyConfig, ConfigError> {
+pub fn parse_config_unvalidated(input: &str) -> Result<ProxyConfig, ConfigError> {
     let root = parse_json(input)?;
     let root = expect_object(&root, "$")?;
 
@@ -87,15 +93,6 @@ fn parse_inbounds(value: Option<&JsonValue>) -> Result<Vec<InboundConfig>, Confi
             }),
             "tproxy" => {
                 let network = optional_string(object.get("network"), format!("{path}.network"))?;
-                if let Some(network) = network.as_deref() {
-                    if network != "tcp" {
-                        return Err(ConfigError::validation(
-                            format!("{path}.network"),
-                            "tproxy inbound only supports network='tcp'",
-                        ));
-                    }
-                }
-
                 InboundConfig::TProxy(TProxyInboundConfig {
                     tag,
                     listen,

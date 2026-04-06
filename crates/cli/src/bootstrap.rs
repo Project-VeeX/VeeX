@@ -35,7 +35,9 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
 
     let (shutdown, shutdown_signal) = shutdown_channel();
     let outbounds = build_outbounds(config).map_err(BootstrapError::OutboundBuild)?;
-    validate_runtime_outbounds(config, &outbounds)?;
+    // Bootstrap owns runtime factory completeness checks after config parsing and
+    // validation have already accepted the static config surface.
+    ensure_required_outbounds_built(config, &outbounds)?;
     let dispatcher: Arc<dyn Dispatcher> =
         Arc::new(SimpleDispatcher::new(build_router(config), outbounds));
     let inbounds = build_inbounds(config, shutdown_signal).map_err(BootstrapError::InboundBuild)?;
@@ -47,7 +49,7 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
     })
 }
 
-fn validate_runtime_outbounds(
+fn ensure_required_outbounds_built(
     config: &ProxyConfig,
     outbounds: &HashMap<String, Arc<dyn Outbound>>,
 ) -> Result<(), BootstrapError> {

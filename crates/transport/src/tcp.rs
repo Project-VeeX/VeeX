@@ -28,6 +28,7 @@ pub async fn connect_host(host: &Host, port: u16, options: TcpConnectOptions) ->
     let host_field = host.to_string();
     let host_field = sanitize_field(&host_field).into_owned();
 
+    // Transport owns TCP connect events and keeps them scoped to host/port/socket details.
     connect_addresses(&host_field, port, addresses, &options).await
 }
 
@@ -71,7 +72,7 @@ async fn connect_addresses(
                     address,
                     attempt_index,
                     start.elapsed(),
-                    err.error_kind,
+                    err.failure_reason,
                     &err.error,
                 );
                 last_error = Some(err.error);
@@ -113,7 +114,7 @@ async fn connect_socket(
             .await
             .map_err(|_| TcpConnectError {
                 error: ProxyError::timeout(format!("tcp connect timeout to {address}")),
-                error_kind: "timeout",
+                failure_reason: "timeout",
             })?
             .map_err(|err| TcpConnectError::from_io(address, err)),
         None => connect_future
@@ -125,19 +126,19 @@ async fn connect_socket(
 #[derive(Debug)]
 struct TcpConnectError {
     error: ProxyError,
-    error_kind: &'static str,
+    failure_reason: &'static str,
 }
 
 impl TcpConnectError {
     fn from_io(address: SocketAddr, err: io::Error) -> Self {
         Self {
             error: ProxyError::dial_ctx(format!("tcp connect failed to {address}"), &err),
-            error_kind: classify_tcp_connect_error_kind(err.kind()),
+            failure_reason: classify_tcp_connect_failure_reason(err.kind()),
         }
     }
 }
 
-fn classify_tcp_connect_error_kind(kind: io::ErrorKind) -> &'static str {
+fn classify_tcp_connect_failure_reason(kind: io::ErrorKind) -> &'static str {
     match kind {
         io::ErrorKind::TimedOut => "timeout",
         io::ErrorKind::ConnectionRefused => "refused",
@@ -256,7 +257,7 @@ fn log_tcp_connect_failed(
     address: SocketAddr,
     attempt_index: u64,
     elapsed: Duration,
-    error_kind: &'static str,
+    failure_reason: &'static str,
     err: &ProxyError,
 ) {
     match trace {
@@ -271,7 +272,8 @@ fn log_tcp_connect_failed(
                 resolved_addr = %address,
                 attempt_index,
                 elapsed_ms = elapsed.as_millis() as u64,
-                error_kind,
+                error_kind = %err.kind(),
+                failure_reason,
                 error = %err,
                 "tcp connect failed"
             );
@@ -285,7 +287,8 @@ fn log_tcp_connect_failed(
                 resolved_addr = %address,
                 attempt_index,
                 elapsed_ms = elapsed.as_millis() as u64,
-                error_kind,
+                error_kind = %err.kind(),
+                failure_reason,
                 error = %err,
                 "tcp connect failed"
             );
@@ -296,122 +299,15 @@ fn log_tcp_connect_failed(
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeMap,
         net::{IpAddr, Ipv4Addr, SocketAddr},
-        sync::{Arc, Mutex},
         time::Duration,
     };
 
     use tokio::net::TcpListener;
-    use tracing::{
-        field::{Field, Visit},
-        Event, Subscriber,
-    };
-    use tracing_subscriber::{
-        layer::Context as LayerContext, prelude::*, registry::LookupSpan, Layer,
-    };
 
     use super::{connect_addresses, connect_host, ConnectTraceContext, TcpConnectOptions};
+    use crate::test_support::{assert_has_event, captured_events, install_test_subscriber};
     use veex_core::Host;
-
-    #[derive(Clone, Debug, Default, Eq, PartialEq)]
-    struct CapturedEvent {
-        fields: BTreeMap<String, String>,
-    }
-
-    #[derive(Default)]
-    struct EventVisitor {
-        fields: BTreeMap<String, String>,
-    }
-
-    impl Visit for EventVisitor {
-        fn record_bool(&mut self, field: &Field, value: bool) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_i64(&mut self, field: &Field, value: i64) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_u64(&mut self, field: &Field, value: u64) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_str(&mut self, field: &Field, value: &str) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            self.fields
-                .insert(field.name().to_string(), format!("{value:?}"));
-        }
-    }
-
-    #[derive(Clone)]
-    struct CaptureLayer {
-        events: Arc<Mutex<Vec<CapturedEvent>>>,
-    }
-
-    impl<S> Layer<S> for CaptureLayer
-    where
-        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
-    {
-        fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
-            let mut visitor = EventVisitor::default();
-            event.record(&mut visitor);
-            visitor
-                .fields
-                .insert("level".to_string(), event.metadata().level().to_string());
-            self.events
-                .lock()
-                .expect("captured events lock poisoned")
-                .push(CapturedEvent {
-                    fields: visitor.fields,
-                });
-        }
-    }
-
-    fn install_test_subscriber() -> (
-        tracing::subscriber::DefaultGuard,
-        Arc<Mutex<Vec<CapturedEvent>>>,
-    ) {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::registry().with(CaptureLayer {
-            events: Arc::clone(&events),
-        });
-
-        (tracing::subscriber::set_default(subscriber), events)
-    }
-
-    fn captured_events(buffer: &Arc<Mutex<Vec<CapturedEvent>>>) -> Vec<CapturedEvent> {
-        buffer
-            .lock()
-            .expect("captured events lock poisoned")
-            .clone()
-    }
-
-    fn assert_has_event(
-        events: &[CapturedEvent],
-        event_name: &str,
-        expected_fields: &[(&str, &str)],
-    ) {
-        let matched = events.iter().any(|event| {
-            event.fields.get("event").map(String::as_str) == Some(event_name)
-                && expected_fields.iter().all(|(key, expected)| {
-                    event.fields.get(*key).map(String::as_str) == Some(*expected)
-                })
-        });
-
-        assert!(
-            matched,
-            "expected event `{event_name}` with fields {:?}, captured events: {:?}",
-            expected_fields, events
-        );
-    }
 
     #[tokio::test]
     async fn tcp_connect_success_emits_attempt_and_success_with_trace_context() {
@@ -511,7 +407,8 @@ mod tests {
                 ("outbound", "proxy"),
                 ("network", "tcp"),
                 ("attempt_index", "1"),
-                ("error_kind", "refused"),
+                ("error_kind", "dial"),
+                ("failure_reason", "refused"),
                 ("level", "WARN"),
             ],
         );

@@ -17,6 +17,16 @@ pub struct SimpleDispatcher {
     outbounds: HashMap<String, Arc<dyn Outbound>>,
 }
 
+#[derive(Clone, Debug)]
+struct DispatchTraceContext {
+    session_id: u64,
+    inbound_field: String,
+    outbound_field: String,
+    peer_field: String,
+    destination_field: String,
+    route_reason: RouteReason,
+}
+
 impl SimpleDispatcher {
     pub fn new(router: Router, outbounds: HashMap<String, Arc<dyn Outbound>>) -> Self {
         Self { router, outbounds }
@@ -36,38 +46,18 @@ impl Dispatcher for SimpleDispatcher {
                 .selected_outbound
                 .clone()
                 .unwrap_or_else(|| decision.outbound_tag.clone());
-            let inbound_field = sanitize_field(ctx.meta.inbound_tag.as_str()).into_owned();
-            let outbound_field = sanitize_field(outbound_tag.as_str()).into_owned();
-            let peer_field = ctx.meta.peer.to_string();
-            let peer_field = sanitize_field(&peer_field).into_owned();
-            let destination_field = ctx.meta.destination.to_string();
-            let destination_field = sanitize_field(&destination_field).into_owned();
+            let trace = DispatchTraceContext::new(&ctx, outbound_tag.as_str(), route_reason);
 
-            info!(
-                event = "route_select",
-                session_id = ctx.meta.id,
-                inbound = %inbound_field,
-                peer = %peer_field,
-                destination = %destination_field,
-                outbound = %outbound_field,
-                route_reason = %route_reason.as_str(),
-                network = %ctx.meta.network.as_str(),
-                "route selected"
-            );
+            // Dispatcher owns session-scoped lifecycle events. Lower-level transport,
+            // outbound, and relay details stay in their respective modules.
+            log_route_select(&trace, ctx.meta.network.as_str());
             let outbound = self.outbounds.get(&outbound_tag).ok_or_else(|| {
                 ProxyError::config(format!("missing outbound tag: {outbound_tag}"))
             })?;
 
             let (summary, result) = match outbound.connect(&ctx).await {
                 Ok(outbound_stream) => {
-                    info!(
-                        event = "relay_start",
-                        session_id = ctx.meta.id,
-                        inbound = %inbound_field,
-                        outbound = %outbound_field,
-                        destination = %destination_field,
-                        "relay started"
-                    );
+                    log_relay_start(&trace);
                     match relay_bidirectional_with_trace(
                         inbound_stream,
                         outbound_stream,
@@ -79,11 +69,11 @@ impl Dispatcher for SimpleDispatcher {
                     {
                         Ok(stats) => (
                             SessionSummary::success(
-                                ctx.meta.id,
-                                inbound_field.as_str(),
-                                outbound_field.as_str(),
-                                peer_field.as_str(),
-                                destination_field.as_str(),
+                                trace.session_id,
+                                trace.inbound_field.as_str(),
+                                trace.outbound_field.as_str(),
+                                trace.peer_field.as_str(),
+                                trace.destination_field.as_str(),
                                 stats.bytes_up,
                                 stats.bytes_down,
                                 ctx.meta.start.elapsed(),
@@ -91,28 +81,15 @@ impl Dispatcher for SimpleDispatcher {
                             Ok(()),
                         ),
                         Err(relay_err) => {
-                            warn!(
-                                event = "relay_failed",
-                                session_id = ctx.meta.id,
-                                inbound = %inbound_field,
-                                outbound = %outbound_field,
-                                destination = %destination_field,
-                                direction = relay_err.direction,
-                                has_half_close = relay_err.has_half_close,
-                                bytes_up = relay_err.stats.bytes_up,
-                                bytes_down = relay_err.stats.bytes_down,
-                                error_kind = ?relay_err.error.kind(),
-                                error = %relay_err.error,
-                                "relay failed"
-                            );
+                            log_relay_failed(&trace, &relay_err);
                             let error_kind = relay_err.error.kind();
                             (
                                 SessionSummary::failure(
-                                    ctx.meta.id,
-                                    inbound_field.as_str(),
-                                    outbound_field.as_str(),
-                                    peer_field.as_str(),
-                                    destination_field.as_str(),
+                                    trace.session_id,
+                                    trace.inbound_field.as_str(),
+                                    trace.outbound_field.as_str(),
+                                    trace.peer_field.as_str(),
+                                    trace.destination_field.as_str(),
                                     relay_err.stats.bytes_up,
                                     relay_err.stats.bytes_down,
                                     ctx.meta.start.elapsed(),
@@ -127,11 +104,11 @@ impl Dispatcher for SimpleDispatcher {
                     let error_kind = err.kind();
                     (
                         SessionSummary::failure(
-                            ctx.meta.id,
-                            inbound_field.as_str(),
-                            outbound_field.as_str(),
-                            peer_field.as_str(),
-                            destination_field.as_str(),
+                            trace.session_id,
+                            trace.inbound_field.as_str(),
+                            trace.outbound_field.as_str(),
+                            trace.peer_field.as_str(),
+                            trace.destination_field.as_str(),
                             0,
                             0,
                             ctx.meta.start.elapsed(),
@@ -142,51 +119,118 @@ impl Dispatcher for SimpleDispatcher {
                 }
             };
 
-            match &result {
-                Ok(()) => {
-                    info!(
-                        event = "session_finish",
-                        session_id = summary.session_id,
-                        inbound = %summary.inbound,
-                        peer = %summary.peer,
-                        destination = %summary.destination,
-                        outbound = %summary.outbound,
-                        route_reason = %route_reason.as_str(),
-                        success = true,
-                        duration_ms = summary.duration.as_millis(),
-                        bytes_up = summary.bytes_up,
-                        bytes_down = summary.bytes_down,
-                        "session finished"
-                    );
-                }
-                Err(err) => {
-                    warn!(
-                        event = "session_finish",
-                        session_id = summary.session_id,
-                        inbound = %summary.inbound,
-                        peer = %summary.peer,
-                        destination = %summary.destination,
-                        outbound = %summary.outbound,
-                        route_reason = %route_reason.as_str(),
-                        success = false,
-                        duration_ms = summary.duration.as_millis(),
-                        bytes_up = summary.bytes_up,
-                        bytes_down = summary.bytes_down,
-                        error_kind = ?err.kind(),
-                        error = %err,
-                        "session finished with error"
-                    );
-                }
-            }
+            log_session_finish(&trace, &summary, result.as_ref().err());
             result
         })
+    }
+}
+
+impl DispatchTraceContext {
+    fn new(ctx: &SessionContext, outbound_tag: &str, route_reason: RouteReason) -> Self {
+        let inbound_field = sanitize_field(ctx.meta.inbound_tag.as_str()).into_owned();
+        let outbound_field = sanitize_field(outbound_tag).into_owned();
+        let peer_field = sanitize_field(&ctx.meta.peer.to_string()).into_owned();
+        let destination_field = sanitize_field(&ctx.meta.destination.to_string()).into_owned();
+
+        Self {
+            session_id: ctx.meta.id,
+            inbound_field,
+            outbound_field,
+            peer_field,
+            destination_field,
+            route_reason,
+        }
+    }
+}
+
+fn log_route_select(trace: &DispatchTraceContext, network: &str) {
+    info!(
+        event = "route_select",
+        session_id = trace.session_id,
+        inbound = %trace.inbound_field,
+        peer = %trace.peer_field,
+        destination = %trace.destination_field,
+        outbound = %trace.outbound_field,
+        route_reason = %trace.route_reason.as_str(),
+        network,
+        "route selected"
+    );
+}
+
+fn log_relay_start(trace: &DispatchTraceContext) {
+    info!(
+        event = "relay_start",
+        session_id = trace.session_id,
+        inbound = %trace.inbound_field,
+        outbound = %trace.outbound_field,
+        destination = %trace.destination_field,
+        "relay started"
+    );
+}
+
+fn log_relay_failed(trace: &DispatchTraceContext, relay_err: &crate::relay::RelayErrorWithStats) {
+    warn!(
+        event = "relay_failed",
+        session_id = trace.session_id,
+        inbound = %trace.inbound_field,
+        outbound = %trace.outbound_field,
+        destination = %trace.destination_field,
+        direction = relay_err.direction,
+        has_half_close = relay_err.has_half_close,
+        bytes_up = relay_err.stats.bytes_up,
+        bytes_down = relay_err.stats.bytes_down,
+        error_kind = %relay_err.error.kind(),
+        error = %relay_err.error,
+        "relay failed"
+    );
+}
+
+fn log_session_finish(
+    trace: &DispatchTraceContext,
+    summary: &SessionSummary,
+    err: Option<&ProxyError>,
+) {
+    match err {
+        Some(err) => {
+            warn!(
+                event = "session_finish",
+                session_id = summary.session_id,
+                inbound = %summary.inbound,
+                peer = %summary.peer,
+                destination = %summary.destination,
+                outbound = %summary.outbound,
+                route_reason = %trace.route_reason.as_str(),
+                success = false,
+                duration_ms = summary.duration.as_millis(),
+                bytes_up = summary.bytes_up,
+                bytes_down = summary.bytes_down,
+                error_kind = %err.kind(),
+                error = %err,
+                "session finished with error"
+            );
+        }
+        None => {
+            info!(
+                event = "session_finish",
+                session_id = summary.session_id,
+                inbound = %summary.inbound,
+                peer = %summary.peer,
+                destination = %summary.destination,
+                outbound = %summary.outbound,
+                route_reason = %trace.route_reason.as_str(),
+                success = true,
+                duration_ms = summary.duration.as_millis(),
+                bytes_up = summary.bytes_up,
+                bytes_down = summary.bytes_down,
+                "session finished"
+            );
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeMap,
         collections::HashMap,
         collections::VecDeque,
         io,
@@ -197,16 +241,10 @@ mod tests {
     };
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-    use tracing::{
-        field::{Field, Visit},
-        Event, Subscriber,
-    };
-    use tracing_subscriber::{
-        layer::Context as LayerContext, prelude::*, registry::LookupSpan, Layer,
-    };
 
     use super::SimpleDispatcher;
     use crate::{
+        test_support::{assert_has_event, captured_events, install_test_subscriber},
         traits::{Dispatcher, Outbound},
         BoxFuture, BoxedAsyncStream, Destination, ErrorKind, Network, RouteReason, Router,
         SessionContext, SessionMeta, SessionRoute, SessionState,
@@ -374,98 +412,6 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Debug, Default, Eq, PartialEq)]
-    struct CapturedEvent {
-        fields: BTreeMap<String, String>,
-    }
-
-    #[derive(Default)]
-    struct EventVisitor {
-        fields: BTreeMap<String, String>,
-    }
-
-    impl Visit for EventVisitor {
-        fn record_bool(&mut self, field: &Field, value: bool) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_u64(&mut self, field: &Field, value: u64) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_i64(&mut self, field: &Field, value: i64) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_str(&mut self, field: &Field, value: &str) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            self.fields
-                .insert(field.name().to_string(), format!("{value:?}"));
-        }
-    }
-
-    #[derive(Clone)]
-    struct CaptureLayer {
-        events: Arc<Mutex<Vec<CapturedEvent>>>,
-    }
-
-    impl<S> Layer<S> for CaptureLayer
-    where
-        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
-    {
-        fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
-            let mut visitor = EventVisitor::default();
-            event.record(&mut visitor);
-            visitor
-                .fields
-                .insert("level".to_string(), event.metadata().level().to_string());
-            self.events
-                .lock()
-                .expect("captured events lock poisoned")
-                .push(CapturedEvent {
-                    fields: visitor.fields,
-                });
-        }
-    }
-
-    fn install_test_subscriber() -> (
-        tracing::subscriber::DefaultGuard,
-        Arc<Mutex<Vec<CapturedEvent>>>,
-    ) {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::registry().with(CaptureLayer {
-            events: Arc::clone(&events),
-        });
-
-        (tracing::subscriber::set_default(subscriber), events)
-    }
-
-    fn assert_has_event(
-        events: &[CapturedEvent],
-        event_name: &str,
-        expected_fields: &[(&str, &str)],
-    ) {
-        let matched = events.iter().any(|event| {
-            event.fields.get("event").map(String::as_str) == Some(event_name)
-                && expected_fields.iter().all(|(key, expected)| {
-                    event.fields.get(*key).map(String::as_str) == Some(*expected)
-                })
-        });
-
-        assert!(
-            matched,
-            "expected event `{event_name}` with fields {:?}, captured events: {:?}",
-            expected_fields, events
-        );
-    }
-
     #[tokio::test]
     async fn dispatcher_writes_route_and_passes_state_to_outbound() {
         let (outbound, captured) = CaptureOutbound::new("proxy");
@@ -537,10 +483,7 @@ mod tests {
 
         assert_eq!(err.kind(), ErrorKind::Relay);
 
-        let events = events
-            .lock()
-            .expect("captured events lock poisoned")
-            .clone();
+        let events = captured_events(&events);
         assert_has_event(
             &events,
             "relay_start",

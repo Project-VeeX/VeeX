@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, net::IpAddr};
 
 pub use crate::types::RouteReason;
 
-use crate::types::{Host, SessionContext};
+use crate::types::{Destination, Host, SessionContext};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RouteDecision {
@@ -48,40 +48,7 @@ impl Router {
     }
 
     pub fn select(&self, ctx: &SessionContext) -> RouteDecision {
-        let host = &ctx.meta.destination.host;
-
-        if is_loopback(host) {
-            return RouteDecision {
-                outbound_tag: self.direct_outbound_tag.clone(),
-                reason: RouteReason::BypassLoopback,
-            };
-        }
-
-        if is_private_or_unique_local(host) {
-            return RouteDecision {
-                outbound_tag: self.direct_outbound_tag.clone(),
-                reason: RouteReason::BypassPrivate,
-            };
-        }
-
-        if is_link_local(host) {
-            return RouteDecision {
-                outbound_tag: self.direct_outbound_tag.clone(),
-                reason: RouteReason::BypassLinkLocal,
-            };
-        }
-
-        if is_configured_bypass(host, &self.bypass_domains, &self.bypass_ips) {
-            return RouteDecision {
-                outbound_tag: self.direct_outbound_tag.clone(),
-                reason: RouteReason::BypassConfigured,
-            };
-        }
-
-        RouteDecision {
-            outbound_tag: self.final_outbound_tag.clone(),
-            reason: RouteReason::Final,
-        }
+        self.select_destination(&ctx.meta.destination)
     }
 
     fn insert_bypass_host(&mut self, host: &str) {
@@ -93,6 +60,58 @@ impl Router {
                 self.bypass_domains.insert(domain);
             }
         }
+    }
+
+    fn select_destination(&self, destination: &Destination) -> RouteDecision {
+        let input = RouteInput::new(destination);
+        if let Some(reason) = self.match_bypass_reason(input) {
+            return self.bypass_decision(reason);
+        }
+
+        // Future `route.rules` matching can extend this decision pipeline here,
+        // after the current minimal bypass handling and before the final fallback.
+        self.final_decision()
+    }
+
+    fn match_bypass_reason(&self, input: RouteInput<'_>) -> Option<RouteReason> {
+        let host = input.host();
+        match_builtin_bypass(host).or_else(|| {
+            self.matches_configured_bypass(host)
+                .then_some(RouteReason::BypassConfigured)
+        })
+    }
+
+    fn matches_configured_bypass(&self, host: &Host) -> bool {
+        is_configured_bypass(host, &self.bypass_domains, &self.bypass_ips)
+    }
+
+    fn bypass_decision(&self, reason: RouteReason) -> RouteDecision {
+        RouteDecision {
+            outbound_tag: self.direct_outbound_tag.clone(),
+            reason,
+        }
+    }
+
+    fn final_decision(&self) -> RouteDecision {
+        RouteDecision {
+            outbound_tag: self.final_outbound_tag.clone(),
+            reason: RouteReason::Final,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RouteInput<'a> {
+    destination: &'a Destination,
+}
+
+impl<'a> RouteInput<'a> {
+    fn new(destination: &'a Destination) -> Self {
+        Self { destination }
+    }
+
+    fn host(self) -> &'a Host {
+        &self.destination.host
     }
 }
 
@@ -140,6 +159,22 @@ fn is_loopback(host: &Host) -> bool {
         Host::Ip(ip) => ip.is_loopback(),
         Host::Domain(_) => false,
     }
+}
+
+fn match_builtin_bypass(host: &Host) -> Option<RouteReason> {
+    if is_loopback(host) {
+        return Some(RouteReason::BypassLoopback);
+    }
+
+    if is_private_or_unique_local(host) {
+        return Some(RouteReason::BypassPrivate);
+    }
+
+    if is_link_local(host) {
+        return Some(RouteReason::BypassLinkLocal);
+    }
+
+    None
 }
 
 fn is_private_or_unique_local(host: &Host) -> bool {

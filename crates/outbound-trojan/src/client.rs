@@ -106,11 +106,21 @@ impl Outbound for TrojanOutbound {
             )
             .await?;
 
-            let mut stream = connect_tls(stream, &this.server, &this.tls, Some(&trace)).await?;
+            // Trojan preserves transport-originated connect/tls errors and only
+            // converts outbound framing failures at its own boundary.
+            let mut stream = connect_tls(
+                stream,
+                &this.server,
+                this.server_port,
+                &this.tls,
+                Some(&trace),
+            )
+            .await?;
             let request = build_trojan_request(&this.password, &destination, &buffered_payload)?;
-            stream.write_all(&request).await.map_err(|err| {
-                ProxyError::Protocol(format!("failed to write trojan request: {err}"))
-            })?;
+            stream
+                .write_all(&request)
+                .await
+                .map_err(|err| ProxyError::protocol_ctx("failed to write trojan request", err))?;
 
             Ok(stream)
         })
