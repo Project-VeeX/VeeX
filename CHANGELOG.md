@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2
+
+- Tightened tracing and event-schema boundaries across transport, outbound, relay, and dispatcher layers without changing the validated session-path semantics.
+- Added stable `tls_handshake_*` `host` / `port` / `resolved_addr` coverage and aligned connect-failure diagnostics around consistent `error_kind` ownership.
+- Clarified config responsibilities by separating raw parse entry points from semantic validation and keeping bootstrap focused on runtime object completeness.
+- Reorganized the router into a clearer minimal decision pipeline for built-in bypass, configured bypass, and final fallback ahead of future `route.rules` work.
+- Reduced repeated tracing test scaffolding inside `veex-core` and `veex-transport` with small crate-local test helpers.
+
 ## 0.4.1
 
 - Added session-aware tracing for Trojan transport connect and TLS handshake paths so a session can be followed from route selection into transport setup.
