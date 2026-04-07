@@ -4,12 +4,24 @@ pub use crate::types::RouteReason;
 
 use crate::types::{Destination, Host, SessionContext};
 
+/// The result of a routing decision for a session.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RouteDecision {
+    /// Tag of the outbound selected to handle this session.
     pub outbound_tag: String,
+    /// Reason for the routing decision.
     pub reason: RouteReason,
 }
 
+/// Static router that decides which outbound should handle a session.
+///
+/// The routing decision pipeline is:
+/// 1. Built-in bypass: loopback, private, link-local addresses → direct
+/// 2. Configured bypass: exact domain or IP matches → direct
+/// 3. Final fallback: configured final outbound
+///
+/// `Router` is constructed once at startup and performs pure computation
+/// with no I/O or DNS resolution.
 #[derive(Clone, Debug)]
 pub struct Router {
     final_outbound_tag: String,

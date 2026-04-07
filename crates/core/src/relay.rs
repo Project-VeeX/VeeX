@@ -9,17 +9,33 @@ use tracing::debug;
 
 use crate::{error::ProxyError, types::BoxedAsyncStream};
 
+/// Byte transfer statistics for a relay session.
+///
+/// These are observed engineering metrics, not billing-grade counters.
+/// Partial counts are preserved on failure to aid diagnostics:
+/// a session that fails mid-stream will report non-zero bytes rather
+/// than collapsing to 0/0.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RelayStats {
+    /// Bytes transferred from client to server (upstream).
     pub bytes_up: u64,
+    /// Bytes transferred from server to client (downstream).
     pub bytes_down: u64,
 }
 
+/// Relay error with accompanying transfer statistics.
+///
+/// Returned when a relay operation fails, preserving the partial
+/// byte counts at the time of failure for diagnostics.
 #[derive(Debug)]
 pub struct RelayErrorWithStats {
+    /// Observed byte counts at the time of failure.
     pub stats: RelayStats,
+    /// The underlying relay error.
     pub error: ProxyError,
+    /// The direction in which the error occurred.
     pub direction: &'static str,
+    /// Whether the opposite direction was already half-closed when the error occurred.
     pub has_half_close: bool,
 }
 

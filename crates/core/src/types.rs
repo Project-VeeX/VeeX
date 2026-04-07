@@ -7,14 +7,21 @@ use std::{
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
+/// A stream that supports both async read and async write operations.
+/// All implementations must be Send-safe for use across task boundaries.
 pub trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {}
 
 impl<T> AsyncStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 
+/// A type-erased boxed async stream.
 pub type BoxedAsyncStream = Box<dyn AsyncStream>;
 
+/// Network protocol type.
+///
+/// Currently only TCP is supported; this enum is provided for future extensibility.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Network {
+    /// TCP protocol.
     Tcp,
 }
 
@@ -26,9 +33,16 @@ impl Network {
     }
 }
 
+/// The target of a connection — either an IP address or a domain name.
+///
+/// This distinction is important because domain names require resolution
+/// before a TCP connection can be established, while IP addresses can
+/// be connected directly.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Host {
+    /// A numeric IP address (IPv4 or IPv6).
     Ip(IpAddr),
+    /// A domain name requiring DNS resolution.
     Domain(String),
 }
 
@@ -41,9 +55,15 @@ impl fmt::Display for Host {
     }
 }
 
+/// A destination endpoint for a connection, combining a host and port.
+///
+/// This is the primary key used to route and connect sessions.
+/// Display format is `"host:port"` for IPv4/domains and `"[ipv6]:port"` for IPv6.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Destination {
+    /// The target host — either an IP address or domain name.
     pub host: Host,
+    /// The TCP port number.
     pub port: u16,
 }
 
@@ -70,12 +90,21 @@ impl fmt::Display for Destination {
     }
 }
 
+/// The reason a particular route decision was made.
+///
+/// This is used for observability and logging to understand why
+/// a session was routed to a specific outbound.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouteReason {
+    /// Routed to the configured final outbound.
     Final,
+    /// Bypassed proxy (sent direct) because destination is loopback.
     BypassLoopback,
+    /// Bypassed proxy (sent direct) because destination is a private IP.
     BypassPrivate,
+    /// Bypassed proxy (sent direct) because destination is a link-local IP.
     BypassLinkLocal,
+    /// Bypassed proxy (sent direct) because destination matches a configured bypass rule.
     BypassConfigured,
 }
 
@@ -91,19 +120,36 @@ impl RouteReason {
     }
 }
 
+/// Immutable metadata for a session.
+///
+/// This is wrapped in `Arc` within `SessionContext` because the same
+/// metadata may need to be accessed from multiple tasks during the
+/// session lifecycle while ensuring consistency.
 #[derive(Clone, Debug)]
 pub struct SessionMeta {
+    /// Unique session identifier, assigned at session creation.
     pub id: u64,
+    /// Network protocol (currently always TCP).
     pub network: Network,
+    /// Tag of the inbound that accepted this session.
     pub inbound_tag: String,
+    /// Client peer's socket address.
     pub peer: SocketAddr,
+    /// Destination the client wants to reach.
     pub destination: Destination,
+    /// Session start time, used for duration calculations.
     pub start: Instant,
 }
 
+/// Routing decision for a session.
+///
+/// Tracks which outbound was selected and why. Starts empty and is
+/// populated by the router before dispatch.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionRoute {
+    /// Tag of the selected outbound, if routing has occurred.
     pub selected_outbound: Option<String>,
+    /// Reason for the route decision, if routing has occurred.
     pub reason: Option<RouteReason>,
 }
 
@@ -116,15 +162,27 @@ impl SessionRoute {
     }
 }
 
+/// Mutable session state.
+///
+/// Contains buffered payload data accumulated before routing decision is made.
+/// This allows the relay to handle pipelined or pre-loaded request data.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionState {
+    /// Payload data received from the client before the outbound was selected.
     pub buffered_payload: Vec<u8>,
 }
 
+/// Complete session context, combining immutable metadata with mutable routing and state.
+///
+/// `meta` is wrapped in `Arc` to allow sharing across tasks while maintaining
+/// identity. `route` and `state` are owned directly and updated during the session.
 #[derive(Clone, Debug)]
 pub struct SessionContext {
+    /// Immutable session metadata, shared via Arc for multi-task access.
     pub meta: Arc<SessionMeta>,
+    /// Routing decision for this session.
     pub route: SessionRoute,
+    /// Mutable session state, including buffered payload.
     pub state: SessionState,
 }
 
