@@ -22,6 +22,8 @@ pub struct InputLogConfig {
     pub level: Option<String>,
     #[serde(default)]
     pub disabled: bool,
+    #[serde(default)]
+    pub timestamp: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]

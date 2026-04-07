@@ -65,6 +65,7 @@ mod tests {
             log: LogConfig {
                 level: "info".into(),
                 disabled: false,
+                timestamp: false,
             },
             inbounds: vec![InboundConfig::TProxy(TProxyInboundConfig {
                 tag: "tproxy-in".into(),

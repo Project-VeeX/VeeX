@@ -40,7 +40,8 @@ rustls-pemfile = "2"
 tokio-rustls = "0.26"
 thiserror = "2"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "time", "local-time"] }
+time = { version = "0.3", features = ["macros"] }
 sha2 = "0.10"
 
 [profile.release]

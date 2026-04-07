@@ -71,6 +71,7 @@ fn run_command(config_path: &str, verbose: bool) -> Result<u8, (u8, String)> {
         level: parse_log_level(&config.log.level)
             .map_err(|message| (EXIT_CONFIG_ERROR, message))?,
         disabled: config.log.disabled,
+        timestamp: config.log.timestamp,
     };
 
     init_tracing(&logging)

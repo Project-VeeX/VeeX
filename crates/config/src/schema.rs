@@ -10,6 +10,7 @@ pub struct ProxyConfig {
 pub struct LogConfig {
     pub level: String,
     pub disabled: bool,
+    pub timestamp: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

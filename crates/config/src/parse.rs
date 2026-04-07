@@ -168,6 +168,7 @@ fn input_log_into_config(input_config: InputLogConfig) -> LogConfig {
             .level
             .unwrap_or_else(|| DEFAULT_LOG_LEVEL.to_string()),
         disabled: input_config.disabled,
+        timestamp: input_config.timestamp,
     }
 }
 
@@ -346,7 +347,7 @@ fn classify_ignored_path(input_config: &InputConfig, path: &str) -> IgnoredDispo
         "$.route.rules" => IgnoredDisposition::Warn(
             "route.rules is accepted for compatibility but not implemented yet",
         ),
-        "$.log.timestamp" | "$.log.output" => IgnoredDisposition::Warn(
+        "$.log.output" => IgnoredDisposition::Warn(
             "log compatibility field is accepted but ignored by the current config surface",
         ),
         _ if path.starts_with("$.route.") => IgnoredDisposition::Ignore,
@@ -655,7 +656,7 @@ mod tests {
             .map(|warning| warning.path.as_str())
             .collect();
 
-        assert!(warning_paths.contains(&"$.log.timestamp"));
+        assert!(report.config.log.timestamp);
         assert!(warning_paths.contains(&"$.dns"));
         assert!(warning_paths.contains(&"$.inbounds[0].sniff"));
         assert!(warning_paths.contains(&"$.inbounds[0].users"));
@@ -679,6 +680,31 @@ mod tests {
             .diagnostics
             .ignored
             .contains(&"$.log.noise".to_string()));
+    }
+
+    #[test]
+    fn parses_log_timestamp_as_supported_field_without_warning() {
+        let input = r#"
+        {
+          "log": { "level": "info", "timestamp": true },
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let (config, diagnostics) =
+            parse_config_with_diagnostics(input).expect("timestamp field should parse");
+
+        assert!(config.log.timestamp);
+        assert!(!diagnostics
+            .warnings
+            .iter()
+            .any(|warning| warning.path == "$.log.timestamp"));
     }
 
     #[test]
@@ -1124,6 +1150,7 @@ mod tests {
             .collect();
 
         assert_eq!(report.config.route.final_outbound, "proxy");
+        assert!(report.config.log.timestamp);
         assert_eq!(
             report.config.route.bypass,
             vec!["trojan.example.com".to_string(), "192.168.0.1".to_string()]
@@ -1131,6 +1158,7 @@ mod tests {
         assert!(warning_paths.contains(&"$.dns"));
         assert!(warning_paths.contains(&"$.outbounds[1].domain_resolver"));
         assert!(warning_paths.contains(&"$.route.rules"));
+        assert!(!warning_paths.contains(&"$.log.timestamp"));
         parse_config(input).expect("compat example should remain loadable");
     }
 

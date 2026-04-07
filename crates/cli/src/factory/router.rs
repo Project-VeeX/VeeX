@@ -39,6 +39,7 @@ mod tests {
             log: LogConfig {
                 level: "info".into(),
                 disabled: false,
+                timestamp: false,
             },
             inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
                 tag: "socks-in".into(),

@@ -10,20 +10,25 @@ use std::{
 
 #[test]
 fn run_starts_listener_relays_direct_and_shuts_down_on_sigint() {
-    run_lifecycle_smoke_test("-INT", false);
+    run_lifecycle_smoke_test("-INT", false, false);
 }
 
 #[test]
 fn run_starts_listener_relays_direct_and_shuts_down_on_sigterm() {
-    run_lifecycle_smoke_test("-TERM", false);
+    run_lifecycle_smoke_test("-TERM", false, false);
 }
 
 #[test]
 fn run_prints_config_warnings_with_verbose() {
-    run_lifecycle_smoke_test("-TERM", true);
+    run_lifecycle_smoke_test("-TERM", true, false);
 }
 
-fn run_lifecycle_smoke_test(signal: &str, verbose: bool) {
+#[test]
+fn run_emits_timestamped_logs_when_enabled() {
+    run_lifecycle_smoke_test("-TERM", false, true);
+}
+
+fn run_lifecycle_smoke_test(signal: &str, verbose: bool, timestamp: bool) {
     let echo_listener = TcpListener::bind(("127.0.0.1", 0)).expect("echo listener should bind");
     let echo_addr = echo_listener
         .local_addr()
@@ -45,7 +50,7 @@ fn run_lifecycle_smoke_test(signal: &str, verbose: bool) {
         &format!(
             r#"{{
   "dns": {{}},
-  "log": {{ "level": "info", "disabled": false }},
+  "log": {{ "level": "info", "disabled": false, "timestamp": {} }},
   "inbounds": [
     {{ "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": {} }}
   ],
@@ -54,6 +59,7 @@ fn run_lifecycle_smoke_test(signal: &str, verbose: bool) {
   ],
   "route": {{ "final": "direct" }}
 }}"#,
+            timestamp,
             socks_addr.port()
         ),
     );
@@ -91,6 +97,9 @@ fn run_lifecycle_smoke_test(signal: &str, verbose: bool) {
     assert!(combined.contains("process_start"));
     assert!(combined.contains("process_stop"));
     assert_output_has_event(&combined, "session_finish", &[("success", "true")]);
+    if timestamp {
+        assert_event_line_has_timestamp(&combined, "process_start");
+    }
     if verbose {
         assert!(stderr.contains("config warning at $.dns"));
     } else {
@@ -276,6 +285,32 @@ fn assert_output_has_event(output: &str, event_name: &str, expected_fields: &[(&
         matched,
         "expected event `{event_name}` with fields {:?} in output:\n{output}",
         expected_fields
+    );
+}
+
+fn assert_event_line_has_timestamp(output: &str, event_name: &str) {
+    let line = output
+        .lines()
+        .find(|line| parse_output_fields(line).get("event").map(String::as_str) == Some(event_name))
+        .unwrap_or_else(|| panic!("expected event `{event_name}` in output:\n{output}"));
+    let prefix = line
+        .split_whitespace()
+        .next()
+        .expect("timestamped log line should not be empty");
+    let fractional = prefix
+        .rsplit_once('.')
+        .map(|(_, tail)| tail)
+        .expect("timestamp should contain millisecond precision");
+
+    assert!(
+        prefix.contains('T')
+            && fractional.len() == 3
+            && prefix.matches(':').count() == 2,
+        "expected local millisecond timestamp prefix without offset for `{event_name}`, got line:\n{line}"
+    );
+    assert!(
+        line.starts_with(&format!("{prefix}  INFO ")),
+        "expected default aligned level formatting for `{event_name}`, got line:\n{line}"
     );
 }
 

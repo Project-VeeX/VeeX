@@ -11,6 +11,7 @@ pub enum LogLevel {
 pub struct LoggingOptions {
     pub level: LogLevel,
     pub disabled: bool,
+    pub timestamp: bool,
 }
 
 pub fn log_line(level: LogLevel, message: &str) {

@@ -61,6 +61,7 @@ async fn runtime_supports_socks_to_direct_round_trip() {
         log: LogConfig {
             level: "info".into(),
             disabled: false,
+            timestamp: false,
         },
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
@@ -110,6 +111,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
         log: LogConfig {
             level: "info".into(),
             disabled: false,
+            timestamp: false,
         },
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
@@ -260,6 +262,7 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
         log: LogConfig {
             level: "info".into(),
             disabled: false,
+            timestamp: false,
         },
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
@@ -376,6 +379,7 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
         log: LogConfig {
             level: "info".into(),
             disabled: false,
+            timestamp: false,
         },
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
@@ -481,6 +485,7 @@ async fn runtime_starts_with_redirect_inbound() {
         log: LogConfig {
             level: "info".into(),
             disabled: false,
+            timestamp: false,
         },
         inbounds: vec![InboundConfig::Redirect(
             veex_config::RedirectInboundConfig {
@@ -542,6 +547,7 @@ async fn runtime_reports_listener_bind_failure_with_io_error_kind() {
         log: LogConfig {
             level: "info".into(),
             disabled: false,
+            timestamp: false,
         },
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
@@ -614,6 +620,7 @@ async fn runtime_emits_session_start_and_finish_events() {
         log: LogConfig {
             level: "info".into(),
             disabled: false,
+            timestamp: false,
         },
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
@@ -729,6 +736,7 @@ async fn invalid_socks_request_emits_handshake_failed_event() {
         log: LogConfig {
             level: "info".into(),
             disabled: false,
+            timestamp: false,
         },
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
