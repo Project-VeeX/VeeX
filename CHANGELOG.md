@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3
+
+- Config parsing is now serde-based and easier to extend for future config fields.
+- Added `log.timestamp` config option to enable RFC3339 timestamps in tracing output.
+- Refresh veex-project skill to match phase4 state, and cleaned up the `.agents/skills/` directory.
+- 
+
 ## 0.4.2
 
 - Tightened tracing and event-schema boundaries across transport, outbound, relay, and dispatcher layers without changing the validated session-path semantics.
