@@ -1,5 +1,22 @@
 # VeeX Source Map
 
+## Start Here (Agent Onboarding Path)
+
+When a new agent or you are unfamiliar with the current project state, read these references in order:
+
+1. **`references/project-positioning.md`** — What VeeX is, what it is not, the one-line definition, supported surface, and explicit non-goals. Start here before touching any code.
+2. **`references/phase-map.md`** — What each phase (1 through 4) delivered and which conclusions still carry forward. Gives historical context for why the architecture looks the way it does.
+3. **`references/repo-map.md`** — The workspace crates, who owns what, and where new changes should land. Read before opening any crate code.
+4. **`references/config-contract.md`** — The exact accepted config surface, bypass semantics, and which fields are tolerated-but-unimplemented. Required reading before any config-related work.
+5. **`references/architecture-closure.md`** — Internal boundary decisions that are closed and should not be reopened. Read before refactoring or expanding any core abstraction.
+6. **`references/task-derived-gotchas.md`** — Real failure modes already encountered. High-value reading before touching transparent proxy, routing_mark, or dual-stack paths.
+
+After the above, use the remaining references as needed:
+- `references/observability-errors.md` — for tracing/event questions
+- `references/validation-status.md` — before claiming device validation is complete
+- `references/validation-contract.md` — before writing validation evidence
+- `references/trigger-examples.md` — to check whether this skill is the right trigger
+
 ## Stable Public Sources
 
 - `README.md`
@@ -8,9 +25,9 @@
 - `PROJECT_GUIDE.md`
   - stable project guide
   - use for repository boundary, target topology, workspace structure, runtime model, compatibility contract, and operational signals
-- `docs/observability-and-errors.md`
-  - stable engineering doc for thiserror / tracing closure
-  - use for canonical wording of current error-model and structured-event changes
+- `CHANGELOG.md`
+  - version-by-version change history
+  - authoritative source for what changed between releases
 - `examples/socks-trojan.json`
 - `examples/redirect-trojan.json`
 - `examples/tproxy-compat.json`

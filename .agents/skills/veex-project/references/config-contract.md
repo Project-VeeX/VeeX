@@ -54,13 +54,14 @@ The router applies built-in bypass before configured bypass:
 
 ## Known Ignored Fields
 
-The current parser may tolerate unrelated fields that commonly appear in broader upstream-style JSON:
+Known tolerated-but-unimplemented fields (accepted in config but have no effect):
 
-- `dns`
-- `route.rules`
-- `domain_resolver`
-- `log.timestamp`
-- `log.output`
+- `dns` — DNS server or resolver configuration
+- `route.rules` — full rule-engine config surface
+- `domain_resolver` — domain resolution strategy
+- `log.output` — log output destination (e.g. file path, syslog); VeeX currently logs to stdout/stderr only
+
+Note: `log.timestamp` is implemented and controls whether tracing output includes RFC3339 timestamps.
 
 Known fields remain strictly typed. An unsupported type on a known field is still an error.
 

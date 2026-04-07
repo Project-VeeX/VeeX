@@ -41,6 +41,53 @@ Key additions:
 
 The important phase conclusion was that this was no longer just "add one inbound"; it required a robust Linux transparent-socket subsystem and clear validation discipline.
 
+## Phase 4
+
+Phase 4 was an **engineering hardening** phase focused on observability, error modeling, and config infrastructure. No new inbounds, outbounds, or protocol features were added. All changes were cross-cutting improvements to existing paths.
+
+### v0.4.0 — Structured Observability Foundation
+
+Key additions:
+
+- `thiserror` unified error modeling across all crates
+- `tracing` as the structured observability backbone across runtime, session, TLS, and transparent-socket paths
+- stable field contracts for key events (`session_start`, `route_select`, `session_finish`, etc.)
+- relay failure accounting: `session_finish` now preserves partial `bytes_up`/`bytes_down` instead of collapsing to `0/0`
+- `route.bypass` semantics tightened to exact domain and exact IP matches; wildcard/suffix patterns rejected explicitly
+- Trojan SHA-224: replaced hand-rolled implementation with `sha2::Sha224`
+
+### v0.4.1 — Session-Aware Tracing and Relay Events
+
+Key additions:
+
+- session-aware tracing through Trojan transport connect and TLS handshake paths
+- structured `direct` outbound connect events with `routing_mark` fields
+- `relay_start`, `relay_failed`, `relay_half_close` coverage
+- raised critical session-path events to `info`/`warn` levels
+- normalized transport failure fields for real-device troubleshooting
+
+### v0.4.2 — Event Schema Tightening
+
+Key additions:
+
+- tighter tracing and event-schema boundaries across transport, outbound, relay, and dispatcher layers
+- stable `tls_handshake_*` coverage with `host`/`port`/`resolved_addr`
+- clarified config responsibilities: raw parse separated from semantic validation
+- reorganized router into clearer decision pipeline (built-in bypass → configured bypass → final fallback) ahead of future `route.rules` work
+- UTF-8 string preservation fix in config parser
+
+### v0.4.3 — Serde-Based Config Parsing
+
+Key additions:
+
+- full migration from hand-written JSON preflight parser to **serde-based** deserialization for the config model
+- `crates/config/src/preflight.rs` retains the controlled minimal JSON-subset preflight (duplicate-key detection, JSON subset validation only)
+- `crates/config/src/input.rs` introduced as the serde deserialization layer (`InputConfig` structs with `#[serde]`)
+- `crates/config/src/parse.rs` rewritten to combine preflight validation with serde loading
+- `log.timestamp` config field implemented (controls RFC3339 timestamps in tracing output)
+
+The Phase 4 conclusion was that the project had reached **observability maturity**: the core execution path was now fully instrumented, the error model was clean and stable, and the config subsystem was maintainable and extensible.
+
 ## Current Carry-Forward Conclusions
 
 The following conclusions still matter across phases:

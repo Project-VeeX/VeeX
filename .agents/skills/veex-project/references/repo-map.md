@@ -2,7 +2,6 @@
 
 ## Workspace Snapshot
 
-- Current workspace version: `0.3.1`
 - Root crates:
   - `crates/cli`
   - `crates/config`
@@ -23,9 +22,14 @@
   - runtime / bootstrap / factory wiring
   - process startup, signal handling, foreground lifecycle
 - `crates/config`
-  - minimal JSON-subset parser
-  - schema, parse, validate
-  - config compatibility boundary
+  - config schema, semantic validation, and compatibility boundary
+  - internal structure:
+    - `preflight.rs`: controlled minimal JSON-subset preflight for duplicate-key detection and JSON subset validation before deserialization
+    - `input.rs`: serde deserialization layer (`InputConfig` structs with `#[serde]`)
+    - `parse.rs`: combines preflight validation with serde loading
+    - `schema.rs`: internal config model (`ProxyConfig`, `InboundConfig`, etc.)
+    - `validate.rs`: semantic validation after deserialization
+  - This two-layer design (preflight + serde) enables future config surface extension (e.g. `route.rules`, sniff) without growing the JSON preflight
 - `crates/core`
   - core types such as `Destination`, `Host`, and `SessionContext`
   - error model and `ErrorKind`
@@ -61,7 +65,7 @@
 - `Router` stays pure computation: no I/O and no DNS resolution during construction.
 - `routing_mark` belongs to direct outbound config and implementation; it should not become a `core` trait or routing abstraction.
 - runtime, factory, and bootstrap orchestration stay in `cli`; do not bloat `runtime.rs` or `core` again.
-- `crates/config/src/json.rs` is a controlled minimal JSON-subset parser, not a general-purpose JSON implementation.
+- The `preflight` / `serde` split in `crates/config` is intentional. Do not collapse them back into a single hand-written parser; the serde layer is what enables future config surface extension.
 
 ## Common Landing Zones
 

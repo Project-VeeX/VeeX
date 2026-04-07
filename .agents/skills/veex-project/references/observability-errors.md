@@ -46,9 +46,14 @@ The canonical repository document is `docs/observability-and-errors.md`. This re
   - `destination_resolve_failed`
 - transport / transparent diagnostics:
   - `tls_handshake_failed`
+  - `tls_handshake_start` (carries `host`/`port`/`resolved_addr`)
   - `transparent_socket_config`
   - `original_dst_retry`
   - `listener_fallback`
+- relay:
+  - `relay_start`
+  - `relay_failed`
+  - `relay_half_close`
 
 ## Field Alignment That Should Stay Stable
 
@@ -80,9 +85,12 @@ The canonical repository document is `docs/observability-and-errors.md`. This re
 - failure-side events should carry `error_kind` and `error` when the boundary already has a `ProxyError`.
 - TLS handshake failures should carry:
   - `host`
+  - `port`
   - `server_name`
   - `insecure`
   - `disable_sni`
+  - `resolved_addr`
+- `tls_handshake_start` carries the same `host`/`port`/`resolved_addr` fields for connect-path diagnostics
 - `transparent_socket_config` should carry:
   - `socket_family`
   - `local_addr`

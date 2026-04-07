@@ -27,8 +27,18 @@ These constraints come from actual phase task packs, closure notes, and complete
 ## Compatibility And Public-Doc Rules
 
 - "Unknown fields tolerated, known fields strictly typed" is an intentional parser policy. Do not turn it into blanket permissiveness.
-- Ignored fields do not imply implemented features; they only mean the current compatibility subset allows them to appear.
+- Ignored fields do not imply implemented features; they only mean the current compatibility subset allows them to appear. Exception: `log.timestamp` is explicitly implemented, not ignored.
 - Prefer neutral naming in public docs and fixtures. Internal tasks may discuss Passwall replacement, but public artifacts do not need to bind the repo to a single downstream product name.
+
+## Phase 4 Engineering Gotchas
+
+These are lessons from the Phase 4 engineering hardening work:
+
+- Serde deserialization error messages include a path (e.g. `$.inbounds[0].listen`) via `serde_path_to_error`; this is the canonical diagnostic path, not something to re-implement
+- Config parse errors from serde are distinct from preflight duplicate-key errors; preflight runs before serde, so duplicate-key errors are reported separately from type/structure errors
+- `log.timestamp` controls RFC3339 timestamps in tracing output; enabling it requires `time::macros::format_description` and `UtcOffset::current_local_offset()`, which can fail on some platforms — the fallback is UTC without timestamps
+- UTF-8 strings in JSON config must be preserved literally; the preflight parser validates UTF-8 validity and the `push_string_chunk` approach avoids double-decoding
+- Relay partial bytes (`bytes_up`/`bytes_down`) are engineering observability metrics, not billing-grade counters; they are meaningful for diagnosing "did this fail early or mid-stream" but should not be treated as exact accounting
 
 ## Validation Rules
 

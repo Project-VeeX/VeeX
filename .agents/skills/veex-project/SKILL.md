@@ -7,6 +7,8 @@ description: Use when working inside the VeeX main repository and the task depen
 
 Use this skill to align on VeeX project context before editing code or docs. The job is to answer four questions quickly: what VeeX currently is, what it explicitly does not do, which crates or docs a change should touch, and which prior conclusions a new change must not violate.
 
+**New to this skill or the VeeX project?** Start with `references/source-map.md` and follow the "Start Here (Agent Onboarding Path)" section in order. This gives you the minimal context to be productive without reading everything at once.
+
 ## Goal
 
 - Build the smallest useful context for VeeX product scope, repository boundaries, documentation layout, and phase constraints.
