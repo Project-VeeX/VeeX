@@ -3,17 +3,18 @@
 mod defaults;
 mod error;
 mod input;
-mod json;
 mod parse;
+mod preflight;
 mod schema;
 mod validate;
 
 pub use defaults::DEFAULT_DIRECT_OUTBOUND_TAG;
 pub use error::{ConfigError, ExitCodeHint};
-pub use json::JsonValue;
 pub use parse::{
-    load_from_path, load_from_path_unvalidated, parse_config, parse_config_unvalidated,
+    load_from_path, load_from_path_unvalidated, load_from_path_with_diagnostics, parse_config,
+    parse_config_unvalidated, parse_config_with_diagnostics, ParseDiagnostics, ParseWarning,
 };
+pub use preflight::JsonValue;
 pub use schema::{
     DirectOutboundConfig, InboundConfig, InboundType, LogConfig, OutboundConfig, OutboundType,
     ProxyConfig, RedirectInboundConfig, RouteConfig, SocksInboundConfig, TProxyInboundConfig,

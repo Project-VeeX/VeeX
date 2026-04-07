@@ -10,15 +10,20 @@ use std::{
 
 #[test]
 fn run_starts_listener_relays_direct_and_shuts_down_on_sigint() {
-    run_lifecycle_smoke_test("-INT");
+    run_lifecycle_smoke_test("-INT", false);
 }
 
 #[test]
 fn run_starts_listener_relays_direct_and_shuts_down_on_sigterm() {
-    run_lifecycle_smoke_test("-TERM");
+    run_lifecycle_smoke_test("-TERM", false);
 }
 
-fn run_lifecycle_smoke_test(signal: &str) {
+#[test]
+fn run_prints_config_warnings_with_verbose() {
+    run_lifecycle_smoke_test("-TERM", true);
+}
+
+fn run_lifecycle_smoke_test(signal: &str, verbose: bool) {
     let echo_listener = TcpListener::bind(("127.0.0.1", 0)).expect("echo listener should bind");
     let echo_addr = echo_listener
         .local_addr()
@@ -39,6 +44,7 @@ fn run_lifecycle_smoke_test(signal: &str) {
         "veex-smoke-run",
         &format!(
             r#"{{
+  "dns": {{}},
   "log": {{ "level": "info", "disabled": false }},
   "inbounds": [
     {{ "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": {} }}
@@ -52,9 +58,13 @@ fn run_lifecycle_smoke_test(signal: &str) {
         ),
     );
 
-    let child = Command::new(env!("CARGO_BIN_EXE_veex"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_veex"));
+    command.arg("run");
+    if verbose {
+        command.arg("--verbose");
+    }
+    let child = command
         .args([
-            "run",
             "-c",
             config_path.to_str().expect("config path should be utf-8"),
         ])
@@ -81,6 +91,11 @@ fn run_lifecycle_smoke_test(signal: &str) {
     assert!(combined.contains("process_start"));
     assert!(combined.contains("process_stop"));
     assert_output_has_event(&combined, "session_finish", &[("success", "true")]);
+    if verbose {
+        assert!(stderr.contains("config warning at $.dns"));
+    } else {
+        assert!(!stderr.contains("config warning at"));
+    }
 
     echo_thread.join().expect("echo thread should join");
     fs::remove_file(&config_path).expect("config file should be removed");
@@ -139,6 +154,36 @@ fn check_accepts_tproxy_compat_example() {
     );
     assert!(stdout.contains("config check passed"));
     assert!(stdout.contains("final=proxy"));
+    assert!(!stderr.contains("config warning at"));
+}
+
+#[test]
+fn check_accepts_tproxy_compat_example_and_prints_warnings_with_verbose() {
+    let config_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/tproxy-compat.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_veex"))
+        .args([
+            "check",
+            "--verbose",
+            "-c",
+            config_path.to_str().expect("config path should be utf-8"),
+        ])
+        .output()
+        .expect("veex check should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("config check passed"));
+    assert!(stdout.contains("final=proxy"));
+    assert!(stderr.contains("config warning at $.dns"));
+    assert!(stderr.contains("config warning at $.outbounds[1].domain_resolver"));
+    assert!(stderr.contains("config warning at $.route.rules"));
 }
 
 fn reserve_local_addr() -> SocketAddr {

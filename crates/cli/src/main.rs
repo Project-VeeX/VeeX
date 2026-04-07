@@ -6,7 +6,7 @@ use veex_cli::{
     logging::init_tracing,
     runtime::run_with_shutdown,
 };
-use veex_config::{load_from_path, ConfigError};
+use veex_config::{load_from_path_with_diagnostics, ConfigError, ParseDiagnostics};
 use veex_core::sanitize_field;
 use veex_observability::{LogLevel, LoggingOptions};
 
@@ -29,17 +29,26 @@ fn try_main() -> Result<u8, (u8, String)> {
     let command = parse_args(env::args()).map_err(|err| (EXIT_CONFIG_ERROR, err.to_string()))?;
 
     match command {
-        Command::Check { config_path } => {
-            let config = load_config(&config_path)?;
+        Command::Check {
+            config_path,
+            verbose,
+        } => {
+            let loaded = load_config(&config_path)?;
+            if verbose {
+                emit_config_warnings(&loaded.diagnostics);
+            }
             println!(
                 "config check passed: {} inbound(s), {} outbound(s), final={}",
-                config.inbounds.len(),
-                config.outbounds.len(),
-                config.route.final_outbound
+                loaded.config.inbounds.len(),
+                loaded.config.outbounds.len(),
+                loaded.config.route.final_outbound
             );
             Ok(EXIT_OK)
         }
-        Command::Run { config_path } => run_command(&config_path),
+        Command::Run {
+            config_path,
+            verbose,
+        } => run_command(&config_path, verbose),
         Command::Version => {
             println!(
                 "veex {}\nbuild_time={}\ngit_commit={}",
@@ -52,8 +61,12 @@ fn try_main() -> Result<u8, (u8, String)> {
     }
 }
 
-fn run_command(config_path: &str) -> Result<u8, (u8, String)> {
-    let config = load_config(config_path)?;
+fn run_command(config_path: &str, verbose: bool) -> Result<u8, (u8, String)> {
+    let loaded = load_config(config_path)?;
+    if verbose {
+        emit_config_warnings(&loaded.diagnostics);
+    }
+    let config = loaded.config;
     let logging = LoggingOptions {
         level: parse_log_level(&config.log.level)
             .map_err(|message| (EXIT_CONFIG_ERROR, message))?,
@@ -91,12 +104,27 @@ fn run_command(config_path: &str) -> Result<u8, (u8, String)> {
     Ok(EXIT_OK)
 }
 
-fn load_config(path: &str) -> Result<veex_config::ProxyConfig, (u8, String)> {
-    load_from_path(path).map_err(map_config_error)
+struct LoadedConfig {
+    config: veex_config::ProxyConfig,
+    diagnostics: ParseDiagnostics,
+}
+
+fn load_config(path: &str) -> Result<LoadedConfig, (u8, String)> {
+    let (config, diagnostics) = load_from_path_with_diagnostics(path).map_err(map_config_error)?;
+    Ok(LoadedConfig {
+        config,
+        diagnostics,
+    })
 }
 
 fn map_config_error(err: ConfigError) -> (u8, String) {
     (err.exit_code_hint() as u8, err.to_string())
+}
+
+fn emit_config_warnings(diagnostics: &ParseDiagnostics) {
+    for warning in &diagnostics.warnings {
+        eprintln!("config warning at {}: {}", warning.path, warning.message);
+    }
 }
 
 fn parse_log_level(value: &str) -> Result<LogLevel, String> {

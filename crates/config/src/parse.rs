@@ -1,7 +1,5 @@
 use std::{fs, path::Path};
 
-use serde_json::error::Category;
-
 use crate::{
     defaults::DEFAULT_LOG_LEVEL,
     error::{display_path, ConfigError},
@@ -9,7 +7,7 @@ use crate::{
         InputConfig, InputInbound, InputInboundType, InputLogConfig, InputOutbound,
         InputOutboundType, InputRouteConfig, InputTrojanTlsConfig,
     },
-    json::parse_json,
+    preflight::parse_json,
     schema::{
         DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
         RedirectInboundConfig, RouteConfig, SocksInboundConfig, TProxyInboundConfig,
@@ -19,15 +17,15 @@ use crate::{
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct ParseDiagnostics {
-    warnings: Vec<ParseWarning>,
-    ignored: Vec<String>,
+pub struct ParseDiagnostics {
+    pub warnings: Vec<ParseWarning>,
+    pub ignored: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ParseWarning {
-    path: String,
-    message: &'static str,
+pub struct ParseWarning {
+    pub path: String,
+    pub message: &'static str,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -50,6 +48,21 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Result<ProxyConfig, ConfigError
     Ok(config)
 }
 
+pub fn load_from_path_with_diagnostics(
+    path: impl AsRef<Path>,
+) -> Result<(ProxyConfig, ParseDiagnostics), ConfigError> {
+    let path = path.as_ref();
+    if path.as_os_str().is_empty() {
+        return Err(ConfigError::file_path(
+            display_path(path),
+            "path must not be empty",
+        ));
+    }
+
+    let content = fs::read_to_string(path).map_err(|err| ConfigError::io_path(path, err))?;
+    parse_config_with_diagnostics(&content)
+}
+
 pub fn load_from_path_unvalidated(path: impl AsRef<Path>) -> Result<ProxyConfig, ConfigError> {
     let path = path.as_ref();
     if path.as_os_str().is_empty() {
@@ -69,12 +82,25 @@ pub fn parse_config(input: &str) -> Result<ProxyConfig, ConfigError> {
     Ok(config)
 }
 
+pub fn parse_config_with_diagnostics(
+    input: &str,
+) -> Result<(ProxyConfig, ParseDiagnostics), ConfigError> {
+    let ParseReport {
+        config,
+        diagnostics,
+    } = parse_config_report_unvalidated(input)?;
+    validate_config(&config)?;
+    Ok((config, diagnostics))
+}
+
 pub fn parse_config_unvalidated(input: &str) -> Result<ProxyConfig, ConfigError> {
     Ok(parse_config_report_unvalidated(input)?.config)
 }
 
 fn parse_config_report_unvalidated(input: &str) -> Result<ParseReport, ConfigError> {
-    parse_json(input)?;
+    // Preflight keeps duplicate-key rejection and the current JSON subset checks.
+    // The typed config comes only from the serde pass below.
+    preflight_json_input(input)?;
 
     let (input_config, ignored_paths) = deserialize_input_config(input)?;
     let diagnostics = classify_ignored_paths(&input_config, ignored_paths)?;
@@ -86,39 +112,36 @@ fn parse_config_report_unvalidated(input: &str) -> Result<ParseReport, ConfigErr
     })
 }
 
+fn preflight_json_input(input: &str) -> Result<(), ConfigError> {
+    let _ = parse_json(input)?;
+    Ok(())
+}
+
 fn deserialize_input_config(input: &str) -> Result<(InputConfig, Vec<String>), ConfigError> {
     let mut ignored = Vec::new();
-    let mut deserializer = serde_json::Deserializer::from_str(input);
-    let input_config = serde_ignored::deserialize(&mut deserializer, |path| {
+    let mut json_deserializer = serde_json::Deserializer::from_str(input);
+    let mut track = serde_path_to_error::Track::new();
+    let path_deserializer =
+        serde_path_to_error::Deserializer::new(&mut json_deserializer, &mut track);
+    let input_config = serde_ignored::deserialize(path_deserializer, |path| {
         ignored.push(normalize_path(&path.to_string()));
     })
-    .map_err(|err| map_serde_error(input, err))?;
-    deserializer
+    .map_err(|err| map_serde_error(err, Some(track.path().to_string())))?;
+    json_deserializer
         .end()
-        .map_err(|err| map_serde_error(input, err))?;
+        .map_err(|err| map_serde_error(err, None))?;
 
     Ok((input_config, ignored))
 }
 
-fn map_serde_error(input: &str, err: serde_json::Error) -> ConfigError {
-    match err.classify() {
-        Category::Data => map_serde_data_error(input, err.to_string()),
-        Category::Syntax | Category::Eof | Category::Io => ConfigError::json("$", err.to_string()),
-    }
-}
+fn map_serde_error(err: serde_json::Error, path: Option<String>) -> ConfigError {
+    let message = err.to_string();
 
-fn map_serde_data_error(input: &str, fallback_message: String) -> ConfigError {
-    let mut deserializer = serde_json::Deserializer::from_str(input);
-    let result: Result<InputConfig, _> = serde_path_to_error::deserialize(&mut deserializer);
-
-    match result {
-        Ok(_) => ConfigError::validation("$", fallback_message),
-        Err(err) => {
-            let message = err.inner().to_string();
-            let raw_path = err.path().to_string();
-            ConfigError::validation(augment_path(raw_path, &message), message)
-        }
+    if err.is_data() {
+        return ConfigError::validation(augment_path(path.unwrap_or_default(), &message), message);
     }
+
+    ConfigError::json("$", message)
 }
 
 fn input_config_into_proxy_config(input_config: InputConfig) -> Result<ProxyConfig, ConfigError> {
@@ -424,12 +447,28 @@ fn is_udp_related(field: &str) -> bool {
 fn normalize_path(path: &str) -> String {
     let path = path.trim_end_matches('.');
     if path.is_empty() {
-        "$".to_string()
-    } else if path.starts_with('[') {
-        format!("${path}")
-    } else {
-        format!("$.{path}")
+        return "$".to_string();
     }
+
+    let mut normalized = String::from("$");
+    for segment in path.split('.').filter(|segment| !segment.is_empty()) {
+        if segment == "?" {
+            continue;
+        }
+
+        if segment.starts_with('[') {
+            normalized.push_str(segment);
+        } else if segment.chars().all(|ch| ch.is_ascii_digit()) {
+            normalized.push('[');
+            normalized.push_str(segment);
+            normalized.push(']');
+        } else {
+            normalized.push('.');
+            normalized.push_str(segment);
+        }
+    }
+
+    normalized
 }
 
 fn augment_path(path: String, message: &str) -> String {
@@ -460,7 +499,7 @@ fn extract_missing_field(message: &str) -> Option<&str> {
 mod tests {
     use crate::{DirectOutboundConfig, InboundConfig, OutboundConfig, TProxyInboundConfig};
 
-    use super::{parse_config, parse_config_report_unvalidated};
+    use super::{parse_config, parse_config_report_unvalidated, parse_config_with_diagnostics};
 
     #[test]
     fn parses_valid_minimal_config() {
@@ -662,6 +701,35 @@ mod tests {
     }
 
     #[test]
+    fn parse_config_with_diagnostics_exposes_warnings_without_changing_default_parse() {
+        let input = r#"
+        {
+          "dns": { "servers": ["223.5.5.5"] },
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080, "sniff": true }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let (config, diagnostics) =
+            parse_config_with_diagnostics(input).expect("diagnostics parse should succeed");
+        let warning_paths: Vec<&str> = diagnostics
+            .warnings
+            .iter()
+            .map(|warning| warning.path.as_str())
+            .collect();
+
+        assert_eq!(config.route.final_outbound, "direct");
+        assert!(warning_paths.contains(&"$.dns"));
+        assert!(warning_paths.contains(&"$.inbounds[0].sniff"));
+        parse_config(input).expect("default parse should remain silent and succeed");
+    }
+
+    #[test]
     fn rejects_unknown_fields_that_declare_unsupported_tproxy_udp_capability() {
         let input = r#"
         {
@@ -842,6 +910,35 @@ mod tests {
         let err = parse_config(input).expect_err("tls.enabled=false should fail");
         assert!(err.to_string().contains("$.outbounds[1].tls.enabled"));
         assert!(err.to_string().contains("requires TLS"));
+    }
+
+    #[test]
+    fn trojan_tls_wrong_type_is_validation_error_at_tls_path() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            {
+              "type": "trojan",
+              "tag": "proxy",
+              "server": "example.com",
+              "server_port": 443,
+              "password": "secret",
+              "tls": true
+            }
+          ],
+          "route": { "final": "proxy" }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("non-object tls should fail");
+        assert!(err.to_string().contains("$.outbounds[1].tls"));
+        assert!(err
+            .to_string()
+            .contains("expected struct InputTrojanTlsConfig"));
     }
 
     #[test]
@@ -1064,5 +1161,42 @@ mod tests {
         assert_eq!(config.inbounds[0].tag(), "入口");
         assert_eq!(config.outbounds[0].tag(), "direct");
         assert_eq!(config.outbounds[1].tag(), "日用 [0.2]");
+    }
+
+    #[test]
+    fn trojan_tls_unknown_field_is_ignored() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            {
+              "type": "trojan",
+              "tag": "proxy",
+              "server": "example.com",
+              "server_port": 443,
+              "password": "secret",
+              "tls": {
+                "enabled": true,
+                "unknown_field": 123
+              }
+            }
+          ],
+          "route": { "final": "proxy" }
+        }
+        "#;
+
+        let (_config, diagnostics) =
+            parse_config_with_diagnostics(input).expect("unknown tls field should not block");
+
+        assert!(diagnostics
+            .ignored
+            .contains(&"$.outbounds[1].tls.unknown_field".to_string()));
+        assert!(diagnostics
+            .warnings
+            .iter()
+            .all(|warning| warning.path != "$.outbounds[1].tls.unknown_field"));
     }
 }

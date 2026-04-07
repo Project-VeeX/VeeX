@@ -1,7 +1,7 @@
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Command {
-    Run { config_path: String },
-    Check { config_path: String },
+    Run { config_path: String, verbose: bool },
+    Check { config_path: String, verbose: bool },
     Version,
 }
 
@@ -28,8 +28,14 @@ where
     };
 
     match command.as_str() {
-        "run" => parse_config_path(args).map(|config_path| Command::Run { config_path }),
-        "check" => parse_config_path(args).map(|config_path| Command::Check { config_path }),
+        "run" => parse_config_options(args).map(|(config_path, verbose)| Command::Run {
+            config_path,
+            verbose,
+        }),
+        "check" => parse_config_options(args).map(|(config_path, verbose)| Command::Check {
+            config_path,
+            verbose,
+        }),
         "version" => Ok(Command::Version),
         other => Err(CommandError(format!(
             "unknown command '{other}'\n{}",
@@ -38,40 +44,51 @@ where
     }
 }
 
-fn parse_config_path<I>(mut args: I) -> Result<String, CommandError>
+fn parse_config_options<I>(args: I) -> Result<(String, bool), CommandError>
 where
     I: Iterator<Item = String>,
 {
-    let Some(flag) = args.next() else {
+    let mut config_path = None;
+    let mut verbose = false;
+    let mut args = args.peekable();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-c" | "--config" => {
+                let Some(path) = args.next() else {
+                    return Err(CommandError("missing config path after '-c'".to_string()));
+                };
+                if config_path.replace(path).is_some() {
+                    return Err(CommandError(
+                        "duplicate config flag; expected only one '-c <config-path>'".to_string(),
+                    ));
+                }
+            }
+            "--verbose" => {
+                verbose = true;
+            }
+            other => {
+                return Err(CommandError(format!(
+                    "unexpected argument '{other}', expected '--verbose' or '-c <config-path>'"
+                )));
+            }
+        }
+    }
+
+    let Some(config_path) = config_path else {
         return Err(CommandError(
             "missing required flag '-c <config-path>'".to_string(),
         ));
     };
 
-    if flag != "-c" && flag != "--config" {
-        return Err(CommandError(format!(
-            "unexpected argument '{flag}', expected '-c <config-path>'"
-        )));
-    }
-
-    let Some(config_path) = args.next() else {
-        return Err(CommandError("missing config path after '-c'".to_string()));
-    };
-
-    if args.next().is_some() {
-        return Err(CommandError(
-            "too many arguments; expected only '-c <config-path>'".to_string(),
-        ));
-    }
-
-    Ok(config_path)
+    Ok((config_path, verbose))
 }
 
 fn usage() -> String {
     [
         "usage:",
-        "  veex run -c <config-path>",
-        "  veex check -c <config-path>",
+        "  veex run [--verbose] -c <config-path>",
+        "  veex check [--verbose] -c <config-path>",
         "  veex version",
     ]
     .join("\n")
@@ -94,7 +111,48 @@ mod tests {
         assert_eq!(
             command,
             Command::Run {
-                config_path: "config.json".into()
+                config_path: "config.json".into(),
+                verbose: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_check_command_with_verbose_flag() {
+        let args = vec![
+            "veex".to_string(),
+            "check".to_string(),
+            "--verbose".to_string(),
+            "-c".to_string(),
+            "config.json".to_string(),
+        ];
+
+        let command = parse_args(args).expect("command should parse");
+        assert_eq!(
+            command,
+            Command::Check {
+                config_path: "config.json".into(),
+                verbose: true,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_run_command_with_verbose_flag() {
+        let args = vec![
+            "veex".to_string(),
+            "run".to_string(),
+            "--verbose".to_string(),
+            "-c".to_string(),
+            "config.json".to_string(),
+        ];
+
+        let command = parse_args(args).expect("command should parse");
+        assert_eq!(
+            command,
+            Command::Run {
+                config_path: "config.json".into(),
+                verbose: true,
             }
         );
     }
