@@ -2,6 +2,7 @@
 
 mod defaults;
 mod error;
+mod input;
 mod json;
 mod parse;
 mod schema;

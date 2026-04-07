@@ -1,9 +1,15 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{fs, path::Path};
+
+use serde_json::error::Category;
 
 use crate::{
     defaults::DEFAULT_LOG_LEVEL,
     error::{display_path, ConfigError},
-    json::{parse_json, JsonValue},
+    input::{
+        InputConfig, InputInbound, InputInboundType, InputLogConfig, InputOutbound,
+        InputOutboundType, InputRouteConfig, InputTrojanTlsConfig,
+    },
+    json::parse_json,
     schema::{
         DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
         RedirectInboundConfig, RouteConfig, SocksInboundConfig, TProxyInboundConfig,
@@ -11,6 +17,32 @@ use crate::{
     },
     validate::validate_config,
 };
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ParseDiagnostics {
+    warnings: Vec<ParseWarning>,
+    ignored: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ParseWarning {
+    path: String,
+    message: &'static str,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug)]
+struct ParseReport {
+    config: ProxyConfig,
+    diagnostics: ParseDiagnostics,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IgnoredDisposition {
+    Ignore,
+    Warn(&'static str),
+    Error(&'static str),
+}
 
 pub fn load_from_path(path: impl AsRef<Path>) -> Result<ProxyConfig, ConfigError> {
     let config = load_from_path_unvalidated(path)?;
@@ -38,316 +70,397 @@ pub fn parse_config(input: &str) -> Result<ProxyConfig, ConfigError> {
 }
 
 pub fn parse_config_unvalidated(input: &str) -> Result<ProxyConfig, ConfigError> {
-    let root = parse_json(input)?;
-    let root = expect_object(&root, "$")?;
+    Ok(parse_config_report_unvalidated(input)?.config)
+}
 
-    Ok(ProxyConfig {
-        log: parse_log(root.get("log"))?,
-        inbounds: parse_inbounds(root.get("inbounds"))?,
-        outbounds: parse_outbounds(root.get("outbounds"))?,
-        route: parse_route(root.get("route"))?,
+fn parse_config_report_unvalidated(input: &str) -> Result<ParseReport, ConfigError> {
+    parse_json(input)?;
+
+    let (input_config, ignored_paths) = deserialize_input_config(input)?;
+    let diagnostics = classify_ignored_paths(&input_config, ignored_paths)?;
+    let config = input_config_into_proxy_config(input_config)?;
+
+    Ok(ParseReport {
+        config,
+        diagnostics,
     })
 }
 
-fn parse_log(value: Option<&JsonValue>) -> Result<LogConfig, ConfigError> {
-    let Some(value) = value else {
-        return Ok(LogConfig {
-            level: DEFAULT_LOG_LEVEL.to_string(),
-            disabled: false,
-        });
-    };
-    let object = expect_object(value, "$.log")?;
-
-    Ok(LogConfig {
-        level: optional_string(object.get("level"), "$.log.level")?
-            .unwrap_or_else(|| DEFAULT_LOG_LEVEL.to_string()),
-        disabled: optional_bool(object.get("disabled"), "$.log.disabled")?.unwrap_or(false),
+fn deserialize_input_config(input: &str) -> Result<(InputConfig, Vec<String>), ConfigError> {
+    let mut ignored = Vec::new();
+    let mut deserializer = serde_json::Deserializer::from_str(input);
+    let input_config = serde_ignored::deserialize(&mut deserializer, |path| {
+        ignored.push(normalize_path(&path.to_string()));
     })
+    .map_err(|err| map_serde_error(input, err))?;
+    deserializer
+        .end()
+        .map_err(|err| map_serde_error(input, err))?;
+
+    Ok((input_config, ignored))
 }
 
-fn parse_inbounds(value: Option<&JsonValue>) -> Result<Vec<InboundConfig>, ConfigError> {
-    let Some(value) = value else {
-        return Err(ConfigError::validation("$.inbounds", "field is required"));
-    };
-    let items = expect_array(value, "$.inbounds")?;
-    let mut inbounds = Vec::with_capacity(items.len());
-
-    for (index, item) in items.iter().enumerate() {
-        let path = format!("$.inbounds[{index}]");
-        let object = expect_object(item, &path)?;
-        let kind = required_string(object.get("type"), format!("{path}.type"))?;
-        let tag = required_string(object.get("tag"), format!("{path}.tag"))?;
-        let listen = required_string(object.get("listen"), format!("{path}.listen"))?;
-        let listen_port = required_port(object.get("listen_port"), format!("{path}.listen_port"))?;
-
-        let inbound = match kind.as_str() {
-            "socks" => InboundConfig::Socks(SocksInboundConfig {
-                tag,
-                listen,
-                listen_port,
-            }),
-            "redirect" => InboundConfig::Redirect(RedirectInboundConfig {
-                tag,
-                listen,
-                listen_port,
-            }),
-            "tproxy" => {
-                let network = optional_string(object.get("network"), format!("{path}.network"))?;
-                InboundConfig::TProxy(TProxyInboundConfig {
-                    tag,
-                    listen,
-                    listen_port,
-                    network,
-                })
-            }
-            _ => {
-                return Err(ConfigError::validation(
-                    format!("{path}.type"),
-                    format!("unsupported inbound type '{kind}'"),
-                ))
-            }
-        };
-
-        inbounds.push(inbound);
+fn map_serde_error(input: &str, err: serde_json::Error) -> ConfigError {
+    match err.classify() {
+        Category::Data => map_serde_data_error(input, err.to_string()),
+        Category::Syntax | Category::Eof | Category::Io => ConfigError::json("$", err.to_string()),
     }
-
-    Ok(inbounds)
 }
 
-fn parse_outbounds(value: Option<&JsonValue>) -> Result<Vec<OutboundConfig>, ConfigError> {
-    let Some(value) = value else {
-        return Err(ConfigError::validation("$.outbounds", "field is required"));
-    };
-    let items = expect_array(value, "$.outbounds")?;
-    let mut outbounds = Vec::with_capacity(items.len());
+fn map_serde_data_error(input: &str, fallback_message: String) -> ConfigError {
+    let mut deserializer = serde_json::Deserializer::from_str(input);
+    let result: Result<InputConfig, _> = serde_path_to_error::deserialize(&mut deserializer);
 
-    for (index, item) in items.iter().enumerate() {
-        let path = format!("$.outbounds[{index}]");
-        let object = expect_object(item, &path)?;
-        let kind = required_string(object.get("type"), format!("{path}.type"))?;
-        let tag = required_string(object.get("tag"), format!("{path}.tag"))?;
-
-        let outbound = match kind.as_str() {
-            "direct" => OutboundConfig::Direct(DirectOutboundConfig {
-                tag,
-                routing_mark: optional_u32(
-                    object.get("routing_mark"),
-                    format!("{path}.routing_mark"),
-                )?,
-            }),
-            "trojan" => {
-                let server = required_string(object.get("server"), format!("{path}.server"))?;
-                let server_port =
-                    required_port(object.get("server_port"), format!("{path}.server_port"))?;
-                let password = required_string(object.get("password"), format!("{path}.password"))?;
-                let tls = parse_trojan_tls(object.get("tls"), &path)?;
-                OutboundConfig::Trojan(TrojanOutboundConfig {
-                    tag,
-                    server,
-                    server_port,
-                    password,
-                    tls,
-                })
-            }
-            _ => {
-                return Err(ConfigError::validation(
-                    format!("{path}.type"),
-                    format!("unsupported outbound type '{kind}'"),
-                ))
-            }
-        };
-
-        outbounds.push(outbound);
-    }
-
-    Ok(outbounds)
-}
-
-fn parse_trojan_tls(
-    value: Option<&JsonValue>,
-    parent_path: &str,
-) -> Result<TrojanTlsConfig, ConfigError> {
-    let path = format!("{parent_path}.tls");
-    let object = match value {
-        Some(value) => expect_object(value, &path)?,
-        None => {
-            return Ok(TrojanTlsConfig {
-                enabled: true,
-                server_name: None,
-                disable_sni: false,
-                insecure: false,
-                certificate_path: None,
-                ca_path: None,
-            })
+    match result {
+        Ok(_) => ConfigError::validation("$", fallback_message),
+        Err(err) => {
+            let message = err.inner().to_string();
+            let raw_path = err.path().to_string();
+            ConfigError::validation(augment_path(raw_path, &message), message)
         }
-    };
-
-    Ok(TrojanTlsConfig {
-        enabled: optional_bool(object.get("enabled"), format!("{path}.enabled"))?.unwrap_or(true),
-        server_name: optional_string(object.get("server_name"), format!("{path}.server_name"))?,
-        disable_sni: optional_bool(object.get("disable_sni"), format!("{path}.disable_sni"))?
-            .unwrap_or(false),
-        insecure: optional_bool(object.get("insecure"), format!("{path}.insecure"))?
-            .unwrap_or(false),
-        certificate_path: optional_string(
-            object.get("certificate_path"),
-            format!("{path}.certificate_path"),
-        )?,
-        ca_path: optional_string(object.get("ca_path"), format!("{path}.ca_path"))?,
-    })
-}
-
-fn parse_route(value: Option<&JsonValue>) -> Result<RouteConfig, ConfigError> {
-    let Some(value) = value else {
-        return Err(ConfigError::validation("$.route", "field is required"));
-    };
-    let object = expect_object(value, "$.route")?;
-
-    Ok(RouteConfig {
-        final_outbound: required_string(object.get("final"), "$.route.final")?,
-        bypass: optional_string_array(object.get("bypass"), "$.route.bypass")?.unwrap_or_default(),
-    })
-}
-
-fn expect_object(
-    value: &JsonValue,
-    path: impl Into<String>,
-) -> Result<&BTreeMap<String, JsonValue>, ConfigError> {
-    match value {
-        JsonValue::Object(object) => Ok(object),
-        _ => Err(ConfigError::validation(path, "expected object")),
     }
 }
 
-fn expect_array(value: &JsonValue, path: impl Into<String>) -> Result<&[JsonValue], ConfigError> {
-    match value {
-        JsonValue::Array(items) => Ok(items),
-        _ => Err(ConfigError::validation(path, "expected array")),
+fn input_config_into_proxy_config(input_config: InputConfig) -> Result<ProxyConfig, ConfigError> {
+    Ok(ProxyConfig {
+        log: input_log_into_config(input_config.log),
+        inbounds: input_config
+            .inbounds
+            .into_iter()
+            .map(input_inbound_into_config)
+            .collect(),
+        outbounds: input_config
+            .outbounds
+            .into_iter()
+            .enumerate()
+            .map(|(index, outbound)| input_outbound_into_config(outbound, index))
+            .collect::<Result<Vec<_>, _>>()?,
+        route: input_route_into_config(input_config.route),
+    })
+}
+
+fn input_log_into_config(input_config: InputLogConfig) -> LogConfig {
+    LogConfig {
+        level: input_config
+            .level
+            .unwrap_or_else(|| DEFAULT_LOG_LEVEL.to_string()),
+        disabled: input_config.disabled,
     }
 }
 
-fn required_string(
-    value: Option<&JsonValue>,
+fn input_inbound_into_config(input_config: InputInbound) -> InboundConfig {
+    match input_config.kind {
+        InputInboundType::Socks => InboundConfig::Socks(SocksInboundConfig {
+            tag: input_config.tag,
+            listen: input_config.listen,
+            listen_port: input_config.listen_port,
+        }),
+        InputInboundType::Redirect => InboundConfig::Redirect(RedirectInboundConfig {
+            tag: input_config.tag,
+            listen: input_config.listen,
+            listen_port: input_config.listen_port,
+        }),
+        InputInboundType::Tproxy => InboundConfig::TProxy(TProxyInboundConfig {
+            tag: input_config.tag,
+            listen: input_config.listen,
+            listen_port: input_config.listen_port,
+            network: input_config.network,
+        }),
+    }
+}
+
+fn input_outbound_into_config(
+    input_config: InputOutbound,
+    index: usize,
+) -> Result<OutboundConfig, ConfigError> {
+    match input_config.kind {
+        InputOutboundType::Direct => Ok(OutboundConfig::Direct(DirectOutboundConfig {
+            tag: input_config.tag,
+            routing_mark: input_config.routing_mark,
+        })),
+        InputOutboundType::Trojan => Ok(OutboundConfig::Trojan(TrojanOutboundConfig {
+            tag: input_config.tag,
+            server: required_nested_string(
+                input_config.server,
+                format!("$.outbounds[{index}].server"),
+            )?,
+            server_port: required_nested_port(
+                input_config.server_port,
+                format!("$.outbounds[{index}].server_port"),
+            )?,
+            password: required_nested_string(
+                input_config.password,
+                format!("$.outbounds[{index}].password"),
+            )?,
+            tls: input_trojan_tls_into_config(input_trojan_tls_or_default(
+                input_config.tls,
+                format!("$.outbounds[{index}].tls"),
+            )?),
+        })),
+    }
+}
+
+fn input_trojan_tls_into_config(input_config: InputTrojanTlsConfig) -> TrojanTlsConfig {
+    TrojanTlsConfig {
+        enabled: input_config.enabled,
+        server_name: input_config.server_name,
+        disable_sni: input_config.disable_sni,
+        insecure: input_config.insecure,
+        certificate_path: input_config.certificate_path,
+        ca_path: input_config.ca_path,
+    }
+}
+
+fn input_route_into_config(input_config: InputRouteConfig) -> RouteConfig {
+    RouteConfig {
+        final_outbound: input_config.final_outbound,
+        bypass: input_config.bypass.unwrap_or_default(),
+    }
+}
+
+fn required_nested_string(
+    value: Option<Option<String>>,
     path: impl Into<String>,
 ) -> Result<String, ConfigError> {
     let path = path.into();
-    let Some(value) = value else {
-        return Err(ConfigError::validation(path, "field is required"));
-    };
-
     match value {
-        JsonValue::String(content) => Ok(content.clone()),
-        _ => Err(ConfigError::validation(path, "expected string")),
+        Some(Some(value)) => Ok(value),
+        Some(None) => Err(ConfigError::validation(path, "expected string")),
+        None => Err(ConfigError::validation(path, "field is required")),
     }
 }
 
-fn optional_string(
-    value: Option<&JsonValue>,
+fn required_nested_port(
+    value: Option<Option<u16>>,
     path: impl Into<String>,
-) -> Result<Option<String>, ConfigError> {
+) -> Result<u16, ConfigError> {
     let path = path.into();
-    let Some(value) = value else {
-        return Ok(None);
-    };
-
     match value {
-        JsonValue::Null => Ok(None),
-        JsonValue::String(content) => Ok(Some(content.clone())),
-        _ => Err(ConfigError::validation(path, "expected string")),
+        Some(Some(value)) => Ok(value),
+        Some(None) => Err(ConfigError::validation(path, "expected integer port")),
+        None => Err(ConfigError::validation(path, "field is required")),
     }
 }
 
-fn optional_bool(
-    value: Option<&JsonValue>,
+fn input_trojan_tls_or_default(
+    value: Option<Option<InputTrojanTlsConfig>>,
     path: impl Into<String>,
-) -> Result<Option<bool>, ConfigError> {
+) -> Result<InputTrojanTlsConfig, ConfigError> {
     let path = path.into();
-    let Some(value) = value else {
-        return Ok(None);
-    };
-
     match value {
-        JsonValue::Bool(flag) => Ok(Some(*flag)),
-        _ => Err(ConfigError::validation(path, "expected boolean")),
+        Some(Some(value)) => Ok(value),
+        Some(None) => Err(ConfigError::validation(path, "expected object")),
+        None => Ok(InputTrojanTlsConfig::default()),
     }
 }
 
-fn optional_u32(
-    value: Option<&JsonValue>,
-    path: impl Into<String>,
-) -> Result<Option<u32>, ConfigError> {
-    let path = path.into();
-    let Some(value) = value else {
-        return Ok(None);
-    };
+fn classify_ignored_paths(
+    input_config: &InputConfig,
+    mut ignored_paths: Vec<String>,
+) -> Result<ParseDiagnostics, ConfigError> {
+    ignored_paths.extend(protocol_extra_paths(input_config));
 
-    match value {
-        JsonValue::Null => Ok(None),
-        JsonValue::Number(number) if *number >= 0 && *number <= u32::MAX as i64 => {
-            Ok(Some(*number as u32))
-        }
-        JsonValue::Number(_) => Err(ConfigError::validation(
-            path,
-            "expected non-negative integer within u32 range",
-        )),
-        _ => Err(ConfigError::validation(
-            path,
-            "expected non-negative integer",
-        )),
-    }
-}
-
-fn optional_string_array(
-    value: Option<&JsonValue>,
-    path: impl Into<String>,
-) -> Result<Option<Vec<String>>, ConfigError> {
-    let path = path.into();
-    let Some(value) = value else {
-        return Ok(None);
-    };
-
-    match value {
-        JsonValue::Null => Ok(None),
-        JsonValue::Array(items) => {
-            let mut values = Vec::with_capacity(items.len());
-            for (index, item) in items.iter().enumerate() {
-                match item {
-                    JsonValue::String(content) => values.push(content.clone()),
-                    _ => {
-                        return Err(ConfigError::validation(
-                            format!("{path}[{index}]"),
-                            "expected string",
-                        ))
-                    }
-                }
+    let mut diagnostics = ParseDiagnostics::default();
+    for path in ignored_paths {
+        match classify_ignored_path(input_config, &path) {
+            IgnoredDisposition::Ignore => diagnostics.ignored.push(path),
+            IgnoredDisposition::Warn(message) => {
+                diagnostics.warnings.push(ParseWarning { path, message })
             }
-            Ok(Some(values))
+            IgnoredDisposition::Error(message) => {
+                return Err(ConfigError::semantic(path, message));
+            }
         }
-        _ => Err(ConfigError::validation(path, "expected array")),
+    }
+
+    Ok(diagnostics)
+}
+
+fn protocol_extra_paths(input_config: &InputConfig) -> Vec<String> {
+    let mut paths = Vec::new();
+
+    for (index, inbound) in input_config.inbounds.iter().enumerate() {
+        for field in inbound.extra.keys() {
+            paths.push(format!("$.inbounds[{index}].{field}"));
+        }
+    }
+
+    for (index, outbound) in input_config.outbounds.iter().enumerate() {
+        for field in outbound.extra.keys() {
+            paths.push(format!("$.outbounds[{index}].{field}"));
+        }
+    }
+
+    paths
+}
+
+fn classify_ignored_path(input_config: &InputConfig, path: &str) -> IgnoredDisposition {
+    if let Some((index, field)) = indexed_field(path, "$.inbounds[") {
+        return match input_config.inbounds.get(index).map(|inbound| inbound.kind) {
+            Some(InputInboundType::Socks) => classify_socks_ignored(field),
+            Some(InputInboundType::Redirect) => classify_redirect_ignored(field),
+            Some(InputInboundType::Tproxy) => classify_tproxy_ignored(field),
+            None => IgnoredDisposition::Ignore,
+        };
+    }
+
+    if let Some((index, field)) = indexed_field(path, "$.outbounds[") {
+        return match input_config
+            .outbounds
+            .get(index)
+            .map(|outbound| outbound.kind)
+        {
+            Some(InputOutboundType::Direct) => classify_direct_ignored(field),
+            Some(InputOutboundType::Trojan) => classify_trojan_ignored(field),
+            None => IgnoredDisposition::Ignore,
+        };
+    }
+
+    match path {
+        "$.dns" | "$.domain_resolver" => IgnoredDisposition::Warn(
+            "field is accepted for compatibility but ignored by the current config surface",
+        ),
+        "$.route.rules" => IgnoredDisposition::Warn(
+            "route.rules is accepted for compatibility but not implemented yet",
+        ),
+        "$.log.timestamp" | "$.log.output" => IgnoredDisposition::Warn(
+            "log compatibility field is accepted but ignored by the current config surface",
+        ),
+        _ if path.starts_with("$.route.") => IgnoredDisposition::Ignore,
+        _ if path.starts_with("$.log.") => IgnoredDisposition::Ignore,
+        _ => IgnoredDisposition::Ignore,
     }
 }
 
-fn required_port(value: Option<&JsonValue>, path: impl Into<String>) -> Result<u16, ConfigError> {
-    let path = path.into();
-    let Some(value) = value else {
-        return Err(ConfigError::validation(path, "field is required"));
-    };
-
-    match value {
-        JsonValue::Number(number) if (1..=65535).contains(number) => Ok(*number as u16),
-        JsonValue::Number(_) => Err(ConfigError::validation(
-            path,
-            "port must be within 1..=65535",
-        )),
-        _ => Err(ConfigError::validation(path, "expected integer port")),
+fn classify_socks_ignored(field: &str) -> IgnoredDisposition {
+    match first_segment(field) {
+        "udp" | "sniff" | "sniff_override_destination" | "users" | "auth" => {
+            IgnoredDisposition::Warn(
+                "field is accepted for compatibility but does not affect the current socks inbound",
+            )
+        }
+        "set_system_proxy" | "tcp_fast_open" => IgnoredDisposition::Ignore,
+        _ => IgnoredDisposition::Ignore,
     }
+}
+
+fn classify_redirect_ignored(field: &str) -> IgnoredDisposition {
+    match first_segment(field) {
+        "sniff" | "sniff_override_destination" | "udp" => IgnoredDisposition::Warn(
+            "field is accepted for compatibility but does not affect the current redirect inbound",
+        ),
+        "tcp_fast_open" | "receive_original_destination" => IgnoredDisposition::Ignore,
+        _ => IgnoredDisposition::Ignore,
+    }
+}
+
+fn classify_tproxy_ignored(field: &str) -> IgnoredDisposition {
+    match first_segment(field) {
+        "udp" => IgnoredDisposition::Error(
+            "tproxy inbound does not support UDP capability declarations in the current runtime",
+        ),
+        "sniff" | "sniff_override_destination" => IgnoredDisposition::Warn(
+            "field is accepted for compatibility but does not affect the current tproxy inbound",
+        ),
+        "tcp_fast_open" | "udp_timeout" => IgnoredDisposition::Ignore,
+        _ => IgnoredDisposition::Ignore,
+    }
+}
+
+fn classify_direct_ignored(field: &str) -> IgnoredDisposition {
+    match first_segment(field) {
+        "connect_timeout" | "bind_interface" | "domain_strategy" | "ipv4_only" | "ipv6_only" => {
+            IgnoredDisposition::Warn(
+                "field is accepted for compatibility but does not affect the current direct outbound",
+            )
+        }
+        "tcp_fast_open" | "fallback_delay" => IgnoredDisposition::Ignore,
+        _ => IgnoredDisposition::Ignore,
+    }
+}
+
+fn classify_trojan_ignored(field: &str) -> IgnoredDisposition {
+    let field = first_segment(field);
+    if matches!(
+        field,
+        "connect_timeout"
+            | "transport"
+            | "mux"
+            | "multiplex"
+            | "packet_encoding"
+            | "dialer_proxy"
+            | "domain_resolver"
+            | "reality"
+            | "utls"
+    ) || is_udp_related(field)
+    {
+        return IgnoredDisposition::Warn(
+            "field is accepted for compatibility but does not affect the current trojan outbound",
+        );
+    }
+
+    match field {
+        "tcp_fast_open" => IgnoredDisposition::Ignore,
+        _ => IgnoredDisposition::Ignore,
+    }
+}
+
+fn indexed_field<'a>(path: &'a str, prefix: &str) -> Option<(usize, &'a str)> {
+    let rest = path.strip_prefix(prefix)?;
+    let (index, rest) = rest.split_once(']')?;
+    let index = index.parse().ok()?;
+    let field = rest.strip_prefix('.')?;
+    Some((index, field))
+}
+
+fn first_segment(field: &str) -> &str {
+    field.split('.').next().unwrap_or(field)
+}
+
+fn is_udp_related(field: &str) -> bool {
+    field == "udp" || field.starts_with("udp_")
+}
+
+fn normalize_path(path: &str) -> String {
+    let path = path.trim_end_matches('.');
+    if path.is_empty() {
+        "$".to_string()
+    } else if path.starts_with('[') {
+        format!("${path}")
+    } else {
+        format!("$.{path}")
+    }
+}
+
+fn augment_path(path: String, message: &str) -> String {
+    if let Some(field) = extract_missing_field(message) {
+        let base = normalize_path(&path);
+        if base == "$" {
+            format!("$.{field}")
+        } else {
+            format!("{base}.{field}")
+        }
+    } else {
+        normalize_path(&path)
+    }
+}
+
+fn extract_missing_field(message: &str) -> Option<&str> {
+    for quote in ['`', '\'', '"'] {
+        let prefix = format!("missing field {quote}");
+        if let Some(rest) = message.strip_prefix(&prefix) {
+            return rest.split_once(quote).map(|(field, _)| field);
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{DirectOutboundConfig, InboundConfig, OutboundConfig, TProxyInboundConfig};
 
-    use super::parse_config;
+    use super::{parse_config, parse_config_report_unvalidated};
 
     #[test]
     fn parses_valid_minimal_config() {
@@ -377,6 +490,49 @@ mod tests {
         assert!(config.route.bypass.is_empty());
         assert_eq!(config.inbounds.len(), 1);
         assert_eq!(config.outbounds.len(), 2);
+    }
+
+    #[test]
+    fn parses_all_current_supported_protocol_shapes() {
+        let input = r#"
+        {
+          "log": { "level": "debug", "disabled": false },
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 },
+            { "type": "redirect", "tag": "redirect-in", "listen": "0.0.0.0", "listen_port": 60080 },
+            { "type": "tproxy", "tag": "tproxy-in", "listen": "::", "listen_port": 1041, "network": "tcp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct", "routing_mark": 255 },
+            {
+              "type": "trojan",
+              "tag": "proxy",
+              "server": "trojan.example.com",
+              "server_port": 443,
+              "password": "secret",
+              "tls": {
+                "enabled": true,
+                "server_name": "trojan.example.com",
+                "disable_sni": false,
+                "insecure": false
+              }
+            }
+          ],
+          "route": {
+            "final": "proxy",
+            "bypass": ["trojan.example.com", "192.168.0.1"]
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("supported protocol mix should parse");
+        assert_eq!(config.inbounds.len(), 3);
+        assert_eq!(config.outbounds.len(), 2);
+        assert_eq!(config.route.final_outbound, "proxy");
+        assert_eq!(
+            config.route.bypass,
+            vec!["trojan.example.com".to_string(), "192.168.0.1".to_string()]
+        );
     }
 
     #[test]
@@ -417,39 +573,171 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unknown_fields_but_rejects_wrong_type() {
+    fn collects_warning_and_ignore_paths_with_explicit_policy() {
         let input = r#"
         {
-          "log": { "level": "debug", "ignored": { "nested": true } },
+          "log": { "level": "debug", "timestamp": true, "noise": true },
+          "dns": { "servers": ["223.5.5.5"] },
+          "experimental": { "enabled": true },
           "inbounds": [
             {
               "type": "socks",
               "tag": "socks-in",
               "listen": "127.0.0.1",
               "listen_port": 1080,
-              "users": []
+              "sniff": true,
+              "users": [],
+              "tcp_fast_open": true
             }
           ],
           "outbounds": [
-            { "type": "direct", "tag": "direct" },
+            { "type": "direct", "tag": "direct", "connect_timeout": "5s", "tcp_fast_open": true },
             {
               "type": "trojan",
               "tag": "proxy",
               "server": "example.com",
               "server_port": 443,
               "password": "secret",
-              "tls": { "server_name": "example.com", "multiplex": { "enabled": true } }
+              "domain_resolver": "local",
+              "transport": { "type": "ws" },
+              "tls": { "server_name": "example.com" }
             }
           ],
           "route": { "final": "proxy", "rules": [] }
         }
         "#;
 
-        parse_config(input).expect("unknown fields should be ignored");
+        let report =
+            parse_config_report_unvalidated(input).expect("compatibility fields should not block");
+        let warning_paths: Vec<&str> = report
+            .diagnostics
+            .warnings
+            .iter()
+            .map(|warning| warning.path.as_str())
+            .collect();
 
-        let invalid = input.replace(r#""listen_port": 1080"#, r#""listen_port": "1080""#);
-        let err = parse_config(&invalid).expect_err("wrong type should fail");
-        assert!(err.to_string().contains("$.inbounds[0].listen_port"));
+        assert!(warning_paths.contains(&"$.log.timestamp"));
+        assert!(warning_paths.contains(&"$.dns"));
+        assert!(warning_paths.contains(&"$.inbounds[0].sniff"));
+        assert!(warning_paths.contains(&"$.inbounds[0].users"));
+        assert!(warning_paths.contains(&"$.outbounds[0].connect_timeout"));
+        assert!(warning_paths.contains(&"$.outbounds[1].domain_resolver"));
+        assert!(warning_paths.contains(&"$.outbounds[1].transport"));
+        assert!(warning_paths.contains(&"$.route.rules"));
+        assert!(report
+            .diagnostics
+            .ignored
+            .contains(&"$.experimental".to_string()));
+        assert!(report
+            .diagnostics
+            .ignored
+            .contains(&"$.inbounds[0].tcp_fast_open".to_string()));
+        assert!(report
+            .diagnostics
+            .ignored
+            .contains(&"$.outbounds[0].tcp_fast_open".to_string()));
+        assert!(report
+            .diagnostics
+            .ignored
+            .contains(&"$.log.noise".to_string()));
+    }
+
+    #[test]
+    fn top_level_unknown_fields_still_parse_successfully() {
+        let input = r#"
+        {
+          "dns": { "servers": ["223.5.5.5"] },
+          "extra_top_level": { "anything": true },
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        parse_config(input).expect("top-level compatibility fields should be tolerated");
+    }
+
+    #[test]
+    fn rejects_unknown_fields_that_declare_unsupported_tproxy_udp_capability() {
+        let input = r#"
+        {
+          "inbounds": [
+            {
+              "type": "tproxy",
+              "tag": "tproxy-in",
+              "listen": "0.0.0.0",
+              "listen_port": 1041,
+              "udp": true
+            }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("tproxy udp declaration should fail");
+        assert!(err.to_string().contains("$.inbounds[0].udp"));
+        assert!(err.to_string().contains("does not support UDP"));
+    }
+
+    #[test]
+    fn rejects_unknown_inbound_type_with_type_path() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "http", "tag": "http-in", "listen": "127.0.0.1", "listen_port": 8080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("unsupported inbound type should fail");
+        assert!(err.to_string().contains("$.inbounds[0].type"));
+        assert!(err.to_string().contains("unknown variant"));
+    }
+
+    #[test]
+    fn rejects_missing_required_trojan_fields_with_precise_paths() {
+        let missing_server = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            { "type": "trojan", "tag": "proxy", "server_port": 443, "password": "secret" }
+          ],
+          "route": { "final": "proxy" }
+        }
+        "#;
+
+        let err = parse_config(missing_server).expect_err("missing server should fail");
+        assert!(err.to_string().contains("$.outbounds[1].server"));
+
+        let missing_password = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            { "type": "trojan", "tag": "proxy", "server": "example.com", "server_port": 443 }
+          ],
+          "route": { "final": "proxy" }
+        }
+        "#;
+
+        let err = parse_config(missing_password).expect_err("missing password should fail");
+        assert!(err.to_string().contains("$.outbounds[1].password"));
     }
 
     #[test]
@@ -525,7 +813,35 @@ mod tests {
         "#;
 
         let err = parse_config(input).expect_err("invalid tls combination should fail");
+        assert!(err.to_string().contains("$.outbounds[1].tls"));
         assert!(err.to_string().contains("disable_sni=true"));
+    }
+
+    #[test]
+    fn rejects_disabled_trojan_tls_with_indexed_path() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            {
+              "type": "trojan",
+              "tag": "proxy",
+              "server": "example.com",
+              "server_port": 443,
+              "password": "secret",
+              "tls": { "enabled": false }
+            }
+          ],
+          "route": { "final": "proxy" }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("tls.enabled=false should fail");
+        assert!(err.to_string().contains("$.outbounds[1].tls.enabled"));
+        assert!(err.to_string().contains("requires TLS"));
     }
 
     #[test]
@@ -586,7 +902,7 @@ mod tests {
         "#;
 
         let err = parse_config(input).expect_err("negative routing_mark should fail");
-        assert!(err.to_string().contains("u32 range"));
+        assert!(err.to_string().contains("$.outbounds[0].routing_mark"));
     }
 
     #[test]
@@ -679,15 +995,46 @@ mod tests {
     }
 
     #[test]
+    fn rejects_duplicate_object_keys_before_serde_can_overwrite_them() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct", "tag": "shadow" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("duplicate keys should fail");
+        assert!(err.to_string().contains("duplicate object key `tag`"));
+        assert!(err.to_string().contains("$.outbounds[0].tag"));
+    }
+
+    #[test]
     fn parses_tproxy_compat_example_with_ignored_fields() {
         let input = include_str!("../../../examples/tproxy-compat.json");
 
-        let config = parse_config(input).expect("compat example should parse");
-        assert_eq!(config.route.final_outbound, "proxy");
+        let report =
+            parse_config_report_unvalidated(input).expect("compat example should parse cleanly");
+        let warning_paths: Vec<&str> = report
+            .diagnostics
+            .warnings
+            .iter()
+            .map(|warning| warning.path.as_str())
+            .collect();
+
+        assert_eq!(report.config.route.final_outbound, "proxy");
         assert_eq!(
-            config.route.bypass,
+            report.config.route.bypass,
             vec!["trojan.example.com".to_string(), "192.168.0.1".to_string()]
         );
+        assert!(warning_paths.contains(&"$.dns"));
+        assert!(warning_paths.contains(&"$.outbounds[1].domain_resolver"));
+        assert!(warning_paths.contains(&"$.route.rules"));
+        parse_config(input).expect("compat example should remain loadable");
     }
 
     #[test]
