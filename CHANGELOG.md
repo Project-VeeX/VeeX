@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- Added minimal `route.rules` support for `domain`, `domain_suffix`, `ip_cidr`, `port`, and `inbound`, with `outbound` as the only action.
+- Refined the router decision flow to keep built-in/configured bypass and `route.final` semantics while adding first-match `route.rules`.
+- Added sequential multi-address connect fallback for transport, `trojan`, and `direct`; resolved addresses are tried in order until one succeeds or all fail.
+- Updated connect-path tracing, tests, and project docs to match the current routing and dialing behavior.
+
 ## 0.4.3
 
 - Config parsing is now serde-based and easier to extend for future config fields.
