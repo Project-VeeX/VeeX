@@ -86,64 +86,88 @@ impl Outbound for DirectOutbound {
 
         Box::pin(async move {
             let addresses = resolve_destination(&destination.host, destination.port).await?;
-            let mut last_error = None;
+            let stream = connect_addresses(
+                session_id,
+                &outbound_field,
+                &destination_field,
+                addresses,
+                timeout_duration,
+                routing_mark,
+                marked_connector,
+            )
+            .await?;
+            Ok(Box::new(stream) as BoxedAsyncStream)
+        })
+    }
+}
 
-            for (idx, address) in addresses.into_iter().enumerate() {
-                let attempt_index = (idx + 1) as u64;
-                let start = Instant::now();
-                log_direct_connect_attempt(
+async fn connect_addresses(
+    session_id: u64,
+    outbound_field: &str,
+    destination_field: &str,
+    addresses: Vec<SocketAddr>,
+    timeout_duration: Option<Duration>,
+    routing_mark: Option<u32>,
+    marked_connector: Arc<MarkedConnector>,
+) -> Result<TcpStream> {
+    let attempt_count = addresses.len();
+    let mut last_error = None;
+
+    for (idx, address) in addresses.into_iter().enumerate() {
+        let attempt_index = (idx + 1) as u64;
+        let start = Instant::now();
+        log_direct_connect_attempt(
+            session_id,
+            outbound_field,
+            destination_field,
+            address,
+            attempt_index,
+            routing_mark,
+        );
+
+        match connect_socket(
+            address,
+            timeout_duration,
+            routing_mark,
+            Arc::clone(&marked_connector),
+        )
+        .await
+        {
+            Ok(stream) => {
+                log_direct_connect_success(
                     session_id,
-                    &outbound_field,
-                    &destination_field,
+                    outbound_field,
+                    destination_field,
                     address,
                     attempt_index,
                     routing_mark,
+                    start.elapsed().as_millis() as u64,
                 );
-
-                match connect_socket(
-                    address,
-                    timeout_duration,
-                    routing_mark,
-                    Arc::clone(&marked_connector),
-                )
-                .await
-                {
-                    Ok(stream) => {
-                        log_direct_connect_success(
-                            session_id,
-                            &outbound_field,
-                            &destination_field,
-                            address,
-                            attempt_index,
-                            routing_mark,
-                            start.elapsed().as_millis() as u64,
-                        );
-                        return Ok(Box::new(stream) as BoxedAsyncStream);
-                    }
-                    Err(err) => {
-                        log_direct_connect_failed(
-                            session_id,
-                            &outbound_field,
-                            &destination_field,
-                            address,
-                            attempt_index,
-                            routing_mark,
-                            start.elapsed().as_millis() as u64,
-                            &err,
-                        );
-                        last_error = Some(err);
-                    }
-                }
+                return Ok(stream);
             }
-
-            Err(last_error.unwrap_or_else(|| {
-                ProxyError::Dial(format!(
-                    "direct outbound found no reachable address for {}",
-                    destination
-                ))
-            }))
-        })
+            Err(err) => {
+                log_direct_connect_failed(
+                    session_id,
+                    outbound_field,
+                    destination_field,
+                    address,
+                    attempt_index,
+                    routing_mark,
+                    start.elapsed().as_millis() as u64,
+                    &err,
+                );
+                last_error = Some(err);
+            }
+        }
     }
+
+    Err(last_error
+        .map(|error| finalize_direct_connect_error(error, destination_field, attempt_count))
+        .unwrap_or_else(|| {
+            ProxyError::Dial(format!(
+                "direct outbound found no reachable address for {destination_field}"
+            ))
+        }))
 }
 
 fn log_direct_connect_attempt(
@@ -262,6 +286,26 @@ fn log_direct_connect_failed(
                 "direct connect failed"
             );
         }
+    }
+}
+
+fn finalize_direct_connect_error(
+    last_error: ProxyError,
+    destination_field: &str,
+    attempt_count: usize,
+) -> ProxyError {
+    if attempt_count <= 1 {
+        return last_error;
+    }
+
+    let context =
+        format!("all {attempt_count} direct connect attempts failed for {destination_field}");
+    match last_error {
+        ProxyError::Dial(message) => ProxyError::Dial(format!("{context}; last error: {message}")),
+        ProxyError::Timeout(message) => {
+            ProxyError::Timeout(format!("{context}; last error: {message}"))
+        }
+        other => other,
     }
 }
 
@@ -395,6 +439,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         collections::HashMap,
+        net::SocketAddr,
         sync::{Arc, Mutex},
         time::Duration,
     };
@@ -411,7 +456,7 @@ mod tests {
         BoxFuture, Destination, Host, Network, Outbound, ProxyError, SessionContext, SessionMeta,
     };
 
-    use super::DirectOutbound;
+    use super::{connect_addresses, DirectOutbound};
 
     #[derive(Clone, Debug, Default, Eq, PartialEq)]
     struct CapturedEvent {
@@ -510,6 +555,13 @@ mod tests {
             "expected event `{event_name}` with fields {:?}, captured events: {:?}",
             expected_fields, events
         );
+    }
+
+    fn event_count(events: &[CapturedEvent], event_name: &str) -> usize {
+        events
+            .iter()
+            .filter(|event| event.fields.get("event").map(String::as_str) == Some(event_name))
+            .count()
     }
 
     #[test]
@@ -656,6 +708,143 @@ mod tests {
                 ("attempt_index", "1"),
                 ("routing_mark", "255"),
                 ("error_kind", "dial"),
+                ("level", "WARN"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn direct_outbound_falls_back_to_later_address_with_routing_mark() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("listener should bind");
+        let reachable = listener.local_addr().expect("listener addr should exist");
+        let unreachable = SocketAddr::new("127.0.0.2".parse().unwrap(), reachable.port());
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_connector = Arc::clone(&calls);
+        let connector = Arc::new(move |connect_address, routing_mark| {
+            let calls = Arc::clone(&calls_for_connector);
+            Box::pin(async move {
+                calls
+                    .lock()
+                    .expect("calls mutex should lock")
+                    .push((connect_address, routing_mark));
+                if connect_address == reachable {
+                    TcpStream::connect(connect_address).await.map_err(|err| {
+                        ProxyError::Dial(format!(
+                            "test marked connector failed to connect to {connect_address}: {err}"
+                        ))
+                    })
+                } else {
+                    Err(ProxyError::Dial(format!(
+                        "test marked connector rejected {connect_address}"
+                    )))
+                }
+            }) as BoxFuture<'static, TcpStream>
+        });
+
+        let accept_task = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.expect("accept should succeed");
+        });
+
+        let stream = connect_addresses(
+            3,
+            "direct",
+            "fallback.test:443",
+            vec![unreachable, reachable],
+            Some(Duration::from_secs(1)),
+            Some(42),
+            connector,
+        )
+        .await
+        .expect("second address should connect");
+        drop(stream);
+        accept_task.await.expect("accept task should join");
+
+        assert_eq!(
+            *calls.lock().expect("calls mutex should lock"),
+            vec![(unreachable, 42), (reachable, 42)]
+        );
+
+        let events = captured_events(&trace_buffer);
+        assert_eq!(event_count(&events, "direct_connect_attempt"), 2);
+        assert_eq!(event_count(&events, "direct_connect_failed"), 1);
+        assert_eq!(event_count(&events, "direct_connect_success"), 1);
+        assert_has_event(
+            &events,
+            "direct_connect_failed",
+            &[
+                ("session_id", "3"),
+                ("attempt_index", "1"),
+                ("routing_mark", "42"),
+                ("level", "WARN"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "direct_connect_success",
+            &[
+                ("session_id", "3"),
+                ("attempt_index", "2"),
+                ("routing_mark", "42"),
+                ("level", "INFO"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn direct_outbound_returns_last_failure_after_all_addresses_fail() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let first = SocketAddr::new("127.0.0.2".parse().unwrap(), 18080);
+        let second = SocketAddr::new("127.0.0.3".parse().unwrap(), 18080);
+        let connector = Arc::new(move |connect_address, routing_mark| {
+            Box::pin(async move {
+                Err(ProxyError::Dial(format!(
+                    "test marked connector rejected {connect_address} with routing_mark={routing_mark}"
+                )))
+            }) as BoxFuture<'static, TcpStream>
+        });
+
+        let err = connect_addresses(
+            4,
+            "direct",
+            "fallback.test:443",
+            vec![first, second],
+            Some(Duration::from_secs(1)),
+            Some(99),
+            connector,
+        )
+        .await
+        .expect_err("all addresses should fail");
+
+        assert_eq!(err.kind(), veex_core::ErrorKind::Dial);
+        assert!(err
+            .to_string()
+            .contains("all 2 direct connect attempts failed for fallback.test:443"));
+        assert!(err.to_string().contains(&second.to_string()));
+
+        let events = captured_events(&trace_buffer);
+        assert_eq!(event_count(&events, "direct_connect_attempt"), 2);
+        assert_eq!(event_count(&events, "direct_connect_failed"), 2);
+        assert_eq!(event_count(&events, "direct_connect_success"), 0);
+        assert_has_event(
+            &events,
+            "direct_connect_failed",
+            &[
+                ("session_id", "4"),
+                ("attempt_index", "1"),
+                ("routing_mark", "99"),
+                ("level", "WARN"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "direct_connect_failed",
+            &[
+                ("session_id", "4"),
+                ("attempt_index", "2"),
+                ("routing_mark", "99"),
                 ("level", "WARN"),
             ],
         );

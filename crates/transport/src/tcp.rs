@@ -25,8 +25,16 @@ pub struct TcpConnectOptions {
 
 pub async fn connect_host(host: &Host, port: u16, options: TcpConnectOptions) -> Result<TcpStream> {
     let addresses = resolve_host(host, port).await?;
-    let host_field = host.to_string();
-    let host_field = sanitize_field(&host_field).into_owned();
+    connect_resolved_addresses(&host.to_string(), port, addresses, options).await
+}
+
+pub async fn connect_resolved_addresses(
+    host_field: &str,
+    port: u16,
+    addresses: Vec<SocketAddr>,
+    options: TcpConnectOptions,
+) -> Result<TcpStream> {
+    let host_field = sanitize_field(host_field).into_owned();
 
     // Transport owns TCP connect events and keeps them scoped to host/port/socket details.
     connect_addresses(&host_field, port, addresses, &options).await
@@ -38,6 +46,7 @@ async fn connect_addresses(
     addresses: Vec<SocketAddr>,
     options: &TcpConnectOptions,
 ) -> Result<TcpStream> {
+    let attempt_count = addresses.len();
     let mut last_error = None;
 
     for (idx, address) in addresses.into_iter().enumerate() {
@@ -80,9 +89,11 @@ async fn connect_addresses(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        ProxyError::dial(format!("no reachable address for {host_field}:{port}"))
-    }))
+    Err(last_error
+        .map(|error| finalize_tcp_connect_error(error, host_field, port, attempt_count))
+        .unwrap_or_else(|| {
+            ProxyError::dial(format!("no reachable address for {host_field}:{port}"))
+        }))
 }
 
 async fn resolve_host(host: &Host, port: u16) -> Result<Vec<SocketAddr>> {
@@ -147,6 +158,27 @@ fn classify_tcp_connect_failure_reason(kind: io::ErrorKind) -> &'static str {
         | io::ErrorKind::AddrNotAvailable
         | io::ErrorKind::NotConnected => "unreachable",
         _ => "other",
+    }
+}
+
+fn finalize_tcp_connect_error(
+    last_error: ProxyError,
+    host_field: &str,
+    port: u16,
+    attempt_count: usize,
+) -> ProxyError {
+    if attempt_count <= 1 {
+        return last_error;
+    }
+
+    let context =
+        format!("all {attempt_count} tcp connect attempts failed for {host_field}:{port}");
+    match last_error {
+        ProxyError::Dial(message) => ProxyError::dial(format!("{context}; last error: {message}")),
+        ProxyError::Timeout(message) => {
+            ProxyError::timeout(format!("{context}; last error: {message}"))
+        }
+        other => other,
     }
 }
 
@@ -305,9 +337,16 @@ mod tests {
 
     use tokio::net::TcpListener;
 
-    use super::{connect_addresses, connect_host, ConnectTraceContext, TcpConnectOptions};
+    use super::{connect_host, connect_resolved_addresses, ConnectTraceContext, TcpConnectOptions};
     use crate::test_support::{assert_has_event, captured_events, install_test_subscriber};
     use veex_core::Host;
+
+    fn event_count(events: &[crate::test_support::CapturedEvent], event_name: &str) -> usize {
+        events
+            .iter()
+            .filter(|event| event.fields.get("event").map(String::as_str) == Some(event_name))
+            .count()
+    }
 
     #[tokio::test]
     async fn tcp_connect_success_emits_attempt_and_success_with_trace_context() {
@@ -422,15 +461,16 @@ mod tests {
             .expect("listener should bind");
         let addr = listener.local_addr().expect("listener addr should exist");
         let first_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), addr.port());
+        let second_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)), addr.port());
         let accept_task = tokio::spawn(async move {
             let (_stream, _) = listener.accept().await.expect("accept should succeed");
         });
 
-        let stream = connect_addresses(
+        let stream = connect_resolved_addresses(
             "example.com",
             addr.port(),
-            vec![first_addr, addr],
-            &TcpConnectOptions {
+            vec![first_addr, second_addr, addr],
+            TcpConnectOptions {
                 timeout: Some(Duration::from_secs(1)),
                 trace: Some(ConnectTraceContext {
                     session_id: 9,
@@ -439,11 +479,14 @@ mod tests {
             },
         )
         .await
-        .expect("second address should connect");
+        .expect("third address should connect");
         drop(stream);
         accept_task.await.expect("accept task should join");
 
         let events = captured_events(&trace_buffer);
+        assert_eq!(event_count(&events, "tcp_connect_attempt"), 3);
+        assert_eq!(event_count(&events, "tcp_connect_failed"), 2);
+        assert_eq!(event_count(&events, "tcp_connect_success"), 1);
         assert_has_event(
             &events,
             "tcp_connect_failed",
@@ -455,11 +498,79 @@ mod tests {
         );
         assert_has_event(
             &events,
-            "tcp_connect_success",
+            "tcp_connect_failed",
             &[
                 ("session_id", "9"),
                 ("attempt_index", "2"),
+                ("level", "WARN"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "tcp_connect_success",
+            &[
+                ("session_id", "9"),
+                ("attempt_index", "3"),
                 ("level", "INFO"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn tcp_connect_all_failures_emit_each_attempt_and_preserve_last_error() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("listener addr should exist")
+            .port();
+        drop(listener);
+
+        let first_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), port);
+        let second_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)), port);
+        let err = connect_resolved_addresses(
+            "fallback.example",
+            port,
+            vec![first_addr, second_addr],
+            TcpConnectOptions {
+                timeout: Some(Duration::from_millis(200)),
+                trace: Some(ConnectTraceContext {
+                    session_id: 10,
+                    outbound: "proxy".into(),
+                }),
+            },
+        )
+        .await
+        .expect_err("all addresses should fail");
+
+        assert_eq!(err.kind(), veex_core::ErrorKind::Dial);
+        assert!(err
+            .to_string()
+            .contains("all 2 tcp connect attempts failed for fallback.example"));
+        assert!(err.to_string().contains(&second_addr.to_string()));
+
+        let events = captured_events(&trace_buffer);
+        assert_eq!(event_count(&events, "tcp_connect_attempt"), 2);
+        assert_eq!(event_count(&events, "tcp_connect_failed"), 2);
+        assert_eq!(event_count(&events, "tcp_connect_success"), 0);
+        assert_has_event(
+            &events,
+            "tcp_connect_failed",
+            &[
+                ("session_id", "10"),
+                ("attempt_index", "1"),
+                ("level", "WARN"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "tcp_connect_failed",
+            &[
+                ("session_id", "10"),
+                ("attempt_index", "2"),
+                ("level", "WARN"),
             ],
         );
     }
