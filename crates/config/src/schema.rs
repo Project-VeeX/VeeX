@@ -1,3 +1,5 @@
+use ipnet::IpNet;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProxyConfig {
     pub log: LogConfig,
@@ -90,6 +92,17 @@ pub struct DirectOutboundConfig {
 pub struct RouteConfig {
     pub final_outbound: String,
     pub bypass: Vec<String>,
+    pub rules: Vec<RouteRuleConfig>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RouteRuleConfig {
+    pub domain: Vec<String>,
+    pub domain_suffix: Vec<String>,
+    pub ip_cidr: Vec<IpNet>,
+    pub port: Vec<u16>,
+    pub inbound: Vec<String>,
+    pub outbound: String,
 }
 
 impl InboundConfig {
@@ -123,5 +136,15 @@ impl OutboundConfig {
             Self::Trojan(_) => OutboundType::Trojan,
             Self::Direct(_) => OutboundType::Direct,
         }
+    }
+}
+
+impl RouteRuleConfig {
+    pub fn has_matcher(&self) -> bool {
+        !self.domain.is_empty()
+            || !self.domain_suffix.is_empty()
+            || !self.ip_cidr.is_empty()
+            || !self.port.is_empty()
+            || !self.inbound.is_empty()
     }
 }

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use crate::{
     defaults::DEFAULT_DIRECT_OUTBOUND_TAG,
     error::ConfigError,
-    schema::{InboundConfig, OutboundConfig, ProxyConfig},
+    schema::{InboundConfig, OutboundConfig, ProxyConfig, RouteRuleConfig},
 };
 
 pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
@@ -128,6 +128,32 @@ fn validate_route(
         }
     }
 
+    for (index, rule) in config.route.rules.iter().enumerate() {
+        validate_route_rule(rule, index, outbound_tags)?;
+    }
+
+    Ok(())
+}
+
+fn validate_route_rule(
+    rule: &RouteRuleConfig,
+    index: usize,
+    outbound_tags: &BTreeSet<String>,
+) -> Result<(), ConfigError> {
+    if !rule.has_matcher() {
+        return Err(ConfigError::semantic(
+            format!("$.route.rules[{index}]"),
+            "route rule requires at least one matcher",
+        ));
+    }
+
+    if !outbound_tags.contains(&rule.outbound) {
+        return Err(ConfigError::semantic(
+            format!("$.route.rules[{index}].outbound"),
+            format!("route rule points to missing outbound '{}'", rule.outbound),
+        ));
+    }
+
     Ok(())
 }
 
@@ -135,7 +161,7 @@ fn validate_route(
 mod tests {
     use crate::{
         DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
-        SocksInboundConfig, TProxyInboundConfig,
+        RouteRuleConfig, SocksInboundConfig, TProxyInboundConfig,
     };
 
     use super::validate_config;
@@ -159,6 +185,7 @@ mod tests {
             route: RouteConfig {
                 final_outbound: "direct".into(),
                 bypass: vec![],
+                rules: vec![],
             },
         }
     }
@@ -196,5 +223,39 @@ mod tests {
         let err = validate_config(&config).expect_err("non-tcp tproxy network should fail");
         assert!(err.to_string().contains("$.inbounds[0].network"));
         assert!(err.to_string().contains("only supports network='tcp'"));
+    }
+
+    #[test]
+    fn rejects_route_rule_without_any_matchers() {
+        let mut config = valid_config();
+        config.route.rules.push(RouteRuleConfig {
+            domain: vec![],
+            domain_suffix: vec![],
+            ip_cidr: vec![],
+            port: vec![],
+            inbound: vec![],
+            outbound: "direct".into(),
+        });
+
+        let err = validate_config(&config).expect_err("route rule without matchers should fail");
+        assert!(err.to_string().contains("$.route.rules[0]"));
+        assert!(err.to_string().contains("at least one matcher"));
+    }
+
+    #[test]
+    fn rejects_route_rule_with_missing_outbound_target() {
+        let mut config = valid_config();
+        config.route.rules.push(RouteRuleConfig {
+            domain: vec!["example.com".into()],
+            domain_suffix: vec![],
+            ip_cidr: vec![],
+            port: vec![],
+            inbound: vec![],
+            outbound: "proxy".into(),
+        });
+
+        let err = validate_config(&config).expect_err("missing outbound target should fail");
+        assert!(err.to_string().contains("$.route.rules[0].outbound"));
+        assert!(err.to_string().contains("missing outbound 'proxy'"));
     }
 }

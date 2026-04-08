@@ -17,7 +17,7 @@ pub use parse::{
 pub use preflight::JsonValue;
 pub use schema::{
     DirectOutboundConfig, InboundConfig, InboundType, LogConfig, OutboundConfig, OutboundType,
-    ProxyConfig, RedirectInboundConfig, RouteConfig, SocksInboundConfig, TProxyInboundConfig,
-    TrojanOutboundConfig, TrojanTlsConfig,
+    ProxyConfig, RedirectInboundConfig, RouteConfig, RouteRuleConfig, SocksInboundConfig,
+    TProxyInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
 };
 pub use validate::validate_config;

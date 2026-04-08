@@ -111,4 +111,22 @@ pub struct InputRouteConfig {
     pub final_outbound: String,
     #[serde(default)]
     pub bypass: Option<Vec<String>>,
+    #[serde(default)]
+    pub rules: Option<Vec<InputRouteRule>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InputRouteRule {
+    #[serde(default)]
+    pub domain: Option<Vec<String>>,
+    #[serde(default)]
+    pub domain_suffix: Option<Vec<String>>,
+    #[serde(default)]
+    pub ip_cidr: Option<Vec<String>>,
+    #[serde(default)]
+    pub port: Option<Vec<u16>>,
+    #[serde(default)]
+    pub inbound: Option<Vec<String>>,
+    #[serde(default)]
+    pub outbound: Option<Option<String>>,
 }

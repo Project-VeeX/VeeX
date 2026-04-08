@@ -1,17 +1,19 @@
 use std::{fs, path::Path};
 
+use ipnet::IpNet;
+
 use crate::{
     defaults::DEFAULT_LOG_LEVEL,
     error::{display_path, ConfigError},
     input::{
         InputConfig, InputInbound, InputInboundType, InputLogConfig, InputOutbound,
-        InputOutboundType, InputRouteConfig, InputTrojanTlsConfig,
+        InputOutboundType, InputRouteConfig, InputRouteRule, InputTrojanTlsConfig,
     },
     preflight::parse_json,
     schema::{
         DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
-        RedirectInboundConfig, RouteConfig, SocksInboundConfig, TProxyInboundConfig,
-        TrojanOutboundConfig, TrojanTlsConfig,
+        RedirectInboundConfig, RouteConfig, RouteRuleConfig, SocksInboundConfig,
+        TProxyInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
     },
     validate::validate_config,
 };
@@ -158,7 +160,7 @@ fn input_config_into_proxy_config(input_config: InputConfig) -> Result<ProxyConf
             .enumerate()
             .map(|(index, outbound)| input_outbound_into_config(outbound, index))
             .collect::<Result<Vec<_>, _>>()?,
-        route: input_route_into_config(input_config.route),
+        route: input_route_into_config(input_config.route)?,
     })
 }
 
@@ -235,11 +237,49 @@ fn input_trojan_tls_into_config(input_config: InputTrojanTlsConfig) -> TrojanTls
     }
 }
 
-fn input_route_into_config(input_config: InputRouteConfig) -> RouteConfig {
-    RouteConfig {
+fn input_route_into_config(input_config: InputRouteConfig) -> Result<RouteConfig, ConfigError> {
+    Ok(RouteConfig {
         final_outbound: input_config.final_outbound,
         bypass: input_config.bypass.unwrap_or_default(),
-    }
+        rules: input_config
+            .rules
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+            .map(|(index, rule)| input_route_rule_into_config(rule, index))
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
+
+fn input_route_rule_into_config(
+    input_rule: InputRouteRule,
+    index: usize,
+) -> Result<RouteRuleConfig, ConfigError> {
+    Ok(RouteRuleConfig {
+        domain: normalize_domain_matchers(
+            input_rule.domain,
+            format!("$.route.rules[{index}].domain"),
+            DomainMatcherKind::Exact,
+        )?,
+        domain_suffix: normalize_domain_matchers(
+            input_rule.domain_suffix,
+            format!("$.route.rules[{index}].domain_suffix"),
+            DomainMatcherKind::Suffix,
+        )?,
+        ip_cidr: parse_ip_cidr_matchers(
+            input_rule.ip_cidr,
+            format!("$.route.rules[{index}].ip_cidr"),
+        )?,
+        port: parse_port_matchers(input_rule.port, format!("$.route.rules[{index}].port"))?,
+        inbound: parse_string_matchers(
+            input_rule.inbound,
+            format!("$.route.rules[{index}].inbound"),
+        )?,
+        outbound: required_nested_string(
+            input_rule.outbound,
+            format!("$.route.rules[{index}].outbound"),
+        )?,
+    })
 }
 
 fn required_nested_string(
@@ -340,12 +380,13 @@ fn classify_ignored_path(input_config: &InputConfig, path: &str) -> IgnoredDispo
         };
     }
 
+    if indexed_field(path, "$.route.rules[").is_some() {
+        return classify_route_rule_ignored(path);
+    }
+
     match path {
         "$.dns" | "$.domain_resolver" => IgnoredDisposition::Warn(
             "field is accepted for compatibility but ignored by the current config surface",
-        ),
-        "$.route.rules" => IgnoredDisposition::Warn(
-            "route.rules is accepted for compatibility but not implemented yet",
         ),
         "$.log.output" => IgnoredDisposition::Warn(
             "log compatibility field is accepted but ignored by the current config surface",
@@ -429,6 +470,21 @@ fn classify_trojan_ignored(field: &str) -> IgnoredDisposition {
     }
 }
 
+fn classify_route_rule_ignored(path: &str) -> IgnoredDisposition {
+    let Some((_, field)) = indexed_field(path, "$.route.rules[") else {
+        return IgnoredDisposition::Ignore;
+    };
+
+    match first_segment(field) {
+        "domain" | "domain_suffix" | "ip_cidr" | "port" | "inbound" | "outbound" => {
+            IgnoredDisposition::Ignore
+        }
+        _ => IgnoredDisposition::Error(
+            "route rule field is not supported by the current route.rules subset",
+        ),
+    }
+}
+
 fn indexed_field<'a>(path: &'a str, prefix: &str) -> Option<(usize, &'a str)> {
     let rest = path.strip_prefix(prefix)?;
     let (index, rest) = rest.split_once(']')?;
@@ -494,6 +550,152 @@ fn extract_missing_field(message: &str) -> Option<&str> {
     }
 
     None
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DomainMatcherKind {
+    Exact,
+    Suffix,
+}
+
+fn normalize_domain_matchers(
+    value: Option<Vec<String>>,
+    path: impl Into<String>,
+    kind: DomainMatcherKind,
+) -> Result<Vec<String>, ConfigError> {
+    let path = path.into();
+    let Some(values) = value else {
+        return Ok(Vec::new());
+    };
+
+    if values.is_empty() {
+        return Err(ConfigError::semantic(
+            path,
+            "route rule matcher list must not be empty",
+        ));
+    }
+
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let item_path = format!("{path}[{index}]");
+            let normalized = normalize_domain_matcher(&value, kind);
+            if normalized.is_empty() {
+                return Err(ConfigError::semantic(
+                    item_path,
+                    "route rule matcher must not be empty",
+                ));
+            }
+            Ok(normalized)
+        })
+        .collect()
+}
+
+fn normalize_domain_matcher(value: &str, kind: DomainMatcherKind) -> String {
+    let value = value.trim();
+    match kind {
+        DomainMatcherKind::Exact => value.to_ascii_lowercase(),
+        DomainMatcherKind::Suffix => value.trim_start_matches('.').to_ascii_lowercase(),
+    }
+}
+
+fn parse_ip_cidr_matchers(
+    value: Option<Vec<String>>,
+    path: impl Into<String>,
+) -> Result<Vec<IpNet>, ConfigError> {
+    let path = path.into();
+    let Some(values) = value else {
+        return Ok(Vec::new());
+    };
+
+    if values.is_empty() {
+        return Err(ConfigError::semantic(
+            path,
+            "route rule matcher list must not be empty",
+        ));
+    }
+
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let item_path = format!("{path}[{index}]");
+            let value = value.trim();
+            if value.is_empty() {
+                return Err(ConfigError::semantic(
+                    item_path,
+                    "route rule matcher must not be empty",
+                ));
+            }
+
+            value
+                .parse::<IpNet>()
+                .map_err(|_| ConfigError::semantic(item_path, format!("invalid IP CIDR '{value}'")))
+        })
+        .collect()
+}
+
+fn parse_port_matchers(
+    value: Option<Vec<u16>>,
+    path: impl Into<String>,
+) -> Result<Vec<u16>, ConfigError> {
+    let path = path.into();
+    let Some(values) = value else {
+        return Ok(Vec::new());
+    };
+
+    if values.is_empty() {
+        return Err(ConfigError::semantic(
+            path,
+            "route rule matcher list must not be empty",
+        ));
+    }
+
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if value == 0 {
+                return Err(ConfigError::semantic(
+                    format!("{path}[{index}]"),
+                    "port must be in 1..=65535",
+                ));
+            }
+            Ok(value)
+        })
+        .collect()
+}
+
+fn parse_string_matchers(
+    value: Option<Vec<String>>,
+    path: impl Into<String>,
+) -> Result<Vec<String>, ConfigError> {
+    let path = path.into();
+    let Some(values) = value else {
+        return Ok(Vec::new());
+    };
+
+    if values.is_empty() {
+        return Err(ConfigError::semantic(
+            path,
+            "route rule matcher list must not be empty",
+        ));
+    }
+
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if value.trim().is_empty() {
+                return Err(ConfigError::semantic(
+                    format!("{path}[{index}]"),
+                    "route rule matcher must not be empty",
+                ));
+            }
+            Ok(value)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -573,6 +775,70 @@ mod tests {
             config.route.bypass,
             vec!["trojan.example.com".to_string(), "192.168.0.1".to_string()]
         );
+    }
+
+    #[test]
+    fn parses_route_rules_minimal_subset() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            {
+              "type": "trojan",
+              "tag": "proxy",
+              "server": "example.com",
+              "server_port": 443,
+              "password": "secret",
+              "tls": { "server_name": "example.com" }
+            }
+          ],
+          "route": {
+            "final": "proxy",
+            "rules": [
+              {
+                "domain": [" Example.COM "],
+                "outbound": "proxy"
+              },
+              {
+                "domain_suffix": [".Google.com"],
+                "outbound": "proxy"
+              },
+              {
+                "ip_cidr": ["192.168.0.0/16"],
+                "outbound": "direct"
+              },
+              {
+                "port": [53],
+                "outbound": "direct"
+              },
+              {
+                "inbound": ["socks-in"],
+                "outbound": "direct"
+              }
+            ]
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("route rules should parse");
+        assert_eq!(config.route.rules.len(), 5);
+        assert_eq!(
+            config.route.rules[0].domain,
+            vec!["example.com".to_string()]
+        );
+        assert_eq!(
+            config.route.rules[1].domain_suffix,
+            vec!["google.com".to_string()]
+        );
+        assert_eq!(
+            config.route.rules[2].ip_cidr[0].to_string(),
+            "192.168.0.0/16"
+        );
+        assert_eq!(config.route.rules[3].port, vec![53]);
+        assert_eq!(config.route.rules[4].inbound, vec!["socks-in".to_string()]);
     }
 
     #[test]
@@ -663,7 +929,7 @@ mod tests {
         assert!(warning_paths.contains(&"$.outbounds[0].connect_timeout"));
         assert!(warning_paths.contains(&"$.outbounds[1].domain_resolver"));
         assert!(warning_paths.contains(&"$.outbounds[1].transport"));
-        assert!(warning_paths.contains(&"$.route.rules"));
+        assert!(report.config.route.rules.is_empty());
         assert!(report
             .diagnostics
             .ignored
@@ -1029,6 +1295,166 @@ mod tests {
     }
 
     #[test]
+    fn rejects_route_rule_without_outbound() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "rules": [
+              {
+                "domain": ["example.com"]
+              }
+            ]
+          }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("route rule without outbound should fail");
+        assert!(err.to_string().contains("$.route.rules[0].outbound"));
+        assert!(err.to_string().contains("field is required"));
+    }
+
+    #[test]
+    fn rejects_route_rule_without_any_matchers() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "rules": [
+              {
+                "outbound": "direct"
+              }
+            ]
+          }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("route rule without matchers should fail");
+        assert!(err.to_string().contains("$.route.rules[0]"));
+        assert!(err.to_string().contains("at least one matcher"));
+    }
+
+    #[test]
+    fn rejects_route_rule_with_missing_outbound_target() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "rules": [
+              {
+                "domain": ["example.com"],
+                "outbound": "proxy"
+              }
+            ]
+          }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("unknown route rule outbound should fail");
+        assert!(err.to_string().contains("$.route.rules[0].outbound"));
+        assert!(err.to_string().contains("missing outbound 'proxy'"));
+    }
+
+    #[test]
+    fn rejects_route_rule_with_invalid_ip_cidr() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "rules": [
+              {
+                "ip_cidr": ["192.168.0.0/33"],
+                "outbound": "direct"
+              }
+            ]
+          }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("invalid CIDR should fail");
+        assert!(err.to_string().contains("$.route.rules[0].ip_cidr[0]"));
+        assert!(err.to_string().contains("invalid IP CIDR"));
+    }
+
+    #[test]
+    fn rejects_route_rule_with_port_zero() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "rules": [
+              {
+                "port": [0],
+                "outbound": "direct"
+              }
+            ]
+          }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("port zero should fail");
+        assert!(err.to_string().contains("$.route.rules[0].port[0]"));
+        assert!(err.to_string().contains("1..=65535"));
+    }
+
+    #[test]
+    fn rejects_unsupported_route_rule_field() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "rules": [
+              {
+                "source_ip": ["192.0.2.1"],
+                "outbound": "direct"
+              }
+            ]
+          }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("unsupported route rule field should fail");
+        assert!(err.to_string().contains("$.route.rules[0].source_ip"));
+        assert!(err.to_string().contains("current route.rules subset"));
+    }
+
+    #[test]
     fn parses_route_bypass_as_string_list() {
         let input = r#"
         {
@@ -1155,9 +1581,13 @@ mod tests {
             report.config.route.bypass,
             vec!["trojan.example.com".to_string(), "192.168.0.1".to_string()]
         );
+        assert_eq!(report.config.route.rules.len(), 1);
+        assert_eq!(
+            report.config.route.rules[0].domain_suffix,
+            vec!["lan".to_string()]
+        );
         assert!(warning_paths.contains(&"$.dns"));
         assert!(warning_paths.contains(&"$.outbounds[1].domain_resolver"));
-        assert!(warning_paths.contains(&"$.route.rules"));
         assert!(!warning_paths.contains(&"$.log.timestamp"));
         parse_config(input).expect("compat example should remain loadable");
     }
