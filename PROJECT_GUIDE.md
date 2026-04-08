@@ -18,7 +18,7 @@ The intended replacement surface is narrow:
 
 - `socks`, `redirect`, and `tproxy` TCP ingress
 - `direct` and `trojan` outbound execution
-- minimal routing and bypass behavior
+- minimal routing, bypass, and first-match rule behavior
 
 VeeX is not intended to replace a full DNS stack, a general policy platform, or a broader network subsystem.
 
@@ -33,9 +33,11 @@ Supported surface:
 - outbound:
   - `trojan`
   - `direct`
+  - sequential multi-address connect fallback
 - route:
   - `final`
   - basic `bypass`
+  - minimal `rules` matcher subset: `domain`, `domain_suffix`, `ip_cidr`, `port`, `inbound`
 - CLI:
   - `veex run -c <config>`
   - `veex check -c <config>`
@@ -51,7 +53,7 @@ The following are outside the current project scope:
 - sniff
 - UDP proxying
 - TUN
-- full `route.rules` execution
+- full `route.rules` engine
 - full sing-box compatibility
 - OpenWrt packaging, `procd`, and LuCI integration in this repository
 
@@ -134,6 +136,7 @@ Commonly used fields include:
 - `outbounds[]`
 - `route.final`
 - `route.bypass`
+- `route.rules`
 - `direct.routing_mark`
 
 Compatibility rules:
@@ -152,16 +155,16 @@ Route and compatibility notes:
 - `route.bypass` currently supports exact domain and exact IP matches
 - `route.bypass` does not currently support CIDR ranges, suffix matching, or a rule engine
 - wildcard and suffix-style bypass entries such as `*.example.com` and `.example.com` are rejected as unsupported patterns
-- built-in bypass order is loopback, private, link-local, configured bypass, then final outbound
+- `route.rules` currently supports `domain`, `domain_suffix`, `ip_cidr`, `port`, and `inbound` matchers with `outbound` as the only action
+- `route.rules` uses `first match wins`, and all populated matchers inside one rule must match
+- built-in bypass order is loopback, private, link-local, configured bypass, `route.rules`, then final outbound
 - built-in bypass still applies before configured bypass
 - ignored fields must not be described as supported features
 
 Fields that may appear in compatibility fixtures but are not part of the current implementation surface include:
 
 - `dns`
-- `route.rules`
 - `domain_resolver`
-- `log.timestamp`
 - `log.output`
 
 ## Design Constraints
@@ -179,6 +182,8 @@ Additional engineering constraints:
 - `routing_mark` belongs to direct outbound configuration and implementation, not a `core` routing abstraction
 - runtime, bootstrap, and factory orchestration should remain in `cli`
 - the controlled JSON parser is for the current config subset, not a general-purpose JSON implementation
+- when a resolved host yields multiple addresses, outbound connect paths try them sequentially and stop on first success
+- VeeX does not implement Happy Eyeballs, parallel dialing, or post-connect retry to another IP
 
 ## Transparent Proxy Notes
 

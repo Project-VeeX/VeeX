@@ -88,6 +88,17 @@ Key additions:
 
 The Phase 4 conclusion was that the project had reached **observability maturity**: the core execution path was now fully instrumented, the error model was clean and stable, and the config subsystem was maintainable and extensible.
 
+### v0.5.0 — Minimal Route Rules And Sequential Connect Fallback
+
+Key additions:
+
+- minimal `route.rules` subset implemented: `domain`, `domain_suffix`, `ip_cidr`, `port`, `inbound`
+- router closure around explicit `RouteInput` and stable decision order: built-in bypass → configured bypass → `route.rules` → final
+- sequential multi-address connect fallback made explicit across transport, `trojan`, and `direct`
+- connect-path tests now cover multi-address partial failure before later-address success and all-address failure cases
+
+The v0.5.0 carry-forward conclusion is that the TCP execution path now assumes sequential multi-address dialing as a normal connect behavior, while still explicitly excluding Happy Eyeballs, parallel dialing, and post-connect retry semantics.
+
 ## Current Carry-Forward Conclusions
 
 The following conclusions still matter across phases:

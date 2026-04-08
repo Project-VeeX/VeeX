@@ -25,7 +25,16 @@ Keep these rules:
 - keep bypass semantics explicit and conservative
 - when host classification matters, do not blur domains and IPs into one vague conceptual bucket
 
-Current router decision pipeline: built-in bypass → configured bypass → final fallback. This order is stable.
+Current router decision pipeline: built-in bypass → configured bypass → route.rules → final fallback. This order is stable.
+
+## Transport Direction
+
+Outbound dialing keeps the default connect path simple:
+
+- host resolution may yield multiple candidate addresses
+- address attempts are sequential, not parallel
+- stop on first successful connect
+- do not retry a different IP after TLS or relay has already started
 
 ## Lifecycle Direction
 

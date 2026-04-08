@@ -27,6 +27,7 @@ Current supported configuration surface:
 - route fields:
   - `final`
   - `bypass`
+  - `rules`
 
 ## `route.bypass` Semantics
 
@@ -50,14 +51,32 @@ The router applies built-in bypass before configured bypass:
 - private
 - link-local
 - configured bypass
+- route.rules
 - final outbound
+
+## `route.rules` Semantics
+
+`route.rules` currently supports the minimal matcher subset:
+
+- `domain` — exact domain match
+- `domain_suffix` — apex or subdomain suffix match
+- `ip_cidr` — IP destination match
+- `port` — exact destination port
+- `inbound` — exact inbound tag
+
+Current rule execution contract:
+
+- `outbound` is the only supported action
+- rules are evaluated in declaration order
+- first match wins
+- within one rule, all populated matcher fields must match
+- the router may be rerun later with a domain populated by future sniffing work, but sniff is not implemented in the current product
 
 ## Known Ignored Fields
 
 Known tolerated-but-unimplemented fields (accepted in config but have no effect):
 
 - `dns` — DNS server or resolver configuration
-- `route.rules` — full rule-engine config surface
 - `domain_resolver` — domain resolution strategy
 - `log.output` — log output destination (e.g. file path, syslog); VeeX currently logs to stdout/stderr only
 
