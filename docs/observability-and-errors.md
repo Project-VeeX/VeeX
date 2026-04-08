@@ -57,6 +57,11 @@ Main-path events now emitted as structured tracing events include:
 - `session_failed`
 - `handshake_failed`
 - `destination_resolve_failed`
+- `tcp_connect_attempt`
+- `tcp_connect_success`
+- `tcp_connect_failed`
+- `tls_handshake_start`
+- `tls_handshake_success`
 - `tls_handshake_failed`
 - `transparent_socket_config`
 - `original_dst_retry`
@@ -69,7 +74,12 @@ Important field alignment in this round:
 - `session_finish`: `session_id`, `inbound`, `peer`, `destination`, `outbound`, `route_reason`, `success`, `duration_ms`, `bytes_up`, `bytes_down`
 - `session_finish.bytes_up` and `session_finish.bytes_down` are observed relay bytes; relay failures may report partial non-zero stats and must not be normalized back to `0/0`
 - failure events carry `error_kind` and `error` where the boundary already has a `ProxyError`
+- `tcp_connect_attempt` includes `network`, `host`, `port`, `resolved_addr`, `attempt_index`, and `timeout_ms` when a connect timeout is configured
+- `tcp_connect_failed` includes `network`, `host`, `port`, `resolved_addr`, `attempt_index`, `failure_reason`, `error_kind`, and `timeout_ms` when configured
+- direct outbound reuses the shared TCP connect events and adds `routing_mark` when present
 - TLS handshake failures include `host`, `server_name`, `insecure`, `disable_sni`
+- `tls_handshake_start` includes `host`, `port`, `resolved_addr`, `server_name`, and `handshake_timeout_ms`
+- `tls_handshake_failed` includes `failure_reason`, `error_kind`, and `handshake_timeout_ms`
 - `transparent_socket_config` includes `socket_family`, `local_addr`, `peer_addr`, `ipv4_transparent_ok`, `ipv4_transparent_errno`, `ipv6_transparent_ok`, `ipv6_transparent_errno`
 - `listener_fallback` includes `from`, `to`, `reason`, `errno`
 

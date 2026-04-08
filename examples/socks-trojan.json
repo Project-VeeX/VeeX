@@ -14,7 +14,8 @@
   "outbounds": [
     {
       "type": "direct",
-      "tag": "direct"
+      "tag": "direct",
+      "connect_timeout": "5s"
     },
     {
       "type": "trojan",
@@ -22,11 +23,13 @@
       "server": "trojan.example.com",
       "server_port": 443,
       "password": "change-me",
+      "connect_timeout": "5s",
       "tls": {
         "enabled": true,
         "server_name": "trojan.example.com",
         "disable_sni": false,
-        "insecure": false
+        "insecure": false,
+        "handshake_timeout": "5s"
       },
       "multiplex": {
         "enabled": false

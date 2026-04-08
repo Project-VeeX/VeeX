@@ -134,6 +134,8 @@ Commonly used fields include:
 - `log.disabled`
 - `inbounds[]`
 - `outbounds[]`
+- `outbounds[].connect_timeout`
+- `outbounds[].tls.handshake_timeout`
 - `route.final`
 - `route.bypass`
 - `route.rules`
@@ -144,6 +146,9 @@ Compatibility rules:
 - supported inbound types: `socks`, `redirect`, `tproxy`
 - inbound `listen` accepts IPv4 literals, IPv6 literals, and bracketed IPv6 literals
 - supported outbound types: `trojan`, `direct`
+- `outbounds[].connect_timeout` is a per-address TCP connect timeout
+- `outbounds[].tls.handshake_timeout` is a TLS handshake-only timeout
+- trojan currently requires `tls.enabled=true`; `tls.enabled=false` is rejected, so `handshake_timeout` only has meaning when TLS is enabled
 - omitted `tproxy.network` is treated as TCP
 - `tproxy.network="tcp"` is accepted
 - any other `tproxy.network` value is rejected
@@ -204,6 +209,12 @@ The operational contract centers around structured session events.
 
 Important event names include:
 
+- `event=tcp_connect_attempt`
+- `event=tcp_connect_failed`
+- `event=tcp_connect_success`
+- `event=tls_handshake_start`
+- `event=tls_handshake_failed`
+- `event=tls_handshake_success`
 - `event=session_start`
 - `event=route_select`
 - `event=session_finish`

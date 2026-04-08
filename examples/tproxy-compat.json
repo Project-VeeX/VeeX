@@ -27,6 +27,7 @@
     {
       "type": "direct",
       "tag": "direct",
+      "connect_timeout": "5s",
       "routing_mark": 255
     },
     {
@@ -35,12 +36,14 @@
       "server": "trojan.example.com",
       "server_port": 443,
       "password": "change-me",
+      "connect_timeout": "5s",
       "domain_resolver": "local",
       "tls": {
         "enabled": true,
         "server_name": "trojan.example.com",
         "disable_sni": false,
-        "insecure": false
+        "insecure": false,
+        "handshake_timeout": "5s"
       }
     }
   ],
