@@ -9,7 +9,8 @@ mod schema;
 mod validate;
 
 pub use defaults::{
-    DEFAULT_CONNECT_TIMEOUT, DEFAULT_DIRECT_OUTBOUND_TAG, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+    DEFAULT_CONNECT_TIMEOUT, DEFAULT_DIRECT_OUTBOUND_TAG, DEFAULT_SNIFF_TIMEOUT,
+    DEFAULT_TLS_HANDSHAKE_TIMEOUT,
 };
 pub use error::{ConfigError, ExitCodeHint};
 pub use parse::{
@@ -19,7 +20,8 @@ pub use parse::{
 pub use preflight::JsonValue;
 pub use schema::{
     DirectOutboundConfig, InboundConfig, InboundType, LogConfig, OutboundConfig, OutboundType,
-    ProxyConfig, RedirectInboundConfig, RouteConfig, RouteRuleConfig, SocksInboundConfig,
-    TProxyInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
+    ProxyConfig, RedirectInboundConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig,
+    RouteRuleConfig, RouteTargetConfig, RouteUpgradeActionConfig, SniffActionConfig,
+    SocksInboundConfig, TProxyInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
 };
 pub use validate::validate_config;

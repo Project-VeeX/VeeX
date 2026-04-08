@@ -1,5 +1,10 @@
-use veex_config::{OutboundConfig, ProxyConfig, RouteRuleConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
-use veex_core::{RouteRule, Router};
+use veex_config::{
+    OutboundConfig, ProxyConfig, RouteActionConfig, RouteFinalActionConfig, RouteRuleConfig,
+    RouteUpgradeActionConfig, DEFAULT_DIRECT_OUTBOUND_TAG,
+};
+use veex_core::{
+    RouteAction, RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, Router, SniffAction,
+};
 
 pub fn build_router(config: &ProxyConfig) -> Router {
     Router::new(
@@ -34,7 +39,26 @@ fn route_rule(rule: &RouteRuleConfig) -> RouteRule {
         ip_cidr: rule.ip_cidr.clone(),
         port: rule.port.clone(),
         inbound: rule.inbound.clone(),
-        outbound_tag: rule.outbound.clone(),
+        action: route_action(&rule.action),
+    }
+}
+
+fn route_action(action: &RouteActionConfig) -> RouteAction {
+    match action {
+        RouteActionConfig::Upgrade(RouteUpgradeActionConfig::Sniff(sniff)) => {
+            RouteAction::Upgrade(RouteUpgradeAction::Sniff(SniffAction {
+                timeout: sniff.timeout,
+            }))
+        }
+        RouteActionConfig::Final(RouteFinalActionConfig::Route(target)) => RouteAction::Final(
+            RouteFinalAction::Route(RouteTarget::new(target.outbound.clone())),
+        ),
+        RouteActionConfig::Final(RouteFinalActionConfig::HijackDns) => {
+            RouteAction::Final(RouteFinalAction::HijackDns)
+        }
+        RouteActionConfig::Final(RouteFinalActionConfig::Reject) => {
+            RouteAction::Final(RouteFinalAction::Reject)
+        }
     }
 }
 
@@ -43,9 +67,10 @@ mod tests {
     use std::{net::SocketAddr, time::Instant};
 
     use veex_config::{
-        DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
-        RouteRuleConfig, SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
-        DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+        DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
+        RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig,
+        SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig, DEFAULT_CONNECT_TIMEOUT,
+        DEFAULT_TLS_HANDSHAKE_TIMEOUT,
     };
     use veex_core::{Destination, Host, RouteReason, SessionContext, SessionMeta};
 
@@ -91,11 +116,15 @@ mod tests {
                 bypass: vec!["configured.example.com".into()],
                 rules: vec![RouteRuleConfig {
                     domain_suffix: vec!["google.com".into()],
-                    outbound: "direct".into(),
                     domain: vec![],
                     ip_cidr: vec![],
                     port: vec![],
                     inbound: vec![],
+                    action: RouteActionConfig::Final(RouteFinalActionConfig::Route(
+                        RouteTargetConfig {
+                            outbound: "direct".into(),
+                        },
+                    )),
                 }],
             },
         }

@@ -37,7 +37,8 @@ impl Dispatcher for SimpleDispatcher {
     fn dispatch(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             let mut ctx = ctx;
-            let decision = self.router.select(&ctx);
+            let execution = self.router.execute(inbound_stream, &mut ctx).await;
+            let decision = execution.decision;
             ctx.set_route(decision.outbound_tag.clone(), decision.reason);
 
             let route_reason = ctx.route.reason.unwrap_or(RouteReason::Final);
@@ -47,6 +48,7 @@ impl Dispatcher for SimpleDispatcher {
                 .clone()
                 .unwrap_or_else(|| decision.outbound_tag.clone());
             let trace = DispatchTraceContext::new(&ctx, outbound_tag.as_str(), route_reason);
+            let inbound_stream = execution.stream;
 
             // Dispatcher owns session-scoped lifecycle events. Lower-level transport,
             // outbound, and relay details stay in their respective modules.

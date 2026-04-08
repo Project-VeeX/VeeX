@@ -148,4 +148,8 @@ pub struct InputRouteRule {
     pub inbound: Option<Vec<String>>,
     #[serde(default)]
     pub outbound: Option<Option<String>>,
+    #[serde(default)]
+    pub action: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    pub timeout: Option<Duration>,
 }

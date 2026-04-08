@@ -3,7 +3,10 @@ use std::{fs, path::Path};
 use ipnet::IpNet;
 
 use crate::{
-    defaults::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_LOG_LEVEL, DEFAULT_TLS_HANDSHAKE_TIMEOUT},
+    defaults::{
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_LOG_LEVEL, DEFAULT_SNIFF_TIMEOUT,
+        DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+    },
     error::{display_path, ConfigError},
     input::{
         InputConfig, InputInbound, InputInboundType, InputLogConfig, InputOutbound,
@@ -12,8 +15,9 @@ use crate::{
     preflight::parse_json,
     schema::{
         DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
-        RedirectInboundConfig, RouteConfig, RouteRuleConfig, SocksInboundConfig,
-        TProxyInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
+        RedirectInboundConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig,
+        RouteRuleConfig, RouteTargetConfig, RouteUpgradeActionConfig, SniffActionConfig,
+        SocksInboundConfig, TProxyInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
     },
     validate::validate_config,
 };
@@ -264,6 +268,7 @@ fn input_route_rule_into_config(
     input_rule: InputRouteRule,
     index: usize,
 ) -> Result<RouteRuleConfig, ConfigError> {
+    let action = input_route_rule_action_into_config(&input_rule, index)?;
     Ok(RouteRuleConfig {
         domain: normalize_domain_matchers(
             input_rule.domain,
@@ -284,11 +289,55 @@ fn input_route_rule_into_config(
             input_rule.inbound,
             format!("$.route.rules[{index}].inbound"),
         )?,
-        outbound: required_nested_string(
-            input_rule.outbound,
-            format!("$.route.rules[{index}].outbound"),
-        )?,
+        action,
     })
+}
+
+fn input_route_rule_action_into_config(
+    input_rule: &InputRouteRule,
+    index: usize,
+) -> Result<RouteActionConfig, ConfigError> {
+    if input_rule.timeout.is_some() && input_rule.action.is_none() {
+        return Err(ConfigError::semantic(
+            format!("$.route.rules[{index}].timeout"),
+            "route rule timeout is only supported for action='sniff'",
+        ));
+    }
+
+    match &input_rule.action {
+        Some(Some(action)) => {
+            if input_rule.outbound.is_some() {
+                return Err(ConfigError::semantic(
+                    format!("$.route.rules[{index}]"),
+                    "route rule cannot set both action and outbound",
+                ));
+            }
+
+            match action.trim() {
+                "sniff" => Ok(RouteActionConfig::Upgrade(RouteUpgradeActionConfig::Sniff(
+                    SniffActionConfig {
+                        timeout: input_rule.timeout.unwrap_or(DEFAULT_SNIFF_TIMEOUT),
+                    },
+                ))),
+                other => Err(ConfigError::semantic(
+                    format!("$.route.rules[{index}].action"),
+                    format!("unsupported route action '{other}'"),
+                )),
+            }
+        }
+        Some(None) => Err(ConfigError::validation(
+            format!("$.route.rules[{index}].action"),
+            "expected string",
+        )),
+        None => Ok(RouteActionConfig::Final(RouteFinalActionConfig::Route(
+            RouteTargetConfig {
+                outbound: required_nested_string(
+                    input_rule.outbound.clone(),
+                    format!("$.route.rules[{index}].outbound"),
+                )?,
+            },
+        ))),
+    }
 }
 
 fn required_nested_string(
@@ -484,9 +533,8 @@ fn classify_route_rule_ignored(path: &str) -> IgnoredDisposition {
     };
 
     match first_segment(field) {
-        "domain" | "domain_suffix" | "ip_cidr" | "port" | "inbound" | "outbound" => {
-            IgnoredDisposition::Ignore
-        }
+        "domain" | "domain_suffix" | "ip_cidr" | "port" | "inbound" | "outbound" | "action"
+        | "timeout" => IgnoredDisposition::Ignore,
         _ => IgnoredDisposition::Error(
             "route rule field is not supported by the current route.rules subset",
         ),
@@ -711,8 +759,9 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
-        DirectOutboundConfig, InboundConfig, OutboundConfig, TProxyInboundConfig,
-        DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+        DirectOutboundConfig, InboundConfig, OutboundConfig, RouteActionConfig,
+        RouteFinalActionConfig, RouteUpgradeActionConfig, SniffActionConfig, TProxyInboundConfig,
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
     };
 
     use super::{parse_config, parse_config_report_unvalidated, parse_config_with_diagnostics};
@@ -852,6 +901,73 @@ mod tests {
         );
         assert_eq!(config.route.rules[3].port, vec![53]);
         assert_eq!(config.route.rules[4].inbound, vec!["socks-in".to_string()]);
+        assert!(matches!(
+            config.route.rules[0].action,
+            RouteActionConfig::Final(RouteFinalActionConfig::Route(_))
+        ));
+    }
+
+    #[test]
+    fn parses_sniff_route_rule_and_defaults_timeout() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "tproxy", "tag": "tproxy-in", "listen": "0.0.0.0", "listen_port": 1041, "network": "tcp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "rules": [
+              {
+                "inbound": ["tproxy-in"],
+                "action": "sniff"
+              }
+            ]
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("sniff route rule should parse");
+        assert!(matches!(
+            &config.route.rules[0].action,
+            RouteActionConfig::Upgrade(RouteUpgradeActionConfig::Sniff(SniffActionConfig {
+                timeout
+            })) if *timeout == DEFAULT_SNIFF_TIMEOUT
+        ));
+    }
+
+    #[test]
+    fn parses_sniff_route_rule_timeout_with_humantime() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "tproxy", "tag": "tproxy-in", "listen": "0.0.0.0", "listen_port": 1041, "network": "tcp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "rules": [
+              {
+                "inbound": ["tproxy-in"],
+                "action": "sniff",
+                "timeout": "300ms"
+              }
+            ]
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("sniff timeout should parse");
+        assert!(matches!(
+            &config.route.rules[0].action,
+            RouteActionConfig::Upgrade(RouteUpgradeActionConfig::Sniff(SniffActionConfig {
+                timeout
+            })) if *timeout == Duration::from_millis(300)
+        ));
     }
 
     #[test]
@@ -1500,6 +1616,64 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_sniff_timeout_with_indexed_path() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "tproxy", "tag": "tproxy-in", "listen": "0.0.0.0", "listen_port": 1041, "network": "tcp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "rules": [
+              {
+                "inbound": ["tproxy-in"],
+                "action": "sniff",
+                "timeout": "soon"
+              }
+            ]
+          }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("invalid sniff timeout should fail");
+        assert!(err.to_string().contains("$.route.rules[0].timeout"));
+        assert!(err.to_string().contains("invalid duration"));
+    }
+
+    #[test]
+    fn rejects_sniff_timeout_without_sniff_action() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "rules": [
+              {
+                "port": [443],
+                "timeout": "300ms",
+                "outbound": "direct"
+              }
+            ]
+          }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("timeout without sniff action should fail");
+        assert!(err.to_string().contains("$.route.rules[0].timeout"));
+        assert!(err
+            .to_string()
+            .contains("only supported for action='sniff'"));
+    }
+
+    #[test]
     fn rejects_route_rule_with_missing_outbound_target() {
         let input = r#"
         {
@@ -1734,9 +1908,16 @@ mod tests {
             report.config.route.bypass,
             vec!["trojan.example.com".to_string(), "192.168.0.1".to_string()]
         );
-        assert_eq!(report.config.route.rules.len(), 1);
+        assert_eq!(report.config.route.rules.len(), 2);
+        assert_eq!(report.config.route.rules[0].inbound, vec!["tproxy-in".to_string()]);
+        assert!(matches!(
+            &report.config.route.rules[0].action,
+            RouteActionConfig::Upgrade(RouteUpgradeActionConfig::Sniff(SniffActionConfig {
+                timeout
+            })) if *timeout == DEFAULT_SNIFF_TIMEOUT
+        ));
         assert_eq!(
-            report.config.route.rules[0].domain_suffix,
+            report.config.route.rules[1].domain_suffix,
             vec!["lan".to_string()]
         );
         assert!(warning_paths.contains(&"$.dns"));

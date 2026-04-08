@@ -26,9 +26,9 @@ use tracing::{
 use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer};
 use veex_cli::runtime::{run_with_shutdown, RuntimeError};
 use veex_config::{
-    DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
-    RouteRuleConfig, SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
-    DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+    DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteActionConfig,
+    RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig, SocksInboundConfig,
+    TrojanOutboundConfig, TrojanTlsConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
 };
 use veex_core::{Destination, ErrorKind, Host};
 use veex_outbound_trojan::build_trojan_request;
@@ -307,7 +307,11 @@ async fn runtime_supports_socks_domain_route_rule_to_trojan() {
                 ip_cidr: vec![],
                 port: vec![],
                 inbound: vec![],
-                outbound: "proxy".into(),
+                action: RouteActionConfig::Final(RouteFinalActionConfig::Route(
+                    RouteTargetConfig {
+                        outbound: "proxy".into(),
+                    },
+                )),
             }],
         },
     };

@@ -110,6 +110,34 @@ pub struct RouteRuleConfig {
     pub ip_cidr: Vec<IpNet>,
     pub port: Vec<u16>,
     pub inbound: Vec<String>,
+    pub action: RouteActionConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RouteActionConfig {
+    Upgrade(RouteUpgradeActionConfig),
+    Final(RouteFinalActionConfig),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RouteUpgradeActionConfig {
+    Sniff(SniffActionConfig),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SniffActionConfig {
+    pub timeout: Duration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RouteFinalActionConfig {
+    Route(RouteTargetConfig),
+    HijackDns,
+    Reject,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RouteTargetConfig {
     pub outbound: String,
 }
 

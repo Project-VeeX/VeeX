@@ -3,7 +3,10 @@ use std::collections::BTreeSet;
 use crate::{
     defaults::DEFAULT_DIRECT_OUTBOUND_TAG,
     error::ConfigError,
-    schema::{InboundConfig, OutboundConfig, ProxyConfig, RouteRuleConfig},
+    schema::{
+        InboundConfig, OutboundConfig, ProxyConfig, RouteActionConfig, RouteFinalActionConfig,
+        RouteRuleConfig,
+    },
 };
 
 pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
@@ -147,11 +150,16 @@ fn validate_route_rule(
         ));
     }
 
-    if !outbound_tags.contains(&rule.outbound) {
-        return Err(ConfigError::semantic(
-            format!("$.route.rules[{index}].outbound"),
-            format!("route rule points to missing outbound '{}'", rule.outbound),
-        ));
+    if let RouteActionConfig::Final(RouteFinalActionConfig::Route(target)) = &rule.action {
+        if !outbound_tags.contains(&target.outbound) {
+            return Err(ConfigError::semantic(
+                format!("$.route.rules[{index}].outbound"),
+                format!(
+                    "route rule points to missing outbound '{}'",
+                    target.outbound
+                ),
+            ));
+        }
     }
 
     Ok(())
@@ -160,8 +168,10 @@ fn validate_route_rule(
 #[cfg(test)]
 mod tests {
     use crate::{
-        DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
-        RouteRuleConfig, SocksInboundConfig, TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT,
+        DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
+        RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig,
+        RouteUpgradeActionConfig, SniffActionConfig, SocksInboundConfig, TProxyInboundConfig,
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT,
     };
 
     use super::validate_config;
@@ -235,7 +245,9 @@ mod tests {
             ip_cidr: vec![],
             port: vec![],
             inbound: vec![],
-            outbound: "direct".into(),
+            action: RouteActionConfig::Final(RouteFinalActionConfig::Route(RouteTargetConfig {
+                outbound: "direct".into(),
+            })),
         });
 
         let err = validate_config(&config).expect_err("route rule without matchers should fail");
@@ -252,11 +264,32 @@ mod tests {
             ip_cidr: vec![],
             port: vec![],
             inbound: vec![],
-            outbound: "proxy".into(),
+            action: RouteActionConfig::Final(RouteFinalActionConfig::Route(RouteTargetConfig {
+                outbound: "proxy".into(),
+            })),
         });
 
         let err = validate_config(&config).expect_err("missing outbound target should fail");
         assert!(err.to_string().contains("$.route.rules[0].outbound"));
         assert!(err.to_string().contains("missing outbound 'proxy'"));
+    }
+
+    #[test]
+    fn accepts_sniff_upgrade_rule_without_outbound_target() {
+        let mut config = valid_config();
+        config.route.rules.push(RouteRuleConfig {
+            domain: vec![],
+            domain_suffix: vec![],
+            ip_cidr: vec![],
+            port: vec![443],
+            inbound: vec!["tproxy-in".into()],
+            action: RouteActionConfig::Upgrade(RouteUpgradeActionConfig::Sniff(
+                SniffActionConfig {
+                    timeout: DEFAULT_SNIFF_TIMEOUT,
+                },
+            )),
+        });
+
+        validate_config(&config).expect("sniff upgrade rule should validate");
     }
 }
