@@ -55,6 +55,13 @@
     ],
     "rules": [
       {
+        "inbound": [
+          "tproxy-in"
+        ],
+        "action": "sniff",
+        "timeout": "300ms"
+      },
+      {
         "outbound": "direct",
         "domain_suffix": [
           "lan"

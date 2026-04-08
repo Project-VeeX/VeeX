@@ -38,6 +38,7 @@ Supported surface:
   - `final`
   - basic `bypass`
   - minimal `rules` matcher subset: `domain`, `domain_suffix`, `ip_cidr`, `port`, `inbound`
+  - `route.rules` supports final route actions via `outbound` and the `sniff` upgrade action
 - CLI:
   - `veex run -c <config>`
   - `veex check -c <config>`
@@ -50,10 +51,10 @@ The following are outside the current project scope:
 - built-in DNS server
 - DoH / DoT client
 - fake-ip
-- sniff
 - UDP proxying
 - TUN
 - full `route.rules` engine
+- sniff destination override, FakeDNS, or protocol routing
 - full sing-box compatibility
 - OpenWrt packaging, `procd`, and LuCI integration in this repository
 
@@ -139,6 +140,8 @@ Commonly used fields include:
 - `route.final`
 - `route.bypass`
 - `route.rules`
+- `route.rules[].action`
+- `route.rules[].timeout`
 - `direct.routing_mark`
 
 Compatibility rules:
@@ -160,8 +163,13 @@ Route and compatibility notes:
 - `route.bypass` currently supports exact domain and exact IP matches
 - `route.bypass` does not currently support CIDR ranges, suffix matching, or a rule engine
 - wildcard and suffix-style bypass entries such as `*.example.com` and `.example.com` are rejected as unsupported patterns
-- `route.rules` currently supports `domain`, `domain_suffix`, `ip_cidr`, `port`, and `inbound` matchers with `outbound` as the only action
-- `route.rules` uses `first match wins`, and all populated matchers inside one rule must match
+- `route.rules` currently supports `domain`, `domain_suffix`, `ip_cidr`, `port`, and `inbound` matchers
+- regular route rules still use `outbound` as the final route action
+- `route.rules[].action="sniff"` is a route upgrade action that extracts `RouteInput.domain` from TLS SNI or HTTP Host
+- `route.rules[].timeout` is only valid for `action="sniff"` and defaults to `300ms`
+- sniff is best effort: timeout, no-match, or unsupported input does not fail the session
+- sniff does not override destination, does not do DNS resolution, and does not change connect or TLS handshake timeout behavior
+- `route.rules` evaluates in declaration order: matching upgrade actions continue with enriched context, and the first matching final action ends routing
 - built-in bypass order is loopback, private, link-local, configured bypass, `route.rules`, then final outbound
 - built-in bypass still applies before configured bypass
 - ignored fields must not be described as supported features
@@ -179,7 +187,7 @@ Project-level constraints that should remain stable:
 - VeeX is a TCP execution plane, not a general network platform
 - `core` stays platform-agnostic
 - Linux transparent-socket details belong in Linux-facing layers, not `core`
-- `Router` remains pure computation and does not perform I/O or DNS resolution during construction
+- `Router` construction remains pure; runtime route upgrades may perform bounded best-effort sniff I/O before outbound selection
 - config compatibility should stay explicit and conservative
 
 Additional engineering constraints:
@@ -215,6 +223,11 @@ Important event names include:
 - `event=tls_handshake_start`
 - `event=tls_handshake_failed`
 - `event=tls_handshake_success`
+- `event=sniff_start`
+- `event=sniff_success`
+- `event=sniff_timeout`
+- `event=sniff_no_match`
+- `event=sniff_error`
 - `event=session_start`
 - `event=route_select`
 - `event=session_finish`
