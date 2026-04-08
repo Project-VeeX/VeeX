@@ -1,10 +1,24 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 fn default_true() -> bool {
     true
+}
+
+fn deserialize_optional_duration<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    value
+        .map(|value| {
+            humantime::parse_duration(&value).map_err(|_| {
+                serde::de::Error::custom("invalid duration, expected formats like 300ms, 5s, 2m")
+            })
+        })
+        .transpose()
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +78,8 @@ pub struct InputOutbound {
     pub tag: String,
     #[serde(default)]
     pub routing_mark: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    pub connect_timeout: Option<Duration>,
     #[serde(default)]
     pub server: Option<Option<String>>,
     #[serde(default)]
@@ -90,6 +106,8 @@ pub struct InputTrojanTlsConfig {
     pub certificate_path: Option<String>,
     #[serde(default)]
     pub ca_path: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    pub handshake_timeout: Option<Duration>,
 }
 
 impl Default for InputTrojanTlsConfig {
@@ -101,6 +119,7 @@ impl Default for InputTrojanTlsConfig {
             insecure: false,
             certificate_path: None,
             ca_path: None,
+            handshake_timeout: None,
         }
     }
 }

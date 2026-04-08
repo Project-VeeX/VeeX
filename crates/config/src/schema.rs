@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use ipnet::IpNet;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,6 +71,8 @@ pub struct TrojanOutboundConfig {
     pub server: String,
     pub server_port: u16,
     pub password: String,
+    /// Per-address TCP connect timeout applied by transport dialing.
+    pub connect_timeout: Duration,
     pub tls: TrojanTlsConfig,
 }
 
@@ -80,11 +84,15 @@ pub struct TrojanTlsConfig {
     pub insecure: bool,
     pub certificate_path: Option<String>,
     pub ca_path: Option<String>,
+    /// TLS handshake-only timeout applied by transport TLS setup.
+    pub handshake_timeout: Duration,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectOutboundConfig {
     pub tag: String,
+    /// Per-address TCP connect timeout applied by transport dialing.
+    pub connect_timeout: Duration,
     pub routing_mark: Option<u32>,
 }
 

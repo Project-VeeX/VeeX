@@ -25,6 +25,7 @@ async fn trojan_outbound_connects_and_writes_request() {
         "127.0.0.1",
         server.addr.port(),
         "secret",
+        std::time::Duration::from_secs(1),
         TlsClientOptions {
             enabled: true,
             insecure: true,

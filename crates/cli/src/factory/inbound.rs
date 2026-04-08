@@ -53,7 +53,10 @@ pub fn build_inbounds(
 #[cfg(test)]
 mod tests {
     use veex_config::TProxyInboundConfig;
-    use veex_config::{DirectOutboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig};
+    use veex_config::{
+        DirectOutboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
+        DEFAULT_CONNECT_TIMEOUT,
+    };
     use veex_core::shutdown_channel;
 
     use super::*;
@@ -75,6 +78,7 @@ mod tests {
             })],
             outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: None,
             })],
             route: RouteConfig {

@@ -4,7 +4,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use rustls::pki_types::ServerName;
@@ -12,6 +12,7 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::TcpStream,
+    time::timeout,
 };
 use tokio_rustls::TlsConnector;
 use tracing::{info, warn};
@@ -22,7 +23,7 @@ use crate::verifier::{
     build_client_config, validate_certificate_paths, CertificateVerifierOptions, VerifierError,
 };
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct TlsClientOptions {
     pub enabled: bool,
     pub server_name: Option<String>,
@@ -30,6 +31,21 @@ pub struct TlsClientOptions {
     pub insecure: bool,
     pub certificate_path: Option<String>,
     pub ca_path: Option<String>,
+    pub handshake_timeout: Duration,
+}
+
+impl Default for TlsClientOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            server_name: None,
+            disable_sni: false,
+            insecure: false,
+            certificate_path: None,
+            ca_path: None,
+            handshake_timeout: Duration::from_secs(5),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -56,6 +72,16 @@ pub enum TlsError {
         #[source]
         source: io::Error,
     },
+    #[error(
+        "tls handshake timeout after {timeout_ms}ms for host={host} server_name={server_name} insecure={insecure} disable_sni={disable_sni}"
+    )]
+    HandshakeTimeout {
+        host: String,
+        server_name: String,
+        insecure: bool,
+        disable_sni: bool,
+        timeout_ms: u64,
+    },
 }
 
 impl From<TlsError> for ProxyError {
@@ -67,6 +93,7 @@ impl From<TlsError> for ProxyError {
             TlsError::Verifier(_) | TlsError::Handshake { .. } => {
                 ProxyError::tls(value.to_string())
             }
+            TlsError::HandshakeTimeout { .. } => ProxyError::timeout(value.to_string()),
         }
     }
 }
@@ -146,10 +173,13 @@ pub async fn connect_tls(
     // Transport owns TLS handshake events and keeps them scoped to host/port/socket details.
     log_tls_handshake_start(trace, &trace_fields, options);
 
-    let stream = connector
-        .connect(tls_server_name, stream)
-        .await
-        .map_err(|err| {
+    let stream = match timeout(
+        options.handshake_timeout,
+        connector.connect(tls_server_name, stream),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(|err| {
             let error = ProxyError::from(TlsError::Handshake {
                 host: host.to_string(),
                 server_name: server_name.clone(),
@@ -157,9 +187,35 @@ pub async fn connect_tls(
                 disable_sni: options.disable_sni,
                 source: err,
             });
-            log_tls_handshake_failed(trace, &trace_fields, options, tls_start.elapsed(), &error);
+            log_tls_handshake_failed(
+                trace,
+                &trace_fields,
+                options,
+                tls_start.elapsed(),
+                "handshake",
+                &error,
+            );
             error
-        })?;
+        })?,
+        Err(_) => {
+            let error = ProxyError::from(TlsError::HandshakeTimeout {
+                host: host.to_string(),
+                server_name: server_name.clone(),
+                insecure: options.insecure,
+                disable_sni: options.disable_sni,
+                timeout_ms: options.handshake_timeout.as_millis() as u64,
+            });
+            log_tls_handshake_failed(
+                trace,
+                &trace_fields,
+                options,
+                tls_start.elapsed(),
+                "timeout",
+                &error,
+            );
+            return Err(error);
+        }
+    };
 
     log_tls_handshake_success(trace, &trace_fields, tls_start.elapsed());
 
@@ -207,6 +263,7 @@ fn log_tls_handshake_start(
                 port = fields.port,
                 resolved_addr = %resolved_addr,
                 server_name = %fields.server_name_field,
+                handshake_timeout_ms = options.handshake_timeout.as_millis() as u64,
                 insecure = options.insecure,
                 disable_sni = options.disable_sni,
                 "tls handshake start"
@@ -219,6 +276,7 @@ fn log_tls_handshake_start(
                 port = fields.port,
                 resolved_addr = %resolved_addr,
                 server_name = %fields.server_name_field,
+                handshake_timeout_ms = options.handshake_timeout.as_millis() as u64,
                 insecure = options.insecure,
                 disable_sni = options.disable_sni,
                 "tls handshake start"
@@ -266,6 +324,7 @@ fn log_tls_handshake_failed(
     fields: &TlsTraceFields<'_>,
     options: &TlsClientOptions,
     elapsed: std::time::Duration,
+    failure_reason: &'static str,
     err: &ProxyError,
 ) {
     let resolved_addr = fields.resolved_addr_field();
@@ -281,8 +340,10 @@ fn log_tls_handshake_failed(
                 server_name = %fields.server_name_field,
                 insecure = options.insecure,
                 disable_sni = options.disable_sni,
+                handshake_timeout_ms = options.handshake_timeout.as_millis() as u64,
                 elapsed_ms = elapsed.as_millis() as u64,
                 error_kind = %err.kind(),
+                failure_reason,
                 error = %err,
                 "tls handshake failed"
             );
@@ -296,8 +357,10 @@ fn log_tls_handshake_failed(
                 server_name = %fields.server_name_field,
                 insecure = options.insecure,
                 disable_sni = options.disable_sni,
+                handshake_timeout_ms = options.handshake_timeout.as_millis() as u64,
                 elapsed_ms = elapsed.as_millis() as u64,
                 error_kind = %err.kind(),
+                failure_reason,
                 error = %err,
                 "tls handshake failed"
             );
@@ -368,7 +431,7 @@ mod tests {
         net::IpAddr,
         path::PathBuf,
         sync::Arc,
-        time::{SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     use rcgen::generate_simple_self_signed;
@@ -379,6 +442,7 @@ mod tests {
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
+        time::sleep,
     };
     use tokio_rustls::TlsAcceptor;
     use veex_core::Host;
@@ -543,6 +607,7 @@ mod tests {
             Some(&ConnectTraceContext {
                 session_id: 41,
                 outbound: "proxy".into(),
+                routing_mark: None,
             }),
         )
         .await
@@ -560,6 +625,7 @@ mod tests {
                 ("port", &server.addr.port().to_string()),
                 ("resolved_addr", &server.addr.to_string()),
                 ("server_name", "localhost"),
+                ("handshake_timeout_ms", "5000"),
                 ("level", "INFO"),
             ],
         );
@@ -609,6 +675,7 @@ mod tests {
             Some(&ConnectTraceContext {
                 session_id: 42,
                 outbound: "proxy".into(),
+                routing_mark: None,
             }),
         )
         .await
@@ -631,6 +698,7 @@ mod tests {
                 ("port", &addr.port().to_string()),
                 ("resolved_addr", &addr.to_string()),
                 ("server_name", "localhost"),
+                ("handshake_timeout_ms", "5000"),
                 ("level", "INFO"),
             ],
         );
@@ -644,7 +712,76 @@ mod tests {
                 ("port", &addr.port().to_string()),
                 ("resolved_addr", &addr.to_string()),
                 ("server_name", "localhost"),
+                ("failure_reason", "handshake"),
                 ("error_kind", "tls"),
+                ("level", "WARN"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn tls_handshake_timeout_is_classified_and_traced() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.expect("accept should succeed");
+            sleep(Duration::from_millis(200)).await;
+        });
+        let stream = TcpStream::connect(addr)
+            .await
+            .expect("tcp connect should succeed");
+
+        let err = match connect_tls(
+            stream,
+            &Host::Domain("localhost".into()),
+            addr.port(),
+            &TlsClientOptions {
+                enabled: true,
+                insecure: true,
+                server_name: Some("localhost".into()),
+                handshake_timeout: Duration::from_millis(50),
+                ..TlsClientOptions::default()
+            },
+            Some(&ConnectTraceContext {
+                session_id: 43,
+                outbound: "proxy".into(),
+                routing_mark: None,
+            }),
+        )
+        .await
+        {
+            Ok(_) => panic!("tls handshake should time out"),
+            Err(err) => err,
+        };
+        server.await.expect("server task should join");
+
+        assert_eq!(err.kind(), veex_core::ErrorKind::Timeout);
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "tls_handshake_start",
+            &[
+                ("session_id", "43"),
+                ("outbound", "proxy"),
+                ("server_name", "localhost"),
+                ("handshake_timeout_ms", "50"),
+                ("level", "INFO"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "tls_handshake_failed",
+            &[
+                ("session_id", "43"),
+                ("outbound", "proxy"),
+                ("server_name", "localhost"),
+                ("handshake_timeout_ms", "50"),
+                ("failure_reason", "timeout"),
+                ("error_kind", "timeout"),
                 ("level", "WARN"),
             ],
         );

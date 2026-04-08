@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 ipnet.workspace = true
+humantime.workspace = true
 serde.workspace = true
 serde_ignored.workspace = true
 serde_json.workspace = true

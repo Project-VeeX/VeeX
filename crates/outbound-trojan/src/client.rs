@@ -19,7 +19,7 @@ pub struct TrojanOutbound {
     server_port: u16,
     password: String,
     tls: TlsClientOptions,
-    connect_timeout: Option<Duration>,
+    connect_timeout: Duration,
     connector: Arc<TcpConnector>,
 }
 
@@ -41,6 +41,7 @@ impl TrojanOutbound {
         server: impl Into<String>,
         server_port: u16,
         password: impl Into<String>,
+        connect_timeout: Duration,
         tls: TlsClientOptions,
     ) -> Self {
         let server = parse_host(&server.into());
@@ -50,7 +51,7 @@ impl TrojanOutbound {
             server_port,
             password: password.into(),
             tls,
-            connect_timeout: Some(Duration::from_secs(10)),
+            connect_timeout,
             connector: Arc::new(|host, port, options| {
                 Box::pin(async move { connect_host(&host, port, options).await })
             }),
@@ -71,10 +72,6 @@ impl TrojanOutbound {
 
     pub fn tls(&self) -> &TlsClientOptions {
         &self.tls
-    }
-
-    pub fn set_connect_timeout(&mut self, timeout: Option<Duration>) {
-        self.connect_timeout = timeout;
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -114,6 +111,7 @@ impl Outbound for TrojanOutbound {
             let trace = ConnectTraceContext {
                 session_id,
                 outbound: this.tag.clone(),
+                routing_mark: None,
             };
             let connector = Arc::clone(&this.connector);
 
@@ -121,8 +119,9 @@ impl Outbound for TrojanOutbound {
                 this.server.clone(),
                 this.server_port,
                 TcpConnectOptions {
-                    timeout: this.connect_timeout,
+                    timeout: Some(this.connect_timeout),
                     trace: Some(trace.clone()),
+                    connector: None,
                 },
             )
             .await?;
@@ -307,7 +306,7 @@ mod tests {
                 server_name: Some("localhost".into()),
                 ..TlsClientOptions::default()
             },
-            connect_timeout: Some(Duration::from_secs(1)),
+            connect_timeout: Duration::from_secs(1),
             connector: Arc::new(move |_host, port, options| {
                 Box::pin(async move {
                     connect_resolved_addresses(
@@ -409,7 +408,7 @@ mod tests {
                 server_name: Some("localhost".into()),
                 ..TlsClientOptions::default()
             },
-            connect_timeout: Some(Duration::from_millis(200)),
+            connect_timeout: Duration::from_millis(200),
             connector: Arc::new(move |_host, port, options| {
                 Box::pin(async move {
                     connect_resolved_addresses("fallback.test", port, vec![first, second], options)

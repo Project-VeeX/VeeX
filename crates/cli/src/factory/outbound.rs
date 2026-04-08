@@ -17,6 +17,7 @@ pub fn build_outbounds(
                 let instance: Arc<dyn Outbound> = Arc::new(DirectOutbound::new(
                     direct.tag.clone(),
                     direct.routing_mark,
+                    direct.connect_timeout,
                 )?);
                 outbounds.insert(direct.tag.clone(), instance);
             }
@@ -26,6 +27,7 @@ pub fn build_outbounds(
                     trojan.server.clone(),
                     trojan.server_port,
                     trojan.password.clone(),
+                    trojan.connect_timeout,
                     tls_options_from_config(&trojan.tls),
                 );
                 instance.validate()?;
@@ -46,5 +48,6 @@ fn tls_options_from_config(config: &TrojanTlsConfig) -> TlsClientOptions {
         insecure: config.insecure,
         certificate_path: config.certificate_path.clone(),
         ca_path: config.ca_path.clone(),
+        handshake_timeout: config.handshake_timeout,
     }
 }

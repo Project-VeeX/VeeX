@@ -161,7 +161,7 @@ fn validate_route_rule(
 mod tests {
     use crate::{
         DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
-        RouteRuleConfig, SocksInboundConfig, TProxyInboundConfig,
+        RouteRuleConfig, SocksInboundConfig, TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT,
     };
 
     use super::validate_config;
@@ -180,6 +180,7 @@ mod tests {
             })],
             outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: None,
             })],
             route: RouteConfig {

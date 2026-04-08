@@ -8,8 +8,9 @@ license.workspace = true
 libc = "0.2"
 socket2 = "0.5"
 tokio.workspace = true
-tracing.workspace = true
 veex-core = { path = "../core" }
+veex-transport = { path = "../transport" }
 
 [dev-dependencies]
+tracing.workspace = true
 tracing-subscriber.workspace = true

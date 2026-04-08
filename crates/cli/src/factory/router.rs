@@ -45,6 +45,7 @@ mod tests {
     use veex_config::{
         DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
         RouteRuleConfig, SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
     };
     use veex_core::{Destination, Host, RouteReason, SessionContext, SessionMeta};
 
@@ -65,6 +66,7 @@ mod tests {
             outbounds: vec![
                 OutboundConfig::Direct(DirectOutboundConfig {
                     tag: "direct".into(),
+                    connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                     routing_mark: None,
                 }),
                 OutboundConfig::Trojan(TrojanOutboundConfig {
@@ -72,6 +74,7 @@ mod tests {
                     server: "trojan.example.com".into(),
                     server_port: 443,
                     password: "secret".into(),
+                    connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                     tls: TrojanTlsConfig {
                         enabled: true,
                         server_name: Some("trojan.example.com".into()),
@@ -79,6 +82,7 @@ mod tests {
                         insecure: false,
                         certificate_path: None,
                         ca_path: None,
+                        handshake_timeout: DEFAULT_TLS_HANDSHAKE_TIMEOUT,
                     },
                 }),
             ],

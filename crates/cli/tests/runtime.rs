@@ -28,6 +28,7 @@ use veex_cli::runtime::{run_with_shutdown, RuntimeError};
 use veex_config::{
     DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
     RouteRuleConfig, SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
+    DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
 };
 use veex_core::{Destination, ErrorKind, Host};
 use veex_outbound_trojan::build_trojan_request;
@@ -70,6 +71,7 @@ async fn runtime_supports_socks_to_direct_round_trip() {
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
         })],
         route: RouteConfig {
@@ -122,6 +124,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
         outbounds: vec![
             OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: None,
             }),
             OutboundConfig::Trojan(TrojanOutboundConfig {
@@ -129,6 +132,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
                 server: "127.0.0.1".into(),
                 server_port: trojan_server.addr.port(),
                 password: "secret".into(),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 tls: TrojanTlsConfig {
                     enabled: true,
                     server_name: Some("localhost".into()),
@@ -136,6 +140,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
                     insecure: true,
                     certificate_path: None,
                     ca_path: None,
+                    handshake_timeout: DEFAULT_TLS_HANDSHAKE_TIMEOUT,
                 },
             }),
         ],
@@ -273,6 +278,7 @@ async fn runtime_supports_socks_domain_route_rule_to_trojan() {
         outbounds: vec![
             OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: None,
             }),
             OutboundConfig::Trojan(TrojanOutboundConfig {
@@ -280,6 +286,7 @@ async fn runtime_supports_socks_domain_route_rule_to_trojan() {
                 server: "127.0.0.1".into(),
                 server_port: trojan_server.addr.port(),
                 password: "secret".into(),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 tls: TrojanTlsConfig {
                     enabled: true,
                     server_name: Some("localhost".into()),
@@ -287,6 +294,7 @@ async fn runtime_supports_socks_domain_route_rule_to_trojan() {
                     insecure: true,
                     certificate_path: None,
                     ca_path: None,
+                    handshake_timeout: DEFAULT_TLS_HANDSHAKE_TIMEOUT,
                 },
             }),
         ],
@@ -358,6 +366,7 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
         outbounds: vec![
             OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: None,
             }),
             OutboundConfig::Trojan(TrojanOutboundConfig {
@@ -365,6 +374,7 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
                 server: "127.0.0.1".into(),
                 server_port: trojan_server.addr.port(),
                 password: "wrong-secret".into(),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 tls: TrojanTlsConfig {
                     enabled: true,
                     server_name: Some("localhost".into()),
@@ -372,6 +382,7 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
                     insecure: true,
                     certificate_path: None,
                     ca_path: None,
+                    handshake_timeout: DEFAULT_TLS_HANDSHAKE_TIMEOUT,
                 },
             }),
         ],
@@ -475,6 +486,7 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
         })],
         route: RouteConfig {
@@ -513,19 +525,20 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
     let events = captured_events(&trace_buffer);
     assert_has_event(
         &events,
-        "direct_connect_attempt",
+        "tcp_connect_attempt",
         &[
             ("outbound", "direct"),
+            ("network", "tcp"),
             ("routing_mark", ""),
-            ("level", "INFO"),
+            ("level", "DEBUG"),
         ],
     );
     assert_event_has_fields(
         &events,
-        "direct_connect_attempt",
+        "tcp_connect_attempt",
         &[
             "session_id",
-            "destination",
+            "host",
             "resolved_addr",
             "attempt_index",
             "routing_mark",
@@ -533,9 +546,10 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
     );
     assert_has_event(
         &events,
-        "direct_connect_failed",
+        "tcp_connect_failed",
         &[
             ("outbound", "direct"),
+            ("network", "tcp"),
             ("routing_mark", ""),
             ("error_kind", "dial"),
             ("level", "WARN"),
@@ -543,10 +557,10 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
     );
     assert_event_has_fields(
         &events,
-        "direct_connect_failed",
+        "tcp_connect_failed",
         &[
             "session_id",
-            "destination",
+            "host",
             "resolved_addr",
             "attempt_index",
             "routing_mark",
@@ -584,6 +598,7 @@ async fn runtime_starts_with_redirect_inbound() {
         )],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
         })],
         route: RouteConfig {
@@ -645,6 +660,7 @@ async fn runtime_reports_listener_bind_failure_with_io_error_kind() {
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
         })],
         route: RouteConfig {
@@ -719,6 +735,7 @@ async fn runtime_emits_session_start_and_finish_events() {
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
         })],
         route: RouteConfig {
@@ -770,19 +787,20 @@ async fn runtime_emits_session_start_and_finish_events() {
     );
     assert_has_event(
         &events,
-        "direct_connect_attempt",
+        "tcp_connect_attempt",
         &[
             ("outbound", "direct"),
+            ("network", "tcp"),
             ("routing_mark", ""),
-            ("level", "INFO"),
+            ("level", "DEBUG"),
         ],
     );
     assert_event_has_fields(
         &events,
-        "direct_connect_attempt",
+        "tcp_connect_attempt",
         &[
             "session_id",
-            "destination",
+            "host",
             "resolved_addr",
             "attempt_index",
             "routing_mark",
@@ -790,19 +808,20 @@ async fn runtime_emits_session_start_and_finish_events() {
     );
     assert_has_event(
         &events,
-        "direct_connect_success",
+        "tcp_connect_success",
         &[
             ("outbound", "direct"),
+            ("network", "tcp"),
             ("routing_mark", ""),
             ("level", "INFO"),
         ],
     );
     assert_event_has_fields(
         &events,
-        "direct_connect_success",
+        "tcp_connect_success",
         &[
             "session_id",
-            "destination",
+            "host",
             "resolved_addr",
             "attempt_index",
             "routing_mark",
@@ -836,6 +855,7 @@ async fn invalid_socks_request_emits_handshake_failed_event() {
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
         })],
         route: RouteConfig {

@@ -1,6 +1,10 @@
 use std::{
+    fmt,
+    future::Future,
     io,
     net::SocketAddr,
+    pin::Pin,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -15,12 +19,27 @@ use veex_core::{sanitize_field, Host, ProxyError, Result};
 pub struct ConnectTraceContext {
     pub session_id: u64,
     pub outbound: String,
+    pub routing_mark: Option<u32>,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub type TcpAttemptFuture = Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send + 'static>>;
+pub type TcpAttemptConnector = dyn Fn(SocketAddr) -> TcpAttemptFuture + Send + Sync;
+
+#[derive(Clone, Default)]
 pub struct TcpConnectOptions {
     pub timeout: Option<Duration>,
     pub trace: Option<ConnectTraceContext>,
+    pub connector: Option<Arc<TcpAttemptConnector>>,
+}
+
+impl fmt::Debug for TcpConnectOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TcpConnectOptions")
+            .field("timeout", &self.timeout)
+            .field("trace", &self.trace)
+            .field("connector", &self.connector.as_ref().map(|_| "<custom>"))
+            .finish()
+    }
 }
 
 pub async fn connect_host(host: &Host, port: u16, options: TcpConnectOptions) -> Result<TcpStream> {
@@ -61,7 +80,7 @@ async fn connect_addresses(
         );
         let start = Instant::now();
 
-        match connect_socket(address, options.timeout).await {
+        match connect_socket(address, options).await {
             Ok(stream) => {
                 log_tcp_connect_success(
                     options.trace.as_ref(),
@@ -81,6 +100,7 @@ async fn connect_addresses(
                     address,
                     attempt_index,
                     start.elapsed(),
+                    options.timeout,
                     err.failure_reason,
                     &err.error,
                 );
@@ -116,11 +136,16 @@ async fn resolve_host(host: &Host, port: u16) -> Result<Vec<SocketAddr>> {
 
 async fn connect_socket(
     address: SocketAddr,
-    timeout_duration: Option<Duration>,
+    options: &TcpConnectOptions,
 ) -> std::result::Result<TcpStream, TcpConnectError> {
-    let connect_future = TcpStream::connect(address);
+    let connect_future = async {
+        match &options.connector {
+            Some(connector) => connector(address).await,
+            None => TcpStream::connect(address).await,
+        }
+    };
 
-    match timeout_duration {
+    match options.timeout {
         Some(duration) => timeout(duration, connect_future)
             .await
             .map_err(|_| TcpConnectError {
@@ -192,10 +217,15 @@ fn log_tcp_connect_attempt(
 ) {
     match (trace, timeout_duration) {
         (Some(trace), Some(duration)) => {
+            let routing_mark = trace
+                .routing_mark
+                .map(|mark| mark.to_string())
+                .unwrap_or_default();
             debug!(
                 event = "tcp_connect_attempt",
                 session_id = trace.session_id,
                 outbound = %sanitize_field(&trace.outbound),
+                routing_mark = %routing_mark,
                 network = "tcp",
                 host = %host_field,
                 port,
@@ -206,10 +236,15 @@ fn log_tcp_connect_attempt(
             );
         }
         (Some(trace), None) => {
+            let routing_mark = trace
+                .routing_mark
+                .map(|mark| mark.to_string())
+                .unwrap_or_default();
             debug!(
                 event = "tcp_connect_attempt",
                 session_id = trace.session_id,
                 outbound = %sanitize_field(&trace.outbound),
+                routing_mark = %routing_mark,
                 network = "tcp",
                 host = %host_field,
                 port,
@@ -254,10 +289,15 @@ fn log_tcp_connect_success(
 ) {
     match trace {
         Some(trace) => {
+            let routing_mark = trace
+                .routing_mark
+                .map(|mark| mark.to_string())
+                .unwrap_or_default();
             info!(
                 event = "tcp_connect_success",
                 session_id = trace.session_id,
                 outbound = %sanitize_field(&trace.outbound),
+                routing_mark = %routing_mark,
                 network = "tcp",
                 host = %host_field,
                 port,
@@ -289,15 +329,44 @@ fn log_tcp_connect_failed(
     address: SocketAddr,
     attempt_index: u64,
     elapsed: Duration,
+    timeout_duration: Option<Duration>,
     failure_reason: &'static str,
     err: &ProxyError,
 ) {
-    match trace {
-        Some(trace) => {
+    match (trace, timeout_duration) {
+        (Some(trace), Some(duration)) => {
+            let routing_mark = trace
+                .routing_mark
+                .map(|mark| mark.to_string())
+                .unwrap_or_default();
             warn!(
                 event = "tcp_connect_failed",
                 session_id = trace.session_id,
                 outbound = %sanitize_field(&trace.outbound),
+                routing_mark = %routing_mark,
+                network = "tcp",
+                host = %host_field,
+                port,
+                resolved_addr = %address,
+                attempt_index,
+                elapsed_ms = elapsed.as_millis() as u64,
+                timeout_ms = duration.as_millis() as u64,
+                error_kind = %err.kind(),
+                failure_reason,
+                error = %err,
+                "tcp connect failed"
+            );
+        }
+        (Some(trace), None) => {
+            let routing_mark = trace
+                .routing_mark
+                .map(|mark| mark.to_string())
+                .unwrap_or_default();
+            warn!(
+                event = "tcp_connect_failed",
+                session_id = trace.session_id,
+                outbound = %sanitize_field(&trace.outbound),
+                routing_mark = %routing_mark,
                 network = "tcp",
                 host = %host_field,
                 port,
@@ -310,7 +379,23 @@ fn log_tcp_connect_failed(
                 "tcp connect failed"
             );
         }
-        None => {
+        (None, Some(duration)) => {
+            warn!(
+                event = "tcp_connect_failed",
+                network = "tcp",
+                host = %host_field,
+                port,
+                resolved_addr = %address,
+                attempt_index,
+                elapsed_ms = elapsed.as_millis() as u64,
+                timeout_ms = duration.as_millis() as u64,
+                error_kind = %err.kind(),
+                failure_reason,
+                error = %err,
+                "tcp connect failed"
+            );
+        }
+        (None, None) => {
             warn!(
                 event = "tcp_connect_failed",
                 network = "tcp",
@@ -331,13 +416,21 @@ fn log_tcp_connect_failed(
 #[cfg(test)]
 mod tests {
     use std::{
+        io,
         net::{IpAddr, Ipv4Addr, SocketAddr},
+        sync::Arc,
         time::Duration,
     };
 
-    use tokio::net::TcpListener;
+    use tokio::{
+        net::{TcpListener, TcpStream},
+        time::sleep,
+    };
 
-    use super::{connect_host, connect_resolved_addresses, ConnectTraceContext, TcpConnectOptions};
+    use super::{
+        connect_host, connect_resolved_addresses, ConnectTraceContext, TcpAttemptConnector,
+        TcpConnectOptions,
+    };
     use crate::test_support::{assert_has_event, captured_events, install_test_subscriber};
     use veex_core::Host;
 
@@ -362,6 +455,7 @@ mod tests {
         let trace = ConnectTraceContext {
             session_id: 7,
             outbound: "proxy".into(),
+            routing_mark: None,
         };
         let stream = connect_host(
             &Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
@@ -369,6 +463,7 @@ mod tests {
             TcpConnectOptions {
                 timeout: Some(Duration::from_secs(1)),
                 trace: Some(trace),
+                connector: None,
             },
         )
         .await
@@ -418,7 +513,9 @@ mod tests {
                 trace: Some(ConnectTraceContext {
                     session_id: 8,
                     outbound: "proxy".into(),
+                    routing_mark: None,
                 }),
+                connector: None,
             },
         )
         .await
@@ -475,7 +572,9 @@ mod tests {
                 trace: Some(ConnectTraceContext {
                     session_id: 9,
                     outbound: "proxy".into(),
+                    routing_mark: None,
                 }),
+                connector: None,
             },
         )
         .await
@@ -539,7 +638,9 @@ mod tests {
                 trace: Some(ConnectTraceContext {
                     session_id: 10,
                     outbound: "proxy".into(),
+                    routing_mark: None,
                 }),
+                connector: None,
             },
         )
         .await
@@ -571,6 +672,122 @@ mod tests {
                 ("session_id", "10"),
                 ("attempt_index", "2"),
                 ("level", "WARN"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn tcp_connect_timeout_is_classified_and_traced() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let connector: Arc<TcpAttemptConnector> = Arc::new(|_address| {
+            Box::pin(async move {
+                sleep(Duration::from_millis(200)).await;
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "delayed connector should have timed out earlier",
+                ))
+            })
+        });
+
+        let err = connect_resolved_addresses(
+            "timeout.example",
+            443,
+            vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 443)],
+            TcpConnectOptions {
+                timeout: Some(Duration::from_millis(50)),
+                trace: Some(ConnectTraceContext {
+                    session_id: 13,
+                    outbound: "proxy".into(),
+                    routing_mark: None,
+                }),
+                connector: Some(connector),
+            },
+        )
+        .await
+        .expect_err("connect should time out");
+
+        assert_eq!(err.kind(), veex_core::ErrorKind::Timeout);
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "tcp_connect_failed",
+            &[
+                ("session_id", "13"),
+                ("outbound", "proxy"),
+                ("attempt_index", "1"),
+                ("error_kind", "timeout"),
+                ("failure_reason", "timeout"),
+                ("timeout_ms", "50"),
+                ("level", "WARN"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn tcp_connect_timeout_does_not_block_later_address_fallback() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("listener should bind");
+        let reachable = listener.local_addr().expect("listener addr should exist");
+        let delayed = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), reachable.port());
+        let connector: Arc<TcpAttemptConnector> = Arc::new(move |address| {
+            Box::pin(async move {
+                if address == delayed {
+                    sleep(Duration::from_millis(200)).await;
+                    Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "delayed connector should have timed out earlier",
+                    ))
+                } else {
+                    TcpStream::connect(address).await
+                }
+            })
+        });
+        let accept_task = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.expect("accept should succeed");
+        });
+
+        let stream = connect_resolved_addresses(
+            "fallback.example",
+            reachable.port(),
+            vec![delayed, reachable],
+            TcpConnectOptions {
+                timeout: Some(Duration::from_millis(50)),
+                trace: Some(ConnectTraceContext {
+                    session_id: 14,
+                    outbound: "proxy".into(),
+                    routing_mark: None,
+                }),
+                connector: Some(connector),
+            },
+        )
+        .await
+        .expect("second address should still connect");
+        drop(stream);
+        accept_task.await.expect("accept task should join");
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "tcp_connect_failed",
+            &[
+                ("session_id", "14"),
+                ("attempt_index", "1"),
+                ("error_kind", "timeout"),
+                ("failure_reason", "timeout"),
+                ("timeout_ms", "50"),
+                ("level", "WARN"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "tcp_connect_success",
+            &[
+                ("session_id", "14"),
+                ("attempt_index", "2"),
+                ("level", "INFO"),
             ],
         );
     }

@@ -8,7 +8,9 @@ mod preflight;
 mod schema;
 mod validate;
 
-pub use defaults::DEFAULT_DIRECT_OUTBOUND_TAG;
+pub use defaults::{
+    DEFAULT_CONNECT_TIMEOUT, DEFAULT_DIRECT_OUTBOUND_TAG, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+};
 pub use error::{ConfigError, ExitCodeHint};
 pub use parse::{
     load_from_path, load_from_path_unvalidated, load_from_path_with_diagnostics, parse_config,

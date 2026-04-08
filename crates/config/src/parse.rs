@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use ipnet::IpNet;
 
 use crate::{
-    defaults::DEFAULT_LOG_LEVEL,
+    defaults::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_LOG_LEVEL, DEFAULT_TLS_HANDSHAKE_TIMEOUT},
     error::{display_path, ConfigError},
     input::{
         InputConfig, InputInbound, InputInboundType, InputLogConfig, InputOutbound,
@@ -202,6 +202,9 @@ fn input_outbound_into_config(
     match input_config.kind {
         InputOutboundType::Direct => Ok(OutboundConfig::Direct(DirectOutboundConfig {
             tag: input_config.tag,
+            connect_timeout: input_config
+                .connect_timeout
+                .unwrap_or(DEFAULT_CONNECT_TIMEOUT),
             routing_mark: input_config.routing_mark,
         })),
         InputOutboundType::Trojan => Ok(OutboundConfig::Trojan(TrojanOutboundConfig {
@@ -218,6 +221,9 @@ fn input_outbound_into_config(
                 input_config.password,
                 format!("$.outbounds[{index}].password"),
             )?,
+            connect_timeout: input_config
+                .connect_timeout
+                .unwrap_or(DEFAULT_CONNECT_TIMEOUT),
             tls: input_trojan_tls_into_config(input_trojan_tls_or_default(
                 input_config.tls,
                 format!("$.outbounds[{index}].tls"),
@@ -234,6 +240,9 @@ fn input_trojan_tls_into_config(input_config: InputTrojanTlsConfig) -> TrojanTls
         insecure: input_config.insecure,
         certificate_path: input_config.certificate_path,
         ca_path: input_config.ca_path,
+        handshake_timeout: input_config
+            .handshake_timeout
+            .unwrap_or(DEFAULT_TLS_HANDSHAKE_TIMEOUT),
     }
 }
 
@@ -434,7 +443,7 @@ fn classify_tproxy_ignored(field: &str) -> IgnoredDisposition {
 
 fn classify_direct_ignored(field: &str) -> IgnoredDisposition {
     match first_segment(field) {
-        "connect_timeout" | "bind_interface" | "domain_strategy" | "ipv4_only" | "ipv6_only" => {
+        "bind_interface" | "domain_strategy" | "ipv4_only" | "ipv6_only" => {
             IgnoredDisposition::Warn(
                 "field is accepted for compatibility but does not affect the current direct outbound",
             )
@@ -448,8 +457,7 @@ fn classify_trojan_ignored(field: &str) -> IgnoredDisposition {
     let field = first_segment(field);
     if matches!(
         field,
-        "connect_timeout"
-            | "transport"
+        "transport"
             | "mux"
             | "multiplex"
             | "packet_encoding"
@@ -700,7 +708,12 @@ fn parse_string_matchers(
 
 #[cfg(test)]
 mod tests {
-    use crate::{DirectOutboundConfig, InboundConfig, OutboundConfig, TProxyInboundConfig};
+    use std::time::Duration;
+
+    use crate::{
+        DirectOutboundConfig, InboundConfig, OutboundConfig, TProxyInboundConfig,
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+    };
 
     use super::{parse_config, parse_config_report_unvalidated, parse_config_with_diagnostics};
 
@@ -926,7 +939,7 @@ mod tests {
         assert!(warning_paths.contains(&"$.dns"));
         assert!(warning_paths.contains(&"$.inbounds[0].sniff"));
         assert!(warning_paths.contains(&"$.inbounds[0].users"));
-        assert!(warning_paths.contains(&"$.outbounds[0].connect_timeout"));
+        assert!(!warning_paths.contains(&"$.outbounds[0].connect_timeout"));
         assert!(warning_paths.contains(&"$.outbounds[1].domain_resolver"));
         assert!(warning_paths.contains(&"$.outbounds[1].transport"));
         assert!(report.config.route.rules.is_empty());
@@ -1145,9 +1158,149 @@ mod tests {
             config.outbounds,
             vec![OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: Some(1),
             })]
         );
+    }
+
+    #[test]
+    fn parses_timeout_fields_with_humantime_durations() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct", "connect_timeout": "300ms" },
+            {
+              "type": "trojan",
+              "tag": "proxy",
+              "server": "example.com",
+              "server_port": 443,
+              "password": "secret",
+              "connect_timeout": "5s",
+              "tls": {
+                "server_name": "example.com",
+                "handshake_timeout": "1s"
+              }
+            }
+          ],
+          "route": { "final": "proxy" }
+        }
+        "#;
+
+        let config = parse_config(input).expect("timeout fields should parse");
+
+        match &config.outbounds[0] {
+            OutboundConfig::Direct(direct) => {
+                assert_eq!(direct.connect_timeout, Duration::from_millis(300));
+            }
+            other => panic!("expected direct outbound, got {other:?}"),
+        }
+
+        match &config.outbounds[1] {
+            OutboundConfig::Trojan(trojan) => {
+                assert_eq!(trojan.connect_timeout, Duration::from_secs(5));
+                assert_eq!(trojan.tls.handshake_timeout, Duration::from_secs(1));
+            }
+            other => panic!("expected trojan outbound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn timeout_fields_default_in_runtime_config_when_omitted() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            {
+              "type": "trojan",
+              "tag": "proxy",
+              "server": "example.com",
+              "server_port": 443,
+              "password": "secret",
+              "tls": { "server_name": "example.com" }
+            }
+          ],
+          "route": { "final": "proxy" }
+        }
+        "#;
+
+        let config = parse_config(input).expect("default timeout config should parse");
+
+        match &config.outbounds[0] {
+            OutboundConfig::Direct(direct) => {
+                assert_eq!(direct.connect_timeout, DEFAULT_CONNECT_TIMEOUT);
+            }
+            other => panic!("expected direct outbound, got {other:?}"),
+        }
+
+        match &config.outbounds[1] {
+            OutboundConfig::Trojan(trojan) => {
+                assert_eq!(trojan.connect_timeout, DEFAULT_CONNECT_TIMEOUT);
+                assert_eq!(trojan.tls.handshake_timeout, DEFAULT_TLS_HANDSHAKE_TIMEOUT);
+            }
+            other => panic!("expected trojan outbound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_connect_timeout_with_indexed_path() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct", "connect_timeout": "soon" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("invalid connect_timeout should fail");
+        assert!(err.to_string().contains("$.outbounds[0].connect_timeout"));
+        assert!(err
+            .to_string()
+            .contains("invalid duration, expected formats like 300ms, 5s, 2m"));
+    }
+
+    #[test]
+    fn rejects_invalid_tls_handshake_timeout_with_nested_path() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            {
+              "type": "trojan",
+              "tag": "proxy",
+              "server": "example.com",
+              "server_port": 443,
+              "password": "secret",
+              "tls": {
+                "server_name": "example.com",
+                "handshake_timeout": "later"
+              }
+            }
+          ],
+          "route": { "final": "proxy" }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("invalid handshake_timeout should fail");
+        assert!(err
+            .to_string()
+            .contains("$.outbounds[1].tls.handshake_timeout"));
+        assert!(err
+            .to_string()
+            .contains("invalid duration, expected formats like 300ms, 5s, 2m"));
     }
 
     #[test]
