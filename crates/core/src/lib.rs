@@ -17,7 +17,7 @@ pub use error::{ErrorKind, ProxyError, Result};
 pub use listen::{format_listen_addr, parse_listen_addr};
 pub use logging::sanitize_field;
 pub use relay::{relay_bidirectional, RelayErrorWithStats, RelayStats};
-pub use router::{RouteDecision, Router};
+pub use router::{RouteDecision, RouteInput, RouteRule, Router};
 pub use shutdown::{shutdown_channel, ShutdownSignal, ShutdownTrigger};
 pub use traits::{BoxFuture, Dispatcher, Inbound, Outbound};
 pub use types::{

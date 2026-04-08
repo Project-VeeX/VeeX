@@ -55,6 +55,15 @@ impl fmt::Display for Host {
     }
 }
 
+impl Host {
+    pub fn as_domain(&self) -> Option<&str> {
+        match self {
+            Self::Domain(domain) => Some(domain.as_str()),
+            Self::Ip(_) => None,
+        }
+    }
+}
+
 /// A destination endpoint for a connection, combining a host and port.
 ///
 /// This is the primary key used to route and connect sessions.
@@ -98,6 +107,8 @@ impl fmt::Display for Destination {
 pub enum RouteReason {
     /// Routed to the configured final outbound.
     Final,
+    /// Routed by the user-defined route.rules chain.
+    Rule,
     /// Bypassed proxy (sent direct) because destination is loopback.
     BypassLoopback,
     /// Bypassed proxy (sent direct) because destination is a private IP.
@@ -112,6 +123,7 @@ impl RouteReason {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Final => "final",
+            Self::Rule => "rule",
             Self::BypassLoopback => "loopback",
             Self::BypassPrivate => "private",
             Self::BypassLinkLocal => "link_local",

@@ -27,7 +27,7 @@ use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer
 use veex_cli::runtime::{run_with_shutdown, RuntimeError};
 use veex_config::{
     DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
-    SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
+    RouteRuleConfig, SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
 };
 use veex_core::{Destination, ErrorKind, Host};
 use veex_outbound_trojan::build_trojan_request;
@@ -75,6 +75,7 @@ async fn runtime_supports_socks_to_direct_round_trip() {
         route: RouteConfig {
             final_outbound: "direct".into(),
             bypass: vec![],
+            rules: vec![],
         },
     };
 
@@ -141,6 +142,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
         route: RouteConfig {
             final_outbound: "proxy".into(),
             bypass: vec![],
+            rules: vec![],
         },
     };
     let (_guard, trace_buffer) = install_test_subscriber();
@@ -253,6 +255,90 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
 }
 
 #[tokio::test]
+async fn runtime_supports_socks_domain_route_rule_to_trojan() {
+    let destination = Destination::from_domain("rule-test.invalid", 443);
+    let trojan_server = spawn_trojan_server("localhost", destination.clone()).await;
+    let socks_addr = reserve_local_port().await;
+    let config = ProxyConfig {
+        log: LogConfig {
+            level: "info".into(),
+            disabled: false,
+            timestamp: false,
+        },
+        inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
+            tag: "socks-in".into(),
+            listen: "127.0.0.1".into(),
+            listen_port: socks_addr.port(),
+        })],
+        outbounds: vec![
+            OutboundConfig::Direct(DirectOutboundConfig {
+                tag: "direct".into(),
+                routing_mark: None,
+            }),
+            OutboundConfig::Trojan(TrojanOutboundConfig {
+                tag: "proxy".into(),
+                server: "127.0.0.1".into(),
+                server_port: trojan_server.addr.port(),
+                password: "secret".into(),
+                tls: TrojanTlsConfig {
+                    enabled: true,
+                    server_name: Some("localhost".into()),
+                    disable_sni: false,
+                    insecure: true,
+                    certificate_path: None,
+                    ca_path: None,
+                },
+            }),
+        ],
+        route: RouteConfig {
+            final_outbound: "direct".into(),
+            bypass: vec![],
+            rules: vec![RouteRuleConfig {
+                domain: vec!["rule-test.invalid".into()],
+                domain_suffix: vec![],
+                ip_cidr: vec![],
+                port: vec![],
+                inbound: vec![],
+                outbound: "proxy".into(),
+            }],
+        },
+    };
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runtime_task = tokio::spawn(async move {
+        run_with_shutdown(&config, async move {
+            shutdown_rx
+                .await
+                .map_err(|err| format!("shutdown channel failed: {err}"))?;
+            Ok(())
+        })
+        .await
+    });
+
+    wait_for_listener(socks_addr).await;
+    run_socks_domain_client_round_trip(socks_addr, "rule-test.invalid", 443)
+        .await
+        .expect("domain rule should route through trojan");
+
+    let _ = shutdown_tx.send(());
+    runtime_task
+        .await
+        .expect("runtime task should join")
+        .expect("runtime should stop cleanly");
+
+    let received = trojan_server
+        .handle
+        .await
+        .expect("trojan server task should join");
+    assert_eq!(
+        received.request,
+        build_trojan_request("secret", &destination, &[]).unwrap()
+    );
+    assert_eq!(received.payload, b"ping");
+    let _ = fs::remove_file(trojan_server.certificate_path);
+}
+
+#[tokio::test]
 async fn runtime_reports_trojan_failure_on_wrong_password() {
     let destination = Destination::new(Host::Ip(Ipv4Addr::new(93, 184, 216, 34).into()), 443);
     let trojan_server =
@@ -292,6 +378,7 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
         route: RouteConfig {
             final_outbound: "proxy".into(),
             bypass: vec![],
+            rules: vec![],
         },
     };
     let (_guard, trace_buffer) = install_test_subscriber();
@@ -393,6 +480,7 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
         route: RouteConfig {
             final_outbound: "direct".into(),
             bypass: vec![],
+            rules: vec![],
         },
     };
     let (_guard, trace_buffer) = install_test_subscriber();
@@ -501,6 +589,7 @@ async fn runtime_starts_with_redirect_inbound() {
         route: RouteConfig {
             final_outbound: "direct".into(),
             bypass: vec![],
+            rules: vec![],
         },
     };
 
@@ -561,6 +650,7 @@ async fn runtime_reports_listener_bind_failure_with_io_error_kind() {
         route: RouteConfig {
             final_outbound: "direct".into(),
             bypass: vec![],
+            rules: vec![],
         },
     };
     let (_guard, trace_buffer) = install_test_subscriber();
@@ -634,6 +724,7 @@ async fn runtime_emits_session_start_and_finish_events() {
         route: RouteConfig {
             final_outbound: "direct".into(),
             bypass: vec![],
+            rules: vec![],
         },
     };
     let (_guard, trace_buffer) = install_test_subscriber();
@@ -750,6 +841,7 @@ async fn invalid_socks_request_emits_handshake_failed_event() {
         route: RouteConfig {
             final_outbound: "direct".into(),
             bypass: vec![],
+            rules: vec![],
         },
     };
     let (_guard, trace_buffer) = install_test_subscriber();
@@ -974,6 +1066,88 @@ async fn run_socks_client_round_trip(
     if reply[1] != 0x00 {
         return Err(format!("unexpected socks reply code: 0x{:02x}", reply[1]));
     }
+
+    stream
+        .write_all(b"ping")
+        .await
+        .map_err(|err| format!("failed to write payload: {err}"))?;
+
+    let mut echoed = [0u8; 4];
+    stream
+        .read_exact(&mut echoed)
+        .await
+        .map_err(|err| format!("failed to read echoed payload: {err}"))?;
+    if &echoed != b"ping" {
+        return Err(format!("unexpected echoed payload: {echoed:?}"));
+    }
+
+    Ok(())
+}
+
+async fn run_socks_domain_client_round_trip(
+    socks_addr: SocketAddr,
+    domain: &str,
+    port: u16,
+) -> Result<(), String> {
+    let mut stream = TcpStream::connect(socks_addr)
+        .await
+        .map_err(|err| format!("failed to connect to socks listener: {err}"))?;
+
+    stream
+        .write_all(&[0x05, 0x01, 0x00])
+        .await
+        .map_err(|err| format!("failed to write greeting: {err}"))?;
+    let mut method = [0u8; 2];
+    stream
+        .read_exact(&mut method)
+        .await
+        .map_err(|err| format!("failed to read method selection: {err}"))?;
+    if method != [0x05, 0x00] {
+        return Err(format!("unexpected method selection: {method:?}"));
+    }
+
+    let domain_bytes = domain.as_bytes();
+    if domain_bytes.len() > u8::MAX as usize {
+        return Err("domain is too long for socks request".into());
+    }
+
+    let mut request = vec![0x05, 0x01, 0x00, 0x03, domain_bytes.len() as u8];
+    request.extend_from_slice(domain_bytes);
+    request.extend_from_slice(&port.to_be_bytes());
+
+    stream
+        .write_all(&request)
+        .await
+        .map_err(|err| format!("failed to write socks request: {err}"))?;
+
+    let mut header = [0u8; 4];
+    stream
+        .read_exact(&mut header)
+        .await
+        .map_err(|err| format!("failed to read socks reply header: {err}"))?;
+    if header[1] != 0x00 {
+        return Err(format!("unexpected socks reply code: 0x{:02x}", header[1]));
+    }
+
+    let trailing_len = match header[3] {
+        0x01 => 6,
+        0x03 => {
+            let mut len = [0u8; 1];
+            stream
+                .read_exact(&mut len)
+                .await
+                .map_err(|err| format!("failed to read socks domain length: {err}"))?;
+            len[0] as usize + 2
+        }
+        0x04 => 18,
+        other => return Err(format!("unexpected socks reply atyp: 0x{other:02x}")),
+    };
+
+    let mut trailing = vec![0u8; trailing_len];
+    stream
+        .read_exact(&mut trailing)
+        .await
+        .map_err(|err| format!("failed to read socks reply tail: {err}"))?;
 
     stream
         .write_all(b"ping")

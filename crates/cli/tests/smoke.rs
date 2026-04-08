@@ -192,7 +192,7 @@ fn check_accepts_tproxy_compat_example_and_prints_warnings_with_verbose() {
     assert!(stdout.contains("final=proxy"));
     assert!(stderr.contains("config warning at $.dns"));
     assert!(stderr.contains("config warning at $.outbounds[1].domain_resolver"));
-    assert!(stderr.contains("config warning at $.route.rules"));
+    assert!(!stderr.contains("config warning at $.route.rules"));
 }
 
 fn reserve_local_addr() -> SocketAddr {

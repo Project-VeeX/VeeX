@@ -1,5 +1,5 @@
-use veex_config::{OutboundConfig, ProxyConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
-use veex_core::Router;
+use veex_config::{OutboundConfig, ProxyConfig, RouteRuleConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
+use veex_core::{RouteRule, Router};
 
 pub fn build_router(config: &ProxyConfig) -> Router {
     Router::new(
@@ -7,6 +7,7 @@ pub fn build_router(config: &ProxyConfig) -> Router {
         DEFAULT_DIRECT_OUTBOUND_TAG,
     )
     .with_bypass_hosts(router_bypass_hosts(config))
+    .with_rules(router_rules(config))
 }
 
 fn router_bypass_hosts(config: &ProxyConfig) -> Vec<String> {
@@ -22,13 +23,28 @@ fn implicit_bypass_host(outbound: &OutboundConfig) -> Option<String> {
     }
 }
 
+fn router_rules(config: &ProxyConfig) -> Vec<RouteRule> {
+    config.route.rules.iter().map(route_rule).collect()
+}
+
+fn route_rule(rule: &RouteRuleConfig) -> RouteRule {
+    RouteRule {
+        domain: rule.domain.clone(),
+        domain_suffix: rule.domain_suffix.clone(),
+        ip_cidr: rule.ip_cidr.clone(),
+        port: rule.port.clone(),
+        inbound: rule.inbound.clone(),
+        outbound_tag: rule.outbound.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{net::SocketAddr, time::Instant};
 
     use veex_config::{
         DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
-        SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
+        RouteRuleConfig, SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
     };
     use veex_core::{Destination, Host, RouteReason, SessionContext, SessionMeta};
 
@@ -69,6 +85,14 @@ mod tests {
             route: RouteConfig {
                 final_outbound: "proxy".into(),
                 bypass: vec!["configured.example.com".into()],
+                rules: vec![RouteRuleConfig {
+                    domain_suffix: vec!["google.com".into()],
+                    outbound: "direct".into(),
+                    domain: vec![],
+                    ip_cidr: vec![],
+                    port: vec![],
+                    inbound: vec![],
+                }],
             },
         }
     }
@@ -98,5 +122,14 @@ mod tests {
         let trojan_server = router.select(&build_ctx(Host::Domain("trojan.example.com".into())));
         assert_eq!(trojan_server.outbound_tag, "direct");
         assert_eq!(trojan_server.reason, RouteReason::BypassConfigured);
+    }
+
+    #[test]
+    fn build_router_includes_route_rules() {
+        let router = build_router(&build_config());
+
+        let ruled = router.select(&build_ctx(Host::Domain("www.google.com".into())));
+        assert_eq!(ruled.outbound_tag, "direct");
+        assert_eq!(ruled.reason, RouteReason::Rule);
     }
 }
