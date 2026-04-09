@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use ipnet::IpNet;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub use crate::types::RouteReason;
 
@@ -39,8 +39,6 @@ pub struct SniffAction {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RouteFinalAction {
     Route(RouteTarget),
-    HijackDns,
-    Reject,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -143,6 +141,8 @@ impl<'a> RouteInput<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CompiledRouteRule {
+    rule_index: usize,
+    matcher_summary: String,
     domain: Vec<String>,
     domain_suffix: Vec<String>,
     ip_cidr: Vec<IpNet>,
@@ -154,9 +154,11 @@ struct CompiledRouteRule {
     action: RouteAction,
 }
 
-impl From<RouteRule> for CompiledRouteRule {
-    fn from(rule: RouteRule) -> Self {
+impl CompiledRouteRule {
+    fn compile(rule: RouteRule, rule_index: usize) -> Self {
         Self {
+            rule_index,
+            matcher_summary: build_matcher_summary(&rule),
             domain: rule
                 .domain
                 .into_iter()
@@ -176,79 +178,157 @@ impl From<RouteRule> for CompiledRouteRule {
             action: rule.action,
         }
     }
-}
 
-impl CompiledRouteRule {
-    fn matches(&self, input: RouteInput<'_>, normalized_domain: Option<&str>) -> bool {
-        self.matches_exact_domain(normalized_domain)
-            && self.matches_domain_suffix(normalized_domain)
-            && self.matches_ip_cidr(input.host())
-            && self.matches_ip_is_private(input.host())
-            && self.matches_ip_is_loopback(input.host())
-            && self.matches_ip_is_link_local(input.host())
-            && self.matches_port(input.destination.port)
-            && self.matches_inbound(input.inbound_tag)
+    fn action_kind(&self) -> &'static str {
+        self.action.kind()
     }
 
-    fn matches_exact_domain(&self, normalized_domain: Option<&str>) -> bool {
+    fn evaluate(
+        &self,
+        input: RouteInput<'_>,
+        normalized_domain: Option<&str>,
+    ) -> Result<(), RouteRuleMissReason> {
+        self.matches_exact_domain(normalized_domain)?;
+        self.matches_domain_suffix(normalized_domain)?;
+        self.matches_ip_cidr(input.host())?;
+        self.matches_ip_is_private(input.host())?;
+        self.matches_ip_is_loopback(input.host())?;
+        self.matches_ip_is_link_local(input.host())?;
+        self.matches_port(input.destination.port)?;
+        self.matches_inbound(input.inbound_tag)?;
+        Ok(())
+    }
+
+    fn matches_exact_domain(&self, normalized_domain: Option<&str>) -> Result<(), RouteRuleMissReason> {
         if self.domain.is_empty() {
-            return true;
+            return Ok(());
         }
 
-        normalized_domain
-            .map(|domain| self.domain.iter().any(|candidate| candidate == domain))
-            .unwrap_or(false)
+        match normalized_domain {
+            Some(domain) if self.domain.iter().any(|candidate| candidate == domain) => Ok(()),
+            Some(_) => Err(RouteRuleMissReason::DomainMismatch),
+            None => Err(RouteRuleMissReason::DomainAbsent),
+        }
     }
 
-    fn matches_domain_suffix(&self, normalized_domain: Option<&str>) -> bool {
+    fn matches_domain_suffix(
+        &self,
+        normalized_domain: Option<&str>,
+    ) -> Result<(), RouteRuleMissReason> {
         if self.domain_suffix.is_empty() {
-            return true;
+            return Ok(());
         }
 
-        normalized_domain
-            .map(|domain| {
-                self.domain_suffix
+        match normalized_domain {
+            Some(domain)
+                if self
+                    .domain_suffix
                     .iter()
-                    .any(|suffix| matches_domain_suffix(domain, suffix))
-            })
-            .unwrap_or(false)
+                    .any(|suffix| matches_domain_suffix(domain, suffix)) =>
+            {
+                Ok(())
+            }
+            Some(_) => Err(RouteRuleMissReason::DomainSuffixMismatch),
+            None => Err(RouteRuleMissReason::DomainAbsent),
+        }
     }
 
-    fn matches_ip_cidr(&self, host: &Host) -> bool {
+    fn matches_ip_cidr(&self, host: &Host) -> Result<(), RouteRuleMissReason> {
         if self.ip_cidr.is_empty() {
-            return true;
+            return Ok(());
         }
 
         match host {
-            Host::Ip(ip) => self.ip_cidr.iter().any(|cidr| cidr.contains(ip)),
-            Host::Domain(_) => false,
+            Host::Ip(ip) if self.ip_cidr.iter().any(|cidr| cidr.contains(ip)) => Ok(()),
+            Host::Ip(_) => Err(RouteRuleMissReason::IpCidrMismatch),
+            Host::Domain(_) => Err(RouteRuleMissReason::DestinationNotIp),
         }
     }
 
-    fn matches_ip_is_private(&self, host: &Host) -> bool {
-        !self.ip_is_private || is_private_or_unique_local(host)
+    fn matches_ip_is_private(&self, host: &Host) -> Result<(), RouteRuleMissReason> {
+        if !self.ip_is_private {
+            return Ok(());
+        }
+
+        match host {
+            Host::Ip(_) if is_private_or_unique_local(host) => Ok(()),
+            Host::Ip(_) => Err(RouteRuleMissReason::IpNotPrivate),
+            Host::Domain(_) => Err(RouteRuleMissReason::DestinationNotIp),
+        }
     }
 
-    fn matches_ip_is_loopback(&self, host: &Host) -> bool {
-        !self.ip_is_loopback || is_loopback(host)
+    fn matches_ip_is_loopback(&self, host: &Host) -> Result<(), RouteRuleMissReason> {
+        if !self.ip_is_loopback {
+            return Ok(());
+        }
+
+        match host {
+            Host::Ip(_) if is_loopback(host) => Ok(()),
+            Host::Ip(_) => Err(RouteRuleMissReason::IpNotLoopback),
+            Host::Domain(_) => Err(RouteRuleMissReason::DestinationNotIp),
+        }
     }
 
-    fn matches_ip_is_link_local(&self, host: &Host) -> bool {
-        !self.ip_is_link_local || is_link_local(host)
+    fn matches_ip_is_link_local(&self, host: &Host) -> Result<(), RouteRuleMissReason> {
+        if !self.ip_is_link_local {
+            return Ok(());
+        }
+
+        match host {
+            Host::Ip(_) if is_link_local(host) => Ok(()),
+            Host::Ip(_) => Err(RouteRuleMissReason::IpNotLinkLocal),
+            Host::Domain(_) => Err(RouteRuleMissReason::DestinationNotIp),
+        }
     }
 
-    fn matches_port(&self, port: u16) -> bool {
-        self.port.is_empty() || self.port.contains(&port)
+    fn matches_port(&self, port: u16) -> Result<(), RouteRuleMissReason> {
+        if self.port.is_empty() || self.port.contains(&port) {
+            Ok(())
+        } else {
+            Err(RouteRuleMissReason::PortMismatch)
+        }
     }
 
-    fn matches_inbound(&self, inbound_tag: Option<&str>) -> bool {
+    fn matches_inbound(&self, inbound_tag: Option<&str>) -> Result<(), RouteRuleMissReason> {
         if self.inbound.is_empty() {
-            return true;
+            return Ok(());
         }
 
-        inbound_tag
-            .map(|tag| self.inbound.iter().any(|candidate| candidate == tag))
-            .unwrap_or(false)
+        match inbound_tag {
+            Some(tag) if self.inbound.iter().any(|candidate| candidate == tag) => Ok(()),
+            _ => Err(RouteRuleMissReason::InboundMismatch),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RouteRuleMissReason {
+    DomainAbsent,
+    DomainMismatch,
+    DomainSuffixMismatch,
+    DestinationNotIp,
+    IpCidrMismatch,
+    IpNotPrivate,
+    IpNotLoopback,
+    IpNotLinkLocal,
+    PortMismatch,
+    InboundMismatch,
+}
+
+impl RouteRuleMissReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::DomainAbsent => "domain_absent",
+            Self::DomainMismatch => "domain_mismatch",
+            Self::DomainSuffixMismatch => "domain_suffix_mismatch",
+            Self::DestinationNotIp => "destination_not_ip",
+            Self::IpCidrMismatch => "ip_cidr_mismatch",
+            Self::IpNotPrivate => "ip_not_private",
+            Self::IpNotLoopback => "ip_not_loopback",
+            Self::IpNotLinkLocal => "ip_not_link_local",
+            Self::PortMismatch => "port_mismatch",
+            Self::InboundMismatch => "inbound_mismatch",
+        }
     }
 }
 
@@ -286,7 +366,8 @@ impl Router {
     }
 
     pub fn with_rule(mut self, rule: RouteRule) -> Self {
-        self.rules.push(rule.into());
+        let rule_index = self.rules.len();
+        self.rules.push(CompiledRouteRule::compile(rule, rule_index));
         self
     }
 
@@ -294,8 +375,13 @@ impl Router {
     where
         I: IntoIterator<Item = RouteRule>,
     {
-        self.rules
-            .extend(rules.into_iter().map(CompiledRouteRule::from));
+        let start_index = self.rules.len();
+        self.rules.extend(
+            rules
+                .into_iter()
+                .enumerate()
+                .map(|(offset, rule)| CompiledRouteRule::compile(rule, start_index + offset)),
+        );
         self
     }
 
@@ -307,7 +393,7 @@ impl Router {
         let normalized_domain = input.domain.map(normalize_domain_str);
 
         for rule in &self.rules {
-            if !rule.matches(input, normalized_domain.as_deref()) {
+            if rule.evaluate(input, normalized_domain.as_deref()).is_err() {
                 continue;
             }
 
@@ -335,32 +421,47 @@ impl Router {
         for rule in &self.rules {
             let input = RouteInput::new(destination, inbound_tag, domain.as_deref());
             let normalized_domain = input.domain.map(normalize_domain_str);
-            if !rule.matches(input, normalized_domain.as_deref()) {
-                continue;
-            }
+            log_route_rule_eval(ctx, rule, input.domain);
 
-            match &rule.action {
-                RouteAction::Upgrade(RouteUpgradeAction::Sniff(action)) => {
-                    log_sniff_start(ctx, action.timeout);
-                    let sniff = sniff_stream_internal(stream, action.timeout).await;
-                    log_sniff_result(ctx, action.timeout, &sniff);
-                    if let Some(sniffed_domain) = sniff.outcome.domain.clone() {
-                        domain = Some(sniffed_domain);
+            let evaluation = rule.evaluate(input, normalized_domain.as_deref());
+            let Err(reason) = evaluation else {
+                log_route_rule_match(ctx, rule, input.domain);
+
+                match &rule.action {
+                    RouteAction::Upgrade(RouteUpgradeAction::Sniff(action)) => {
+                        let domain_before = domain.clone();
+                        log_sniff_start(ctx, action.timeout);
+                        let sniff = sniff_stream_internal(stream, action.timeout).await;
+                        log_sniff_result(ctx, action.timeout, &sniff);
+                        if let Some(sniffed_domain) = sniff.outcome.domain.clone() {
+                            domain = Some(sniffed_domain);
+                        }
+                        log_route_upgrade_applied(
+                            ctx,
+                            rule,
+                            domain_before.as_deref(),
+                            domain.as_deref(),
+                        );
+                        stream = Box::new(sniff.outcome.stream);
                     }
-                    stream = Box::new(sniff.outcome.stream);
+                    RouteAction::Final(action) => {
+                        let decision = self.final_action_decision(action, RouteReason::Rule);
+                        log_route_final_selected(ctx, rule, input.domain, &decision.outbound_tag);
+                        return RouteExecution { stream, decision };
+                    }
                 }
-                RouteAction::Final(action) => {
-                    return RouteExecution {
-                        stream,
-                        decision: self.final_action_decision(action, RouteReason::Rule),
-                    };
-                }
-            }
+
+                continue;
+            };
+
+            log_route_rule_miss(ctx, rule, input.domain, reason);
         }
 
+        let decision = self.default_final_decision();
+        log_route_default_final_selected(ctx, domain.as_deref(), &decision.outbound_tag);
         RouteExecution {
             stream,
-            decision: self.default_final_decision(),
+            decision,
         }
     }
 
@@ -369,20 +470,177 @@ impl Router {
         action: &RouteFinalAction,
         reason: RouteReason,
     ) -> RouteDecision {
-        match action {
-            RouteFinalAction::Route(target) => RouteDecision {
-                outbound_tag: target.outbound_tag.clone(),
-                reason,
-            },
-            RouteFinalAction::HijackDns | RouteFinalAction::Reject => {
-                panic!("final action is not connected to dispatcher yet: {action:?}");
-            }
+        let RouteFinalAction::Route(target) = action;
+        RouteDecision {
+            outbound_tag: target.outbound_tag.clone(),
+            reason,
         }
     }
 
     fn default_final_decision(&self) -> RouteDecision {
         self.final_action_decision(&self.default_final_action, RouteReason::Final)
     }
+}
+
+impl RouteAction {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Upgrade(RouteUpgradeAction::Sniff(_)) => "sniff",
+            Self::Final(RouteFinalAction::Route(_)) => "route",
+        }
+    }
+}
+
+fn build_matcher_summary(rule: &RouteRule) -> String {
+    let mut matchers = Vec::new();
+
+    if !rule.domain.is_empty() {
+        matchers.push("domain");
+    }
+    if !rule.domain_suffix.is_empty() {
+        matchers.push("domain_suffix");
+    }
+    if !rule.ip_cidr.is_empty() {
+        matchers.push("ip_cidr");
+    }
+    if rule.ip_is_private {
+        matchers.push("ip_is_private");
+    }
+    if rule.ip_is_loopback {
+        matchers.push("ip_is_loopback");
+    }
+    if rule.ip_is_link_local {
+        matchers.push("ip_is_link_local");
+    }
+    if !rule.port.is_empty() {
+        matchers.push("port");
+    }
+    if !rule.inbound.is_empty() {
+        matchers.push("inbound");
+    }
+
+    if matchers.is_empty() {
+        "none".to_string()
+    } else {
+        matchers.join(",")
+    }
+}
+
+fn sanitize_optional_domain(domain: Option<&str>) -> String {
+    domain
+        .map(|value| sanitize_field(value).into_owned())
+        .unwrap_or_else(|| "<none>".to_string())
+}
+
+fn log_route_rule_eval(ctx: &SessionContext, rule: &CompiledRouteRule, domain_before: Option<&str>) {
+    let matcher_summary = sanitize_field(rule.matcher_summary.as_str()).into_owned();
+    let domain_before = sanitize_optional_domain(domain_before);
+    debug!(
+        event = "route_rule_eval",
+        session_id = ctx.meta.id,
+        rule_index = rule.rule_index as u64,
+        action_kind = rule.action_kind(),
+        matcher_summary = %matcher_summary,
+        domain_before = %domain_before,
+        "route rule evaluated"
+    );
+}
+
+fn log_route_rule_match(
+    ctx: &SessionContext,
+    rule: &CompiledRouteRule,
+    domain_before: Option<&str>,
+) {
+    let matcher_summary = sanitize_field(rule.matcher_summary.as_str()).into_owned();
+    let domain_before = sanitize_optional_domain(domain_before);
+    debug!(
+        event = "route_rule_match",
+        session_id = ctx.meta.id,
+        rule_index = rule.rule_index as u64,
+        action_kind = rule.action_kind(),
+        matcher_summary = %matcher_summary,
+        domain_before = %domain_before,
+        "route rule matched"
+    );
+}
+
+fn log_route_rule_miss(
+    ctx: &SessionContext,
+    rule: &CompiledRouteRule,
+    domain_before: Option<&str>,
+    reason: RouteRuleMissReason,
+) {
+    let matcher_summary = sanitize_field(rule.matcher_summary.as_str()).into_owned();
+    let domain_before = sanitize_optional_domain(domain_before);
+    debug!(
+        event = "route_rule_miss",
+        session_id = ctx.meta.id,
+        rule_index = rule.rule_index as u64,
+        action_kind = rule.action_kind(),
+        matcher_summary = %matcher_summary,
+        miss_reason = reason.as_str(),
+        domain_before = %domain_before,
+        "route rule missed"
+    );
+}
+
+fn log_route_upgrade_applied(
+    ctx: &SessionContext,
+    rule: &CompiledRouteRule,
+    domain_before: Option<&str>,
+    domain_after: Option<&str>,
+) {
+    let matcher_summary = sanitize_field(rule.matcher_summary.as_str()).into_owned();
+    let domain_before = sanitize_optional_domain(domain_before);
+    let domain_after = sanitize_optional_domain(domain_after);
+    debug!(
+        event = "route_upgrade_applied",
+        session_id = ctx.meta.id,
+        rule_index = rule.rule_index as u64,
+        action_kind = rule.action_kind(),
+        matcher_summary = %matcher_summary,
+        domain_before = %domain_before,
+        domain_after = %domain_after,
+        "route upgrade applied"
+    );
+}
+
+fn log_route_final_selected(
+    ctx: &SessionContext,
+    rule: &CompiledRouteRule,
+    domain_before: Option<&str>,
+    outbound_tag: &str,
+) {
+    let matcher_summary = sanitize_field(rule.matcher_summary.as_str()).into_owned();
+    let domain_before = sanitize_optional_domain(domain_before);
+    let outbound = sanitize_field(outbound_tag).into_owned();
+    debug!(
+        event = "route_final_selected",
+        session_id = ctx.meta.id,
+        rule_index = rule.rule_index as u64,
+        action_kind = rule.action_kind(),
+        matcher_summary = %matcher_summary,
+        domain_before = %domain_before,
+        outbound = %outbound,
+        "route final action selected"
+    );
+}
+
+fn log_route_default_final_selected(
+    ctx: &SessionContext,
+    domain_before: Option<&str>,
+    outbound_tag: &str,
+) {
+    let domain_before = sanitize_optional_domain(domain_before);
+    let outbound = sanitize_field(outbound_tag).into_owned();
+    debug!(
+        event = "route_default_final_selected",
+        session_id = ctx.meta.id,
+        action_kind = "route",
+        domain_before = %domain_before,
+        outbound = %outbound,
+        "route default final action selected"
+    );
 }
 
 fn log_sniff_start(ctx: &SessionContext, timeout: Duration) {
@@ -1086,6 +1344,154 @@ mod tests {
                 ("inbound_tag", "tproxy-in"),
                 ("result", "error"),
                 ("level", "WARN"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn route_explainability_traces_rule_miss_and_final_selection() {
+        let (_guard, events) = install_test_subscriber();
+        let router = Router::with_default_outbound("final").with_rules([
+            RouteRule {
+                domain_suffix: vec!["google.com".into()],
+                ..RouteRule::new("proxy")
+            },
+            RouteRule {
+                port: vec![443],
+                ..RouteRule::new("late")
+            },
+        ]);
+        let destination = Destination::from_ip("198.51.100.10".parse().unwrap(), 443);
+        let mut ctx = SessionContext::new(
+            SessionMeta {
+                id: 13,
+                network: Network::Tcp,
+                inbound_tag: "tproxy-in".into(),
+                peer: SocketAddr::from(([127, 0, 0, 1], 40000)),
+                destination,
+                start: Instant::now(),
+            },
+            Vec::new(),
+        );
+
+        let execution = router.execute(Box::new(PendingStream), &mut ctx).await;
+        assert_eq!(execution.decision.outbound_tag, "late");
+
+        let events = captured_events(&events);
+        assert_has_event(
+            &events,
+            "route_rule_eval",
+            &[
+                ("session_id", "13"),
+                ("rule_index", "0"),
+                ("action_kind", "route"),
+                ("matcher_summary", "domain_suffix"),
+                ("domain_before", "<none>"),
+                ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "route_rule_miss",
+            &[
+                ("session_id", "13"),
+                ("rule_index", "0"),
+                ("miss_reason", "domain_absent"),
+                ("domain_before", "<none>"),
+                ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "route_rule_match",
+            &[
+                ("session_id", "13"),
+                ("rule_index", "1"),
+                ("action_kind", "route"),
+                ("matcher_summary", "port"),
+                ("domain_before", "<none>"),
+                ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "route_final_selected",
+            &[
+                ("session_id", "13"),
+                ("rule_index", "1"),
+                ("action_kind", "route"),
+                ("outbound", "late"),
+                ("level", "DEBUG"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn route_explainability_traces_sniff_upgrade_and_default_final() {
+        let (_guard, events) = install_test_subscriber();
+        let router = Router::with_default_outbound("final").with_rule(RouteRule {
+            inbound: vec!["tproxy-in".into()],
+            ..RouteRule::sniff(Duration::from_millis(300))
+        });
+        let destination = Destination::from_ip("198.51.100.10".parse().unwrap(), 443);
+        let mut ctx = SessionContext::new(
+            SessionMeta {
+                id: 14,
+                network: Network::Tcp,
+                inbound_tag: "tproxy-in".into(),
+                peer: SocketAddr::from(([127, 0, 0, 1], 40000)),
+                destination,
+                start: Instant::now(),
+            },
+            Vec::new(),
+        );
+
+        let execution = router
+            .execute(
+                Box::new(ScriptedStream::new([
+                    ReadStep::Data(tls_client_hello_with_sni("www.google.com")),
+                    ReadStep::Eof,
+                ])),
+                &mut ctx,
+            )
+            .await;
+        assert_eq!(execution.decision.outbound_tag, "final");
+        assert_eq!(execution.decision.reason, RouteReason::Final);
+
+        let events = captured_events(&events);
+        assert_has_event(
+            &events,
+            "route_rule_match",
+            &[
+                ("session_id", "14"),
+                ("rule_index", "0"),
+                ("action_kind", "sniff"),
+                ("matcher_summary", "inbound"),
+                ("domain_before", "<none>"),
+                ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "route_upgrade_applied",
+            &[
+                ("session_id", "14"),
+                ("rule_index", "0"),
+                ("action_kind", "sniff"),
+                ("domain_before", "<none>"),
+                ("domain_after", "www.google.com"),
+                ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "route_default_final_selected",
+            &[
+                ("session_id", "14"),
+                ("action_kind", "route"),
+                ("domain_before", "www.google.com"),
+                ("outbound", "final"),
+                ("level", "DEBUG"),
             ],
         );
     }

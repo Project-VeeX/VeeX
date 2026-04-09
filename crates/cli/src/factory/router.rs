@@ -42,12 +42,6 @@ fn route_action(action: &RouteActionConfig) -> RouteAction {
         RouteActionConfig::Final(RouteFinalActionConfig::Route(target)) => RouteAction::Final(
             RouteFinalAction::Route(RouteTarget::new(target.outbound.clone())),
         ),
-        RouteActionConfig::Final(RouteFinalActionConfig::HijackDns) => {
-            RouteAction::Final(RouteFinalAction::HijackDns)
-        }
-        RouteActionConfig::Final(RouteFinalActionConfig::Reject) => {
-            RouteAction::Final(RouteFinalAction::Reject)
-        }
     }
 }
 

@@ -69,6 +69,12 @@ Representative event names include:
 
 - `session_start`
 - `route_select`
+- `route_rule_eval`
+- `route_rule_match`
+- `route_rule_miss`
+- `route_upgrade_applied`
+- `route_final_selected`
+- `route_default_final_selected`
 - `tcp_connect_attempt`
 - `tcp_connect_success`
 - `tcp_connect_failed`
@@ -99,6 +105,15 @@ Operators and integrators should expect the core event model to preserve stable 
 - `duration_ms`
 - `bytes_up`
 - `bytes_down`
+
+For route-rule explainability, debug-level routing events also preserve fields such as:
+
+- `rule_index`
+- `action_kind`
+- `matcher_summary`
+- `miss_reason`
+- `domain_before`
+- `domain_after`
 
 Two important interpretation rules:
 

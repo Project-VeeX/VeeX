@@ -102,6 +102,7 @@ This model has two public consequences:
 - final actions terminate routing and select the outbound path
 
 `route.final` remains the default decision when no rule returns a final result.
+In the current accepted configuration subset, `outbound` selection is the only supported final routing action, and `action="sniff"` is the only supported upgrade action.
 
 Private, loopback, and link-local direct handling belongs in ordinary `route.rules`, not in a hidden bypass subsystem.
 

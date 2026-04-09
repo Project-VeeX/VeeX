@@ -134,8 +134,6 @@ pub struct SniffActionConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RouteFinalActionConfig {
     Route(RouteTargetConfig),
-    HijackDns,
-    Reject,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
