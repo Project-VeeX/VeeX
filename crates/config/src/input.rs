@@ -129,8 +129,6 @@ pub struct InputRouteConfig {
     #[serde(rename = "final")]
     pub final_outbound: String,
     #[serde(default)]
-    pub bypass: Option<Vec<String>>,
-    #[serde(default)]
     pub rules: Option<Vec<InputRouteRule>>,
 }
 
@@ -142,6 +140,12 @@ pub struct InputRouteRule {
     pub domain_suffix: Option<Vec<String>>,
     #[serde(default)]
     pub ip_cidr: Option<Vec<String>>,
+    #[serde(default)]
+    pub ip_is_private: bool,
+    #[serde(default)]
+    pub ip_is_loopback: bool,
+    #[serde(default)]
+    pub ip_is_link_local: bool,
     #[serde(default)]
     pub port: Option<Vec<u16>>,
     #[serde(default)]

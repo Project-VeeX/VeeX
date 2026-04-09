@@ -83,7 +83,6 @@ mod tests {
             })],
             route: RouteConfig {
                 final_outbound: "direct".into(),
-                bypass: vec![],
                 rules: vec![],
             },
         };

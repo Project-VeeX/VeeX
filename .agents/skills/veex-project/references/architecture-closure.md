@@ -22,10 +22,10 @@ Keep these rules:
 
 - no I/O in the router
 - no DNS resolution during router construction
-- keep bypass semantics explicit and conservative
+- keep recursion-prevention direct-routing rules explicit and conservative
 - when host classification matters, do not blur domains and IPs into one vague conceptual bucket
 
-Current router decision pipeline: built-in bypass → configured bypass → route.rules → final fallback. This order is stable.
+Current router decision pipeline: ordered `route.rules` actions → default final action.
 
 ## Transport Direction
 
@@ -94,7 +94,7 @@ This separation is intentional. Do not collapse `preflight` and `serde` back int
 These are explicitly out of scope and should not be quietly introduced:
 
 - no inbound common harness abstraction
-- no `route.bypass` semantic expansion (CIDR, suffix, wildcard)
+- no kernel-level bypass action semantics
 - no DNS / UDP / TUN / sniff / fake-ip work
 - no Happy Eyeballs or parallel dialing
 - no TLS config cache or reuse layer

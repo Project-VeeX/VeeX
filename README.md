@@ -6,7 +6,7 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments. It pr
 
 - inbound: `socks`, `redirect`, `tproxy` (TCP only)
 - outbound: `trojan`, `direct`
-- route: `final`, basic `bypass`, minimal first-match `rules`
+- route: ordered `route.rules` pipeline and default `route.final`
 - connect: sequential multi-address fallback, no Happy Eyeballs
 - interface: `veex run`, `veex check`, `veex version`
 - config: minimal sing-box-compatible JSON subset

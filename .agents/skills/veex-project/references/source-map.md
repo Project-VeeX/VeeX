@@ -7,7 +7,7 @@ When a new agent or you are unfamiliar with the current project state, read thes
 1. **`references/project-positioning.md`** — What VeeX is, what it is not, the one-line definition, supported surface, and explicit non-goals. Start here before touching any code.
 2. **`references/phase-map.md`** — What each phase (1 through 4) delivered and which conclusions still carry forward. Gives historical context for why the architecture looks the way it does.
 3. **`references/repo-map.md`** — The workspace crates, who owns what, and where new changes should land. Read before opening any crate code.
-4. **`references/config-contract.md`** — The exact accepted config surface, bypass semantics, and which fields are tolerated-but-unimplemented. Required reading before any config-related work.
+4. **`references/config-contract.md`** — The exact accepted config surface, route semantics, and which fields are tolerated-but-unimplemented. Required reading before any config-related work.
 5. **`references/architecture-closure.md`** — Internal boundary decisions that are closed and should not be reopened. Read before refactoring or expanding any core abstraction.
 6. **`references/task-derived-gotchas.md`** — Real failure modes already encountered. High-value reading before touching transparent proxy, routing_mark, or dual-stack paths.
 

@@ -253,7 +253,6 @@ fn input_trojan_tls_into_config(input_config: InputTrojanTlsConfig) -> TrojanTls
 fn input_route_into_config(input_config: InputRouteConfig) -> Result<RouteConfig, ConfigError> {
     Ok(RouteConfig {
         final_outbound: input_config.final_outbound,
-        bypass: input_config.bypass.unwrap_or_default(),
         rules: input_config
             .rules
             .unwrap_or_default()
@@ -284,6 +283,9 @@ fn input_route_rule_into_config(
             input_rule.ip_cidr,
             format!("$.route.rules[{index}].ip_cidr"),
         )?,
+        ip_is_private: input_rule.ip_is_private,
+        ip_is_loopback: input_rule.ip_is_loopback,
+        ip_is_link_local: input_rule.ip_is_link_local,
         port: parse_port_matchers(input_rule.port, format!("$.route.rules[{index}].port"))?,
         inbound: parse_string_matchers(
             input_rule.inbound,
@@ -443,6 +445,11 @@ fn classify_ignored_path(input_config: &InputConfig, path: &str) -> IgnoredDispo
     }
 
     match path {
+        _ if path == "$.route.bypass" || path.starts_with("$.route.bypass[") => {
+            IgnoredDisposition::Error(
+                "route.bypass has been removed; use route.rules with outbound='direct' instead",
+            )
+        }
         "$.dns" | "$.domain_resolver" => IgnoredDisposition::Warn(
             "field is accepted for compatibility but ignored by the current config surface",
         ),
@@ -533,8 +540,10 @@ fn classify_route_rule_ignored(path: &str) -> IgnoredDisposition {
     };
 
     match first_segment(field) {
-        "domain" | "domain_suffix" | "ip_cidr" | "port" | "inbound" | "outbound" | "action"
-        | "timeout" => IgnoredDisposition::Ignore,
+        "domain" | "domain_suffix" | "ip_cidr" | "ip_is_private" | "ip_is_loopback"
+        | "ip_is_link_local" | "port" | "inbound" | "outbound" | "action" | "timeout" => {
+            IgnoredDisposition::Ignore
+        }
         _ => IgnoredDisposition::Error(
             "route rule field is not supported by the current route.rules subset",
         ),
@@ -791,7 +800,6 @@ mod tests {
 
         let config = parse_config(input).expect("config should parse");
         assert_eq!(config.route.final_outbound, "proxy");
-        assert!(config.route.bypass.is_empty());
         assert_eq!(config.inbounds.len(), 1);
         assert_eq!(config.outbounds.len(), 2);
     }
@@ -823,8 +831,7 @@ mod tests {
             }
           ],
           "route": {
-            "final": "proxy",
-            "bypass": ["trojan.example.com", "192.168.0.1"]
+            "final": "proxy"
           }
         }
         "#;
@@ -833,10 +840,6 @@ mod tests {
         assert_eq!(config.inbounds.len(), 3);
         assert_eq!(config.outbounds.len(), 2);
         assert_eq!(config.route.final_outbound, "proxy");
-        assert_eq!(
-            config.route.bypass,
-            vec!["trojan.example.com".to_string(), "192.168.0.1".to_string()]
-        );
     }
 
     #[test]
@@ -905,6 +908,50 @@ mod tests {
             config.route.rules[0].action,
             RouteActionConfig::Final(RouteFinalActionConfig::Route(_))
         ));
+    }
+
+    #[test]
+    fn parses_private_and_local_ip_route_matchers() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            {
+              "type": "trojan",
+              "tag": "proxy",
+              "server": "example.com",
+              "server_port": 443,
+              "password": "secret",
+              "tls": { "server_name": "example.com" }
+            }
+          ],
+          "route": {
+            "final": "proxy",
+            "rules": [
+              {
+                "ip_is_private": true,
+                "outbound": "direct"
+              },
+              {
+                "ip_is_loopback": true,
+                "outbound": "direct"
+              },
+              {
+                "ip_is_link_local": true,
+                "outbound": "direct"
+              }
+            ]
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("private/local ip matchers should parse");
+        assert!(config.route.rules[0].ip_is_private);
+        assert!(config.route.rules[1].ip_is_loopback);
+        assert!(config.route.rules[2].ip_is_link_local);
     }
 
     #[test]
@@ -1782,7 +1829,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_route_bypass_as_string_list() {
+    fn rejects_removed_route_bypass_field() {
         let input = r#"
         {
           "inbounds": [
@@ -1798,76 +1845,9 @@ mod tests {
         }
         "#;
 
-        let config = parse_config(input).expect("route bypass should parse");
-        assert_eq!(
-            config.route.bypass,
-            vec![" trojan.example.com ".to_string(), "192.0.2.10".to_string()]
-        );
-    }
-
-    #[test]
-    fn rejects_route_bypass_with_non_string_items() {
-        let input = r#"
-        {
-          "inbounds": [
-            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
-          ],
-          "outbounds": [
-            { "type": "direct", "tag": "direct" }
-          ],
-          "route": {
-            "final": "direct",
-            "bypass": ["example.com", 1]
-          }
-        }
-        "#;
-
-        let err = parse_config(input).expect_err("non-string bypass item should fail");
-        assert!(err.to_string().contains("$.route.bypass[1]"));
-    }
-
-    #[test]
-    fn rejects_route_bypass_wildcard_patterns() {
-        let input = r#"
-        {
-          "inbounds": [
-            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
-          ],
-          "outbounds": [
-            { "type": "direct", "tag": "direct" }
-          ],
-          "route": {
-            "final": "direct",
-            "bypass": ["*.example.com"]
-          }
-        }
-        "#;
-
-        let err = parse_config(input).expect_err("wildcard bypass should fail");
-        assert!(err.to_string().contains("$.route.bypass[0]"));
-        assert!(err.to_string().contains("unsupported bypass pattern"));
-    }
-
-    #[test]
-    fn rejects_route_bypass_suffix_patterns() {
-        let input = r#"
-        {
-          "inbounds": [
-            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
-          ],
-          "outbounds": [
-            { "type": "direct", "tag": "direct" }
-          ],
-          "route": {
-            "final": "direct",
-            "bypass": [".example.com"]
-          }
-        }
-        "#;
-
-        let err = parse_config(input).expect_err("suffix bypass should fail");
-        assert!(err.to_string().contains("$.route.bypass[0]"));
-        assert!(err.to_string().contains("unsupported bypass pattern"));
+        let err = parse_config(input).expect_err("route bypass should be rejected");
+        assert!(err.to_string().contains("$.route.bypass"));
+        assert!(err.to_string().contains("route.bypass has been removed"));
     }
 
     #[test]
@@ -1904,20 +1884,22 @@ mod tests {
 
         assert_eq!(report.config.route.final_outbound, "proxy");
         assert!(report.config.log.timestamp);
+        assert_eq!(report.config.route.rules.len(), 6);
+        assert!(report.config.route.rules[0].ip_is_loopback);
+        assert!(report.config.route.rules[1].ip_is_private);
+        assert!(report.config.route.rules[2].ip_is_link_local);
         assert_eq!(
-            report.config.route.bypass,
-            vec!["trojan.example.com".to_string(), "192.168.0.1".to_string()]
+            report.config.route.rules[3].inbound,
+            vec!["tproxy-in".to_string()]
         );
-        assert_eq!(report.config.route.rules.len(), 2);
-        assert_eq!(report.config.route.rules[0].inbound, vec!["tproxy-in".to_string()]);
         assert!(matches!(
-            &report.config.route.rules[0].action,
+            &report.config.route.rules[3].action,
             RouteActionConfig::Upgrade(RouteUpgradeActionConfig::Sniff(SniffActionConfig {
                 timeout
             })) if *timeout == DEFAULT_SNIFF_TIMEOUT
         ));
         assert_eq!(
-            report.config.route.rules[1].domain_suffix,
+            report.config.route.rules[5].domain_suffix,
             vec!["lan".to_string()]
         );
         assert!(warning_paths.contains(&"$.dns"));

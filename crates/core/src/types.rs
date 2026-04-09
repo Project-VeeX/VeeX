@@ -105,29 +105,17 @@ impl fmt::Display for Destination {
 /// a session was routed to a specific outbound.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouteReason {
-    /// Routed to the configured final outbound.
-    Final,
     /// Routed by the user-defined route.rules chain.
     Rule,
-    /// Bypassed proxy (sent direct) because destination is loopback.
-    BypassLoopback,
-    /// Bypassed proxy (sent direct) because destination is a private IP.
-    BypassPrivate,
-    /// Bypassed proxy (sent direct) because destination is a link-local IP.
-    BypassLinkLocal,
-    /// Bypassed proxy (sent direct) because destination matches a configured bypass rule.
-    BypassConfigured,
+    /// Routed by the default final action after no rule produced a final action.
+    Final,
 }
 
 impl RouteReason {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Final => "final",
             Self::Rule => "rule",
-            Self::BypassLoopback => "loopback",
-            Self::BypassPrivate => "private",
-            Self::BypassLinkLocal => "link_local",
-            Self::BypassConfigured => "configured",
+            Self::Final => "final",
         }
     }
 }

@@ -76,7 +76,6 @@ async fn runtime_supports_socks_to_direct_round_trip() {
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
-            bypass: vec![],
             rules: vec![],
         },
     };
@@ -146,7 +145,6 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
         ],
         route: RouteConfig {
             final_outbound: "proxy".into(),
-            bypass: vec![],
             rules: vec![],
         },
     };
@@ -300,11 +298,13 @@ async fn runtime_supports_socks_domain_route_rule_to_trojan() {
         ],
         route: RouteConfig {
             final_outbound: "direct".into(),
-            bypass: vec![],
             rules: vec![RouteRuleConfig {
                 domain: vec!["rule-test.invalid".into()],
                 domain_suffix: vec![],
                 ip_cidr: vec![],
+                ip_is_private: false,
+                ip_is_loopback: false,
+                ip_is_link_local: false,
                 port: vec![],
                 inbound: vec![],
                 action: RouteActionConfig::Final(RouteFinalActionConfig::Route(
@@ -392,7 +392,6 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
         ],
         route: RouteConfig {
             final_outbound: "proxy".into(),
-            bypass: vec![],
             rules: vec![],
         },
     };
@@ -495,7 +494,6 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
-            bypass: vec![],
             rules: vec![],
         },
     };
@@ -607,7 +605,6 @@ async fn runtime_starts_with_redirect_inbound() {
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
-            bypass: vec![],
             rules: vec![],
         },
     };
@@ -669,7 +666,6 @@ async fn runtime_reports_listener_bind_failure_with_io_error_kind() {
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
-            bypass: vec![],
             rules: vec![],
         },
     };
@@ -744,7 +740,6 @@ async fn runtime_emits_session_start_and_finish_events() {
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
-            bypass: vec![],
             rules: vec![],
         },
     };
@@ -864,7 +859,6 @@ async fn invalid_socks_request_emits_handshake_failed_event() {
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
-            bypass: vec![],
             rules: vec![],
         },
     };

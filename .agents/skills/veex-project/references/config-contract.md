@@ -26,33 +26,7 @@ Current supported configuration surface:
   - `routing_mark`
 - route fields:
   - `final`
-  - `bypass`
   - `rules`
-
-## `route.bypass` Semantics
-
-`route.bypass` currently supports:
-
-- exact domain matches
-- exact IP matches
-
-It does not currently support:
-
-- CIDR ranges
-- domain suffix matching
-- wildcard matching
-- a rule execution engine
-
-Patterns such as `*.example.com` and `.example.com` are rejected as unsupported bypass patterns.
-
-The router applies built-in bypass before configured bypass:
-
-- loopback
-- private
-- link-local
-- configured bypass
-- route.rules
-- final outbound
 
 ## `route.rules` Semantics
 
@@ -61,6 +35,9 @@ The router applies built-in bypass before configured bypass:
 - `domain` — exact domain match
 - `domain_suffix` — apex or subdomain suffix match
 - `ip_cidr` — IP destination match
+- `ip_is_private` — private IPv4 or unique-local IPv6 destination
+- `ip_is_loopback` — loopback destination
+- `ip_is_link_local` — link-local destination
 - `port` — exact destination port
 - `inbound` — exact inbound tag
 
@@ -70,7 +47,18 @@ Current rule execution contract:
 - rules are evaluated in declaration order
 - first match wins
 - within one rule, all populated matcher fields must match
-- the router may be rerun later with a domain populated by future sniffing work, but sniff is not implemented in the current product
+- `route.final` is lowered into the router's default final action
+- rules that depend on sniffed domains must appear after the `action="sniff"` rule that enriches routing context
+
+## Removed Compatibility Field
+
+`route.bypass` is no longer accepted.
+
+Migration direction:
+
+- convert exact domain direct exceptions into `route.rules` with `domain` + `outbound: "direct"`
+- convert exact IP direct exceptions into `route.rules` with `ip_cidr` + `outbound: "direct"`
+- convert private/local recursion-prevention intent into `ip_is_private`, `ip_is_loopback`, or `ip_is_link_local` route rules
 
 ## Known Ignored Fields
 

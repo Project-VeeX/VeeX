@@ -26,8 +26,7 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
   - sequential multi-address connect fallback
 - Route:
   - `final`
-  - `bypass`, currently basic exact-match semantics
-  - minimal `route.rules` subset with first-match semantics
+  - minimal `route.rules` subset with ordered upgrade/final semantics
 - Config compatibility:
   - a minimal sing-box-compatible JSON subset
   - `direct.routing_mark` is supported

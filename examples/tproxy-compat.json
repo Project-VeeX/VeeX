@@ -49,17 +49,31 @@
   ],
   "route": {
     "final": "proxy",
-    "bypass": [
-      "trojan.example.com",
-      "192.168.0.1"
-    ],
     "rules": [
+      {
+        "ip_is_loopback": true,
+        "outbound": "direct"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "ip_is_link_local": true,
+        "outbound": "direct"
+      },
       {
         "inbound": [
           "tproxy-in"
         ],
         "action": "sniff",
         "timeout": "300ms"
+      },
+      {
+        "outbound": "direct",
+        "domain": [
+          "trojan.example.com"
+        ]
       },
       {
         "outbound": "direct",

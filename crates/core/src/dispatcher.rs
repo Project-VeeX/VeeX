@@ -154,6 +154,7 @@ fn log_route_select(trace: &DispatchTraceContext, network: &str) {
         destination = %trace.destination_field,
         outbound = %trace.outbound_field,
         route_reason = %trace.route_reason.as_str(),
+        default_final = matches!(trace.route_reason, RouteReason::Final),
         network,
         "route selected"
     );
@@ -419,7 +420,7 @@ mod tests {
         let (outbound, captured) = CaptureOutbound::new("proxy");
         let mut outbounds: HashMap<String, Arc<dyn Outbound>> = HashMap::new();
         outbounds.insert("proxy".into(), Arc::new(outbound));
-        let dispatcher = SimpleDispatcher::new(Router::new("proxy", "direct"), outbounds);
+        let dispatcher = SimpleDispatcher::new(Router::with_default_outbound("proxy"), outbounds);
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 7,
@@ -459,7 +460,7 @@ mod tests {
         ));
         let mut outbounds: HashMap<String, Arc<dyn Outbound>> = HashMap::new();
         outbounds.insert("proxy".into(), outbound);
-        let dispatcher = SimpleDispatcher::new(Router::new("proxy", "direct"), outbounds);
+        let dispatcher = SimpleDispatcher::new(Router::with_default_outbound("proxy"), outbounds);
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 9,

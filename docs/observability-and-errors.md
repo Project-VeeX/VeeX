@@ -75,7 +75,7 @@ Main-path events now emitted as structured tracing events include:
 Important field alignment in this round:
 
 - `session_start`: `session_id`, `inbound`, `peer`, `destination`, `network`
-- `route_select`: `session_id`, `inbound`, `peer`, `destination`, `outbound`, `route_reason`
+- `route_select`: `session_id`, `inbound`, `peer`, `destination`, `outbound`, `route_reason`, `default_final`
 - `session_finish`: `session_id`, `inbound`, `peer`, `destination`, `outbound`, `route_reason`, `success`, `duration_ms`, `bytes_up`, `bytes_down`
 - `session_finish.bytes_up` and `session_finish.bytes_down` are observed relay bytes; relay failures may report partial non-zero stats and must not be normalized back to `0/0`
 - failure events carry `error_kind` and `error` where the boundary already has a `ProxyError`
@@ -85,11 +85,11 @@ Important field alignment in this round:
 - TLS handshake failures include `host`, `server_name`, `insecure`, `disable_sni`
 - `tls_handshake_start` includes `host`, `port`, `resolved_addr`, `server_name`, and `handshake_timeout_ms`
 - `tls_handshake_failed` includes `failure_reason`, `error_kind`, and `handshake_timeout_ms`
-- `sniff_start` includes `session_id`, `inbound_tag`, and `timeout_ms`
-- `sniff_success` includes `session_id`, `inbound_tag`, `timeout_ms`, `protocol`, `domain`, and `result=matched`
-- `sniff_timeout` includes `session_id`, `inbound_tag`, `timeout_ms`, and `result=timeout`
-- `sniff_no_match` includes `session_id`, `inbound_tag`, `timeout_ms`, and `result=not_matched|unsupported`
-- `sniff_error` includes `session_id`, `inbound_tag`, `timeout_ms`, `result=error`, and `error`
+- `sniff_start` includes `session_id`, `inbound_tag`, and `sniff_timeout_ms`
+- `sniff_success` includes `session_id`, `inbound_tag`, `sniff_timeout_ms`, `protocol`, `domain`, and `result=matched`
+- `sniff_timeout` includes `session_id`, `inbound_tag`, `sniff_timeout_ms`, and `result=timeout`
+- `sniff_no_match` includes `session_id`, `inbound_tag`, `sniff_timeout_ms`, and `result=not_matched|unsupported`
+- `sniff_error` includes `session_id`, `inbound_tag`, `sniff_timeout_ms`, `result=error`, and `error`
 - sniff timeout and no-match are routing diagnostics, not session failures
 - `transparent_socket_config` includes `socket_family`, `local_addr`, `peer_addr`, `ipv4_transparent_ok`, `ipv4_transparent_errno`, `ipv6_transparent_ok`, `ipv6_transparent_errno`
 - `listener_fallback` includes `from`, `to`, `reason`, `errno`
@@ -105,7 +105,7 @@ Relay termination rules in the current baseline:
 Explicitly out of scope for this round:
 
 - no inbound common harness abstraction
-- no route rule or bypass semantic expansion
+- no kernel-level bypass action semantics
 - no DNS, UDP, TUN, fake-ip, or sniff destination override work
 - no Happy Eyeballs or parallel dialing
 - no TLS config cache or reuse layer

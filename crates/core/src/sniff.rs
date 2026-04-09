@@ -476,13 +476,19 @@ mod tests {
         collections::VecDeque,
         io,
         pin::Pin,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
         task::{Context, Poll},
         time::Duration,
     };
 
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
-    use super::{sniff_stream, sniff_stream_internal, SniffResult, SniffedProtocol};
+    use super::{
+        sniff_stream, sniff_stream_internal, PrefixedStream, SniffResult, SniffedProtocol,
+    };
 
     enum ReadStep {
         Data(Vec<u8>),
@@ -572,6 +578,61 @@ mod tests {
         }
     }
 
+    struct CountingStream {
+        read_steps: VecDeque<ReadStep>,
+        read_polls: Arc<AtomicUsize>,
+    }
+
+    impl CountingStream {
+        fn new(
+            read_steps: impl IntoIterator<Item = ReadStep>,
+            read_polls: Arc<AtomicUsize>,
+        ) -> Self {
+            Self {
+                read_steps: read_steps.into_iter().collect(),
+                read_polls,
+            }
+        }
+    }
+
+    impl AsyncRead for CountingStream {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            self.read_polls.fetch_add(1, Ordering::SeqCst);
+            match self.read_steps.pop_front().unwrap_or(ReadStep::Eof) {
+                ReadStep::Data(data) => {
+                    buf.put_slice(&data);
+                    Poll::Ready(Ok(()))
+                }
+                ReadStep::Error(err) => {
+                    Poll::Ready(Err(io::Error::new(err.kind(), err.to_string())))
+                }
+                ReadStep::Eof => Poll::Ready(Ok(())),
+            }
+        }
+    }
+
+    impl AsyncWrite for CountingStream {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
     #[tokio::test]
     async fn tls_sni_sniff_succeeds_and_replays_prefix() {
         let payload = tls_client_hello_with_sni("www.example.com");
@@ -625,6 +686,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prefixed_stream_does_not_read_inner_until_prefix_is_exhausted() {
+        let read_polls = Arc::new(AtomicUsize::new(0));
+        let mut stream = PrefixedStream::new(
+            b"abcd".to_vec(),
+            CountingStream::new(
+                [ReadStep::Data(b"ef".to_vec()), ReadStep::Eof],
+                Arc::clone(&read_polls),
+            ),
+        );
+
+        let mut first = [0u8; 2];
+        stream
+            .read_exact(&mut first)
+            .await
+            .expect("first prefix chunk should be readable");
+        assert_eq!(&first, b"ab");
+        assert_eq!(read_polls.load(Ordering::SeqCst), 0);
+
+        let mut second = [0u8; 2];
+        stream
+            .read_exact(&mut second)
+            .await
+            .expect("second prefix chunk should be readable");
+        assert_eq!(&second, b"cd");
+        assert_eq!(read_polls.load(Ordering::SeqCst), 0);
+
+        let mut third = [0u8; 2];
+        stream
+            .read_exact(&mut third)
+            .await
+            .expect("inner bytes should be readable after prefix is exhausted");
+        assert_eq!(&third, b"ef");
+        assert_eq!(read_polls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn prefixed_stream_replays_prefix_once_and_then_hits_eof() {
+        let read_polls = Arc::new(AtomicUsize::new(0));
+        let mut stream = PrefixedStream::new(
+            b"ab".to_vec(),
+            CountingStream::new([ReadStep::Eof], Arc::clone(&read_polls)),
+        );
+
+        let mut replayed = Vec::new();
+        stream
+            .read_to_end(&mut replayed)
+            .await
+            .expect("prefixed stream should read to eof");
+
+        assert_eq!(replayed, b"ab");
+        assert_eq!(read_polls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn tls_half_packet_reports_unsupported_without_panicking() {
+        let payload = tls_client_hello_with_sni("www.example.com");
+        let execution = sniff_stream_internal(
+            ScriptedStream::new([ReadStep::Data(payload[..12].to_vec()), ReadStep::Eof]),
+            Duration::from_millis(300),
+        )
+        .await;
+
+        assert_eq!(execution.result, SniffResult::Unsupported);
+        assert!(execution.outcome.domain.is_none());
+    }
+
+    #[tokio::test]
+    async fn tls_incomplete_length_field_reports_unsupported() {
+        let execution = sniff_stream_internal(
+            ScriptedStream::new([ReadStep::Data(vec![0x16, 0x03, 0x01, 0x00]), ReadStep::Eof]),
+            Duration::from_millis(300),
+        )
+        .await;
+
+        assert_eq!(execution.result, SniffResult::Unsupported);
+    }
+
+    #[tokio::test]
+    async fn tls_like_non_client_hello_is_not_matched() {
+        let execution = sniff_stream_internal(
+            ScriptedStream::new([
+                ReadStep::Data(vec![0x16, 0x03, 0x01, 0x00, 0x04, 0x02, 0x00, 0x00, 0x00]),
+                ReadStep::Eof,
+            ]),
+            Duration::from_millis(300),
+        )
+        .await;
+
+        assert_eq!(execution.result, SniffResult::NotMatched);
+    }
+
+    #[tokio::test]
     async fn sniff_timeout_is_best_effort() {
         let execution = sniff_stream_internal(PendingStream, Duration::from_millis(10)).await;
         assert_eq!(execution.result, SniffResult::Timeout);
@@ -672,6 +825,36 @@ mod tests {
             .write_all(b"pong")
             .await
             .expect("prefixed stream should forward writes");
+    }
+
+    #[tokio::test]
+    async fn http_incomplete_headers_report_unsupported() {
+        let execution = sniff_stream_internal(
+            ScriptedStream::new([
+                ReadStep::Data(b"GET / HTTP/1.1\r\nHost: example.com\r\n".to_vec()),
+                ReadStep::Eof,
+            ]),
+            Duration::from_millis(300),
+        )
+        .await;
+
+        assert_eq!(execution.result, SniffResult::Unsupported);
+        assert!(execution.outcome.domain.is_none());
+    }
+
+    #[tokio::test]
+    async fn http_request_without_host_is_not_matched() {
+        let execution = sniff_stream_internal(
+            ScriptedStream::new([
+                ReadStep::Data(b"GET / HTTP/1.1\r\nUser-Agent: test\r\n\r\n".to_vec()),
+                ReadStep::Eof,
+            ]),
+            Duration::from_millis(300),
+        )
+        .await;
+
+        assert_eq!(execution.result, SniffResult::NotMatched);
+        assert!(execution.outcome.domain.is_none());
     }
 
     fn tls_client_hello_with_sni(server_name: &str) -> Vec<u8> {

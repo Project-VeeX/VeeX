@@ -114,7 +114,7 @@ The canonical repository document is `docs/observability-and-errors.md`. This re
 ## Non-Goals Carried Forward
 
 - no inbound common harness abstraction in this round
-- no `route.bypass` semantic expansion
+- no kernel-level bypass action semantics
 - no DNS / UDP / TUN / sniff / fake-ip work
 - no Happy Eyeballs or parallel dialing
 - no TLS config cache or reuse layer

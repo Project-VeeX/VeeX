@@ -1,31 +1,17 @@
 use veex_config::{
-    OutboundConfig, ProxyConfig, RouteActionConfig, RouteFinalActionConfig, RouteRuleConfig,
-    RouteUpgradeActionConfig, DEFAULT_DIRECT_OUTBOUND_TAG,
+    ProxyConfig, RouteActionConfig, RouteFinalActionConfig, RouteRuleConfig,
+    RouteUpgradeActionConfig,
 };
 use veex_core::{
     RouteAction, RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, Router, SniffAction,
 };
 
 pub fn build_router(config: &ProxyConfig) -> Router {
-    Router::new(
-        config.route.final_outbound.clone(),
-        DEFAULT_DIRECT_OUTBOUND_TAG,
-    )
-    .with_bypass_hosts(router_bypass_hosts(config))
-    .with_rules(router_rules(config))
+    Router::new(default_final_action(config)).with_rules(router_rules(config))
 }
 
-fn router_bypass_hosts(config: &ProxyConfig) -> Vec<String> {
-    let mut hosts = config.route.bypass.clone();
-    hosts.extend(config.outbounds.iter().filter_map(implicit_bypass_host));
-    hosts
-}
-
-fn implicit_bypass_host(outbound: &OutboundConfig) -> Option<String> {
-    match outbound {
-        OutboundConfig::Trojan(trojan) => Some(trojan.server.clone()),
-        OutboundConfig::Direct(_) => None,
-    }
+fn default_final_action(config: &ProxyConfig) -> RouteFinalAction {
+    RouteFinalAction::Route(RouteTarget::new(config.route.final_outbound.clone()))
 }
 
 fn router_rules(config: &ProxyConfig) -> Vec<RouteRule> {
@@ -37,6 +23,9 @@ fn route_rule(rule: &RouteRuleConfig) -> RouteRule {
         domain: rule.domain.clone(),
         domain_suffix: rule.domain_suffix.clone(),
         ip_cidr: rule.ip_cidr.clone(),
+        ip_is_private: rule.ip_is_private,
+        ip_is_loopback: rule.ip_is_loopback,
+        ip_is_link_local: rule.ip_is_link_local,
         port: rule.port.clone(),
         inbound: rule.inbound.clone(),
         action: route_action(&rule.action),
@@ -72,7 +61,9 @@ mod tests {
         SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig, DEFAULT_CONNECT_TIMEOUT,
         DEFAULT_TLS_HANDSHAKE_TIMEOUT,
     };
-    use veex_core::{Destination, Host, RouteReason, SessionContext, SessionMeta};
+    use veex_core::{
+        Destination, Host, RouteFinalAction, RouteReason, RouteTarget, SessionContext, SessionMeta,
+    };
 
     use super::build_router;
 
@@ -113,11 +104,13 @@ mod tests {
             ],
             route: RouteConfig {
                 final_outbound: "proxy".into(),
-                bypass: vec!["configured.example.com".into()],
                 rules: vec![RouteRuleConfig {
                     domain_suffix: vec!["google.com".into()],
                     domain: vec![],
                     ip_cidr: vec![],
+                    ip_is_private: false,
+                    ip_is_loopback: false,
+                    ip_is_link_local: false,
                     port: vec![],
                     inbound: vec![],
                     action: RouteActionConfig::Final(RouteFinalActionConfig::Route(
@@ -145,24 +138,21 @@ mod tests {
     }
 
     #[test]
-    fn build_router_includes_explicit_bypass_and_trojan_server_bypass() {
-        let router = build_router(&build_config());
-
-        let configured = router.select(&build_ctx(Host::Domain("configured.example.com".into())));
-        assert_eq!(configured.outbound_tag, "direct");
-        assert_eq!(configured.reason, RouteReason::BypassConfigured);
-
-        let trojan_server = router.select(&build_ctx(Host::Domain("trojan.example.com".into())));
-        assert_eq!(trojan_server.outbound_tag, "direct");
-        assert_eq!(trojan_server.reason, RouteReason::BypassConfigured);
-    }
-
-    #[test]
     fn build_router_includes_route_rules() {
         let router = build_router(&build_config());
 
         let ruled = router.select(&build_ctx(Host::Domain("www.google.com".into())));
         assert_eq!(ruled.outbound_tag, "direct");
         assert_eq!(ruled.reason, RouteReason::Rule);
+    }
+
+    #[test]
+    fn build_router_closes_route_final_into_default_final_action() {
+        let router = build_router(&build_config());
+
+        assert_eq!(
+            router.default_final_action(),
+            &RouteFinalAction::Route(RouteTarget::new("proxy"))
+        );
     }
 }

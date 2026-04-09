@@ -1,8 +1,11 @@
 use veex_core::Router;
 
 #[test]
-fn router_can_bypass_configured_trojan_server_host() {
-    let router = Router::new("proxy", "direct").with_bypass_host("trojan.example.com");
+fn router_can_route_exact_domain_to_direct() {
+    let router = Router::with_default_outbound("proxy").with_rule(veex_core::RouteRule {
+        domain: vec!["trojan.example.com".into()],
+        ..veex_core::RouteRule::new("direct")
+    });
     let ctx = veex_core::SessionContext::new(
         veex_core::SessionMeta {
             id: 1,

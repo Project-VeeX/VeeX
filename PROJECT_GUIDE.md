@@ -18,7 +18,7 @@ The intended replacement surface is narrow:
 
 - `socks`, `redirect`, and `tproxy` TCP ingress
 - `direct` and `trojan` outbound execution
-- minimal routing, bypass, and first-match rule behavior
+- ordered route action pipeline with best-effort sniff upgrades and a default final action
 
 VeeX is not intended to replace a full DNS stack, a general policy platform, or a broader network subsystem.
 
@@ -36,8 +36,7 @@ Supported surface:
   - sequential multi-address connect fallback
 - route:
   - `final`
-  - basic `bypass`
-  - minimal `rules` matcher subset: `domain`, `domain_suffix`, `ip_cidr`, `port`, `inbound`
+  - minimal `rules` matcher subset: `domain`, `domain_suffix`, `ip_cidr`, `ip_is_private`, `ip_is_loopback`, `ip_is_link_local`, `port`, `inbound`
   - `route.rules` supports final route actions via `outbound` and the `sniff` upgrade action
 - CLI:
   - `veex run -c <config>`
@@ -138,7 +137,6 @@ Commonly used fields include:
 - `outbounds[].connect_timeout`
 - `outbounds[].tls.handshake_timeout`
 - `route.final`
-- `route.bypass`
 - `route.rules`
 - `route.rules[].action`
 - `route.rules[].timeout`
@@ -160,18 +158,17 @@ Compatibility rules:
 
 Route and compatibility notes:
 
-- `route.bypass` currently supports exact domain and exact IP matches
-- `route.bypass` does not currently support CIDR ranges, suffix matching, or a rule engine
-- wildcard and suffix-style bypass entries such as `*.example.com` and `.example.com` are rejected as unsupported patterns
-- `route.rules` currently supports `domain`, `domain_suffix`, `ip_cidr`, `port`, and `inbound` matchers
+- `route.final` remains a config field, but runtime lowers it into the router's default final action
+- `route.rules` currently supports `domain`, `domain_suffix`, `ip_cidr`, `ip_is_private`, `ip_is_loopback`, `ip_is_link_local`, `port`, and `inbound` matchers
 - regular route rules still use `outbound` as the final route action
+- private/local direct routing should be modeled as ordinary route rules with `outbound: "direct"`, not as a separate bypass action
+- `route.bypass` is no longer accepted; migrate old exact-match direct exceptions into ordinary `route.rules`
 - `route.rules[].action="sniff"` is a route upgrade action that extracts `RouteInput.domain` from TLS SNI or HTTP Host
 - `route.rules[].timeout` is only valid for `action="sniff"` and defaults to `300ms`
 - sniff is best effort: timeout, no-match, or unsupported input does not fail the session
 - sniff does not override destination, does not do DNS resolution, and does not change connect or TLS handshake timeout behavior
-- `route.rules` evaluates in declaration order: matching upgrade actions continue with enriched context, and the first matching final action ends routing
-- built-in bypass order is loopback, private, link-local, configured bypass, `route.rules`, then final outbound
-- built-in bypass still applies before configured bypass
+- `route.rules` evaluates in declaration order: matching upgrade actions continue with enriched context, the first matching final action ends routing, and `route.final` supplies the default final action when no rule returns a final decision
+- rules that depend on a sniffed domain must be declared after the sniff rule; sniff does not rerun earlier rules
 - ignored fields must not be described as supported features
 
 Fields that may appear in compatibility fixtures but are not part of the current implementation surface include:

@@ -121,16 +121,6 @@ fn validate_route(
         ));
     }
 
-    for (index, bypass) in config.route.bypass.iter().enumerate() {
-        let bypass = bypass.trim();
-        if bypass.starts_with("*.") || bypass.starts_with('.') {
-            return Err(ConfigError::semantic(
-                format!("$.route.bypass[{index}]"),
-                "unsupported bypass pattern",
-            ));
-        }
-    }
-
     for (index, rule) in config.route.rules.iter().enumerate() {
         validate_route_rule(rule, index, outbound_tags)?;
     }
@@ -195,7 +185,6 @@ mod tests {
             })],
             route: RouteConfig {
                 final_outbound: "direct".into(),
-                bypass: vec![],
                 rules: vec![],
             },
         }
@@ -243,6 +232,9 @@ mod tests {
             domain: vec![],
             domain_suffix: vec![],
             ip_cidr: vec![],
+            ip_is_private: false,
+            ip_is_loopback: false,
+            ip_is_link_local: false,
             port: vec![],
             inbound: vec![],
             action: RouteActionConfig::Final(RouteFinalActionConfig::Route(RouteTargetConfig {
@@ -262,6 +254,9 @@ mod tests {
             domain: vec!["example.com".into()],
             domain_suffix: vec![],
             ip_cidr: vec![],
+            ip_is_private: false,
+            ip_is_loopback: false,
+            ip_is_link_local: false,
             port: vec![],
             inbound: vec![],
             action: RouteActionConfig::Final(RouteFinalActionConfig::Route(RouteTargetConfig {
@@ -281,6 +276,9 @@ mod tests {
             domain: vec![],
             domain_suffix: vec![],
             ip_cidr: vec![],
+            ip_is_private: false,
+            ip_is_loopback: false,
+            ip_is_link_local: false,
             port: vec![443],
             inbound: vec!["tproxy-in".into()],
             action: RouteActionConfig::Upgrade(RouteUpgradeActionConfig::Sniff(
@@ -291,5 +289,25 @@ mod tests {
         });
 
         validate_config(&config).expect("sniff upgrade rule should validate");
+    }
+
+    #[test]
+    fn accepts_private_ip_route_rule_matcher() {
+        let mut config = valid_config();
+        config.route.rules.push(RouteRuleConfig {
+            domain: vec![],
+            domain_suffix: vec![],
+            ip_cidr: vec![],
+            ip_is_private: true,
+            ip_is_loopback: false,
+            ip_is_link_local: false,
+            port: vec![],
+            inbound: vec![],
+            action: RouteActionConfig::Final(RouteFinalActionConfig::Route(RouteTargetConfig {
+                outbound: "direct".into(),
+            })),
+        });
+
+        validate_config(&config).expect("private-ip route rule should validate");
     }
 }

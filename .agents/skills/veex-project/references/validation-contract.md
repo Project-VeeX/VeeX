@@ -20,7 +20,7 @@ Important fields:
 Baseline expectations:
 
 - successful sessions end with `error_kind=none`
-- private and loopback bypass paths should resolve to `outbound=direct`
+- private and loopback direct-route rules should resolve to `outbound=direct`
 - Trojan traffic should resolve to the proxy outbound path
 
 ## Evidence To Keep
@@ -43,10 +43,10 @@ event=route_select outbound=...
 event=session_finish outbound=... error_kind=none
 ```
 
-Useful bypass-oriented signal shape:
+Useful direct-route-oriented signal shape:
 
 ```text
-event=route_select outbound=direct reason=private
+event=route_select outbound=direct route_reason=rule
 event=session_finish outbound=direct error_kind=none
 ```
 
@@ -76,7 +76,7 @@ Only move to lower-level tools such as `strace` when the basic checks still do n
 - If `check` fails, fix the config before analyzing firewall behavior.
 - If logs show an IPv4-mapped peer on a dual-stack listener, do not assume an address-family bug immediately; confirm the delivery path first.
 - A client-visible success with a logged failure can indicate a transport-edge condition such as TLS close behavior, not necessarily a broken user-facing path.
-- A `direct` bypass that times out can still mean recursion prevention worked; timeout alone does not prove that bypass selection was wrong.
+- A `direct` recursion-prevention route that times out can still mean route selection worked; timeout alone does not prove that the direct rule was wrong.
 
 ## Release Gate
 
@@ -86,7 +86,7 @@ Do not describe transparent-proxy validation as complete unless all relevant pat
 - `redirect` path works when that deployment path matters
 - `tproxy` path works when that deployment path matters
 - original-destination recovery works
-- bypass behavior works
+- direct recursion-prevention route behavior works
 - policy-routing state matches the intended TPROXY setup when TPROXY is in scope
 - direct no-loop behavior works when `routing_mark` is part of the deployment
 - successful Trojan sessions are not misclassified as relay failures
