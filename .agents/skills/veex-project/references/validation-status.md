@@ -1,10 +1,10 @@
 # VeeX Validation Status
 
-This file summarizes the current persisted validation status for VeeX.
+This reference records the current persisted validation snapshot for VeeX.
 
 ## Snapshot Date
 
-Latest recorded status in this skill: April 3, 2026.
+Latest recorded snapshot: April 3, 2026.
 
 ## Recorded Coverage
 
@@ -20,8 +20,8 @@ Latest recorded status in this skill: April 3, 2026.
 - TPROXY device closure on OpenWrt / Linux is still a required validation item
 - `direct.routing_mark` no-loop validation on a real policy-routing target is still a required validation item
 
-## Response Rule
+## Interpretation Notes
 
-- If asked about current validation coverage, state the recorded status and the snapshot date explicitly.
-- Do not claim full transparent-proxy closure beyond the items above unless newer evidence is added to the repository.
-- Prefer `PROJECT_GUIDE.md` for the stable project statement and use this file when the question is specifically about validation maturity.
+- any statement about current validation coverage should include the snapshot date
+- full transparent-proxy closure should not be claimed beyond the items above unless newer recorded evidence exists
+- `docs/architecture.md` remains the stable project statement; this file is only the validation-maturity snapshot

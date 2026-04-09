@@ -1,6 +1,6 @@
 # VeeX Architecture Closure
 
-Use this file when a task depends on internal boundary decisions rather than only public project description.
+This reference records internal boundary decisions that remain closed and should continue guiding implementation work.
 
 ## Session Direction
 
@@ -26,6 +26,8 @@ Keep these rules:
 - when host classification matters, do not blur domains and IPs into one vague conceptual bucket
 
 Current router decision pipeline: ordered `route.rules` actions → default final action.
+
+`action="sniff"` is part of this runtime path, but only as bounded context enrichment. Do not turn it into destination override, DNS control, or transport policy.
 
 ## Transport Direction
 
@@ -95,7 +97,8 @@ These are explicitly out of scope and should not be quietly introduced:
 
 - no inbound common harness abstraction
 - no kernel-level bypass action semantics
-- no DNS / UDP / TUN / sniff / fake-ip work
+- no DNS / UDP / TUN / fake-ip work
+- no sniff destination override or generalized protocol-routing platform
 - no Happy Eyeballs or parallel dialing
 - no TLS config cache or reuse layer
 - no OpenTelemetry or metrics pipeline

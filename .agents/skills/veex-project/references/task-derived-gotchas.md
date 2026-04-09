@@ -4,7 +4,7 @@ These constraints come from actual phase task packs, closure notes, and complete
 
 ## Scope Constraints
 
-- VeeX is currently a TCP execution plane. Do not silently expand the work into a DNS platform, UDP stack, TUN path, sniffing system, fake-ip, or full rule engine.
+- VeeX is currently a TCP execution plane. Do not silently expand the work into a DNS platform, UDP stack, TUN path, fake-ip system, generalized sniffing platform, or full rule engine.
 - `route.bypass` has been removed; express direct-routing exceptions through ordinary `route.rules` instead.
 - OpenWrt packaging, `procd`, and LuCI/feed work belong to downstream repositories, not this main repo.
 
@@ -13,7 +13,7 @@ These constraints come from actual phase task packs, closure notes, and complete
 - Linux transparent-socket details belong in `crates/infra-linux` or equivalent platform-facing layers, not back in `crates/core`.
 - `Router` stays pure computation: no I/O and no DNS during construction.
 - `routing_mark` belongs only to direct outbound config and implementation; do not promote it into a `core` abstraction.
-- Prefer conservative incremental changes. Do not reopen already-closed runtime or dispatcher boundaries just to fit a new feature.
+- Conservative incremental changes remain safer than reopening already-closed runtime or dispatcher boundaries to fit a new feature.
 
 ## Real Failure Modes Already Seen
 
@@ -28,7 +28,7 @@ These constraints come from actual phase task packs, closure notes, and complete
 
 - "Unknown fields tolerated, known fields strictly typed" is an intentional parser policy. Do not turn it into blanket permissiveness.
 - Ignored fields do not imply implemented features; they only mean the current compatibility subset allows them to appear. Exception: `log.timestamp` is explicitly implemented, not ignored.
-- Prefer neutral naming in public docs and fixtures. Internal tasks may discuss Passwall replacement, but public artifacts do not need to bind the repo to a single downstream product name.
+- Neutral naming is preferred in public docs and fixtures. Internal tasks may discuss Passwall replacement, but public artifacts do not need to bind the repo to a single downstream product name.
 
 ## Phase 4 Engineering Gotchas
 

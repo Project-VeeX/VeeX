@@ -1,19 +1,17 @@
 # VeeX
 
-VeeX is a Rust proxy core for OpenWrt-class and Linux router environments. It provides a focused TCP execution plane for explicit proxy and transparent proxy paths, with a deliberately narrow scope that stays out of DNS, UDP, TUN, and packaging concerns.
+VeeX is a Rust proxy core for OpenWrt-class and Linux router environments. It focuses on a narrow TCP execution plane for explicit proxy and transparent proxy deployments, with a deliberately small scope.
 
-## Features
+## Scope
 
 - inbound: `socks`, `redirect`, `tproxy` (TCP only)
 - outbound: `trojan`, `direct`
-- route: ordered `route.rules` pipeline and default `route.final`
-- connect: sequential multi-address fallback, no Happy Eyeballs
+- route: ordered `route.rules` pipeline, `action="sniff"` upgrades, and default `route.final`
+- connect: sequential multi-address fallback
 - interface: `veex run`, `veex check`, `veex version`
 - config: minimal sing-box-compatible JSON subset
 
 Transparent-proxy recursion prevention is explicit now: VeeX does not auto-insert private/local or upstream-server direct rules. If a deployment needs those exceptions, define them yourself in `route.rules`.
-
-## Scope
 
 VeeX is aimed at OpenWrt, ImmortalWrt, and other Linux router-oriented environments where a small TCP execution plane is needed for `socks`, `redirect`, or `tproxy` traffic that must reach `direct` or `trojan` outbounds. It is intended for operators, integrators, and downstream projects that need a CLI proxy core rather than a full network platform.
 
@@ -46,7 +44,12 @@ Example configs:
 - `examples/tproxy-compat.json`
 - `examples/tproxy-sniff-rules.json`
 
-For project structure, runtime model, and compatibility boundaries, see `PROJECT_GUIDE.md`.
+## Docs
+
+- `docs/architecture.md` for the public architecture and current boundaries
+- `docs/roadmap.md` for phase history, current stage, and evolution direction
+- `docs/observability.md` for the public observability and error-model whitepaper
+- `CHANGELOG.md` for release-by-release deltas
 
 ## License
 

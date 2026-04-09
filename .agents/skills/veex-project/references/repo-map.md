@@ -73,17 +73,18 @@
   - `crates/config`
   - `crates/cli` factory wiring
   - `examples/`
-  - `PROJECT_GUIDE.md`
+  - `references/config-contract.md`
+  - `docs/architecture.md` when the public boundary changes
 - Transparent proxy, original destination, or dual-stack issues:
   - `crates/infra-linux`
   - `crates/inbound-redirect`
   - `crates/inbound-tproxy`
-  - `PROJECT_GUIDE.md`
+  - `references/internal-architecture.md`
   - `references/validation-contract.md`
 - Direct no-loop and `routing_mark` behavior:
   - `crates/outbound-direct`
   - `crates/config`
-  - `PROJECT_GUIDE.md`
+  - `references/config-contract.md`
   - `references/validation-contract.md`
 - Session failure semantics, summaries, or logging:
   - `crates/core`

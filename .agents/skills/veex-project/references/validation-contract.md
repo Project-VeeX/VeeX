@@ -1,6 +1,6 @@
 # VeeX Validation Contract
 
-Use this file when the task depends on stable validation signals, diagnostic order, or evidence expectations.
+This reference records stable validation signals, evidence expectations, and diagnostic order for VeeX.
 
 ## Core Event Contract
 
@@ -57,9 +57,9 @@ event=session_start ... original_dst=...
 event=session_finish outbound=proxy error_kind=none
 ```
 
-## Minimal Diagnostic Order
+## Diagnostic Sequence
 
-Use this order first:
+A minimal diagnostic sequence is:
 
 ```sh
 /tmp/veex version
@@ -69,7 +69,7 @@ iptables -t nat -S
 logread | grep veex
 ```
 
-Only move to lower-level tools such as `strace` when the basic checks still do not explain the behavior.
+Lower-level tools such as `strace` only become useful when these basic checks still do not explain the behavior.
 
 ## Important Failure Interpretations
 
@@ -97,7 +97,7 @@ Do not describe transparent-proxy validation as complete unless all relevant pat
 - Keep rollback commands ready before adding temporary rules.
 - Do not treat guidance for `fw4/nft`, TPROXY, or `routing_mark` as fully closed device validation unless the recorded validation status says so.
 
-## Response Rules
+## Interpretation Notes
 
-- Distinguish between recorded validation coverage and proposed validation steps.
-- Use `validation-status.md` for current maturity and this file for evidence and diagnostic expectations.
+- recorded validation coverage and proposed validation steps are separate concerns
+- `validation-status.md` carries the current maturity snapshot, while this file records evidence and diagnostic expectations

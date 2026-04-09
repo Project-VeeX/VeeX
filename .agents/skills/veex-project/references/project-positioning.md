@@ -27,6 +27,7 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
 - Route:
   - `final`
   - minimal `route.rules` subset with ordered upgrade/final semantics
+  - bounded `action="sniff"` context enrichment
 - Config compatibility:
   - a minimal sing-box-compatible JSON subset
   - `direct.routing_mark` is supported
@@ -36,10 +37,10 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
 - built-in DNS server
 - DoH / DoT client
 - fake-ip
-- sniff
 - UDP proxying
 - TUN
 - full `route.rules` engine
+- sniff destination override or generalized protocol routing
 - full sing-box compatibility
 - downstream OpenWrt packaging / feed / LuCI integration
 
@@ -58,14 +59,15 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
   - Linux transparent infrastructure
   - tests
   - examples
-  - persistent project docs and guides
+  - persistent project docs
 - Downstream repositories own:
   - OpenWrt package / ipk
   - `procd` / init scripts
   - LuCI / feed integration
 
-## Default Framing
+## Scope Notes
 
-- First ask whether the request still serves the TCP execution-plane goal.
-- If it pushes the project toward a DNS platform, generic routing engine, or downstream packaging repo, classify it as out of scope or later-roadmap work before discussing implementation.
-- Treat `README.md` and `PROJECT_GUIDE.md` as the stable public entrypoints for this framing.
+- the primary scope question is whether a request still serves the TCP execution-plane goal
+- work that pushes VeeX toward a DNS platform, a generic routing engine, or downstream packaging belongs outside the current project scope or later roadmap
+- `README.md` and `docs/architecture.md` are the stable public entrypoints for project framing
+- `docs/roadmap.md` carries phase, milestone, and roadmap direction

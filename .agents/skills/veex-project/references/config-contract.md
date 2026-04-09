@@ -1,6 +1,6 @@
 # VeeX Config Contract
 
-Use this file when the task depends on the exact accepted configuration surface rather than the broader project description.
+This reference records the exact accepted configuration surface and the current compatibility boundary.
 
 ## Supported Input Surface
 
@@ -75,20 +75,20 @@ Known fields remain strictly typed. An unsupported type on a known field is stil
 
 ## Compatibility Fixture
 
-Use the repository example as the compatibility fixture:
+The repository compatibility fixture is:
 
 - `examples/tproxy-compat.json`
 
 That fixture intentionally uses `listen="::"` to cover dual-stack validation more closely.
 
-Validate it with:
+Typical validation command:
 
 ```sh
 veex check -c examples/tproxy-compat.json
 ```
 
-## Response Rules
+## Contract Notes
 
-- Do not describe tolerated fields as implemented features.
-- Do not widen the compatibility contract casually.
-- If a proposed config change expands the accepted surface, call out the parser, validation, fixture, and guide updates that must stay aligned.
+- tolerated fields are not implemented features
+- the compatibility contract is intentionally narrow
+- any expansion of the accepted surface should keep parser, validation, fixture, and public-doc changes aligned

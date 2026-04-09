@@ -1,126 +1,82 @@
 # VeeX Observability And Error Contract
 
-Use this reference when a task depends on the current error-model closure, tracing event shape, or what this round intentionally did not expand.
+This reference records the internal observability rules, event-shape expectations, and error-model boundaries that continue guiding implementation work.
 
-The canonical repository document is `docs/observability-and-errors.md`. This reference keeps only the stable project-level takeaways that should guide future work.
+The canonical public document is `docs/observability.md`. This file keeps only the internal rules and stable engineering takeaways.
 
-## Current Direction
+## Core Contract
 
-- `thiserror` is now the preferred crate-local error-definition tool.
+- `tracing` is the structured observability backbone for the current TCP execution path.
 - `ProxyError` remains the cross-crate runtime error boundary.
-- `ErrorKind` remains the stable classification contract used by runtime diagnostics and session summaries.
-- `tracing` is now the structured observability backbone for the main TCP execution path.
+- `ErrorKind` remains the stable failure-classification contract for runtime diagnostics and session summaries.
+- crate-local typed errors are allowed, but runtime boundaries still converge to `ProxyError`.
 
 ## Error Model Rules
 
-- Do not remove `ProxyError`.
-- Do not remove or weaken `ErrorKind`.
-- Do not replace `ErrorKind` with `thiserror`; they solve different problems.
-- Prefer local typed errors inside crates, but converge back to `ProxyError` at runtime boundaries.
-- Keep `ProxyError::kind()` stable. Changes that break current `ErrorKind` mapping are contract changes.
+- do not remove `ProxyError`
+- do not remove or weaken `ErrorKind`
+- do not replace `ErrorKind` with crate-local typed errors
+- keep `ProxyError::kind()` stable; breaking its mapping is a contract change
 
 ## Tracing Rules
 
-- Prefer structured tracing fields over hand-built `key=value` strings on the hot path.
-- Keep event names and core field names stable unless there is a strong reason to change them.
-- Text output via `tracing-subscriber` is the current baseline. Do not assume JSON logging, file appenders, metrics, or OpenTelemetry exist.
-- Human-readable host, domain, and tag fields should use display-style rendering.
-- Structured values and error kinds should use debug-style rendering.
-- Line breaks in string-like fields should be sanitized so text output does not break event structure.
+- prefer structured tracing fields over hand-built `key=value` strings on the hot path
+- keep event names and core field names stable unless there is a strong reason to change them
+- the current baseline is structured text output, not JSON logging or a metrics pipeline
+- human-readable host, domain, and tag values should stay directly inspectable
+- structured classifications such as `error_kind` should remain machine-comparable
+- line breaks in string-like fields should not break event structure
 
-## Structured Events Present In Current Baseline
+## Stable Event Families
 
-- runtime lifecycle:
-  - `runtime_start`
-  - `service_start`
-  - `inbound_service_failed`
-  - `shutdown_begin`
-  - `shutdown_complete`
-  - `task_join_failed`
-- session path:
-  - `session_start`
-  - `route_select`
-  - `session_finish`
-  - `session_failed`
-  - `handshake_failed`
-  - `destination_resolve_failed`
-- transport / transparent diagnostics:
-  - `tls_handshake_failed`
-  - `tls_handshake_start` (carries `host`/`port`/`resolved_addr`)
-  - `transparent_socket_config`
-  - `original_dst_retry`
-  - `listener_fallback`
-- relay:
-  - `relay_start`
-  - `relay_failed`
-  - `relay_half_close`
+- runtime lifecycle events
+- session lifecycle events
+- route-selection events
+- connect and TLS events
+- sniff diagnostic events
+- relay events
+- transparent-socket diagnostic events
 
-## Field Alignment That Should Stay Stable
+Representative baseline events:
 
-- `session_start`:
-  - `session_id`
-  - `inbound`
-  - `peer`
-  - `destination`
-  - `network`
-- `route_select`:
-  - `session_id`
-  - `inbound`
-  - `peer`
-  - `destination`
-  - `outbound`
-  - `route_reason`
-- `session_finish`:
-  - `session_id`
-  - `inbound`
-  - `peer`
-  - `destination`
-  - `outbound`
-  - `route_reason`
-  - `success`
-  - `duration_ms`
-  - `bytes_up`
-  - `bytes_down`
-- `session_finish.bytes_up` and `session_finish.bytes_down` are observed relay bytes; relay failures may report partial non-zero stats instead of `0/0`.
-- failure-side events should carry `error_kind` and `error` when the boundary already has a `ProxyError`.
-- TLS handshake failures should carry:
-  - `host`
-  - `port`
-  - `server_name`
-  - `insecure`
-  - `disable_sni`
-  - `resolved_addr`
-- `tls_handshake_start` carries the same `host`/`port`/`resolved_addr` fields for connect-path diagnostics
-- `transparent_socket_config` should carry:
-  - `socket_family`
-  - `local_addr`
-  - `peer_addr`
-  - `ipv4_transparent_ok`
-  - `ipv4_transparent_errno`
-  - `ipv6_transparent_ok`
-  - `ipv6_transparent_errno`
-- `listener_fallback` should carry:
-  - `from`
-  - `to`
-  - `reason`
-  - `errno`
+- `session_start`
+- `route_select`
+- `tcp_connect_attempt`
+- `tcp_connect_failed`
+- `tls_handshake_start`
+- `tls_handshake_failed`
+- `sniff_start`
+- `sniff_success`
+- `sniff_timeout`
+- `sniff_no_match`
+- `sniff_error`
+- `session_finish`
+- `transparent_socket_config`
+- `listener_fallback`
 
-## Relay Termination Rules
+## Stable Field Expectations
 
-- EOF in one direction is a normal completion path, not a relay error.
-- EOF still attempts `shutdown()` on the opposite writer before that direction returns success.
-- True relay errors fail fast and may return the latest observed progress snapshot instead of waiting indefinitely for the peer direction to finish.
+- `session_start` should keep `session_id`, `inbound`, `peer`, `destination`, and `network`
+- `route_select` should keep `session_id`, `inbound`, `peer`, `destination`, `outbound`, and `route_reason`
+- `session_finish` should keep `session_id`, `outbound`, `route_reason`, `success`, `duration_ms`, `bytes_up`, and `bytes_down`
+- failure-side events should carry `error_kind` and `error` when the boundary already has a `ProxyError`
+- connect and TLS events should keep `host`, `port`, and `resolved_addr` where applicable
+- transparent-socket diagnostics should keep socket-family and errno-style fields needed for Linux troubleshooting
 
-## Non-Goals Carried Forward
+## Interpretation Rules
 
-- no inbound common harness abstraction in this round
+- sniff timeout and sniff no-match are routing diagnostics, not automatic session failures
+- relay byte counters are observed progress metrics, not billing-grade accounting
+- EOF in one direction is a normal relay completion path, not automatically a relay error
+
+## Carried-Forward Non-Goals
+
 - no kernel-level bypass action semantics
-- no DNS / UDP / TUN / sniff / fake-ip work
-- no Happy Eyeballs or parallel dialing
-- no TLS config cache or reuse layer
-- no OpenTelemetry or metrics pipeline
-- no deep span-tree redesign
+- no DNS / UDP / TUN / fake-ip observability surface
+- no sniff destination override or generalized protocol-routing platform
+- no Happy Eyeballs or parallel dialing observability model
+- no built-in OpenTelemetry or metrics pipeline
 
 ## Validation Reminder
 
-- `tproxy`, `routing_mark`, transparent socket behavior, and dual-stack fallback still require Linux/OpenWrt device validation beyond unit and integration tests.
+- `tproxy`, `routing_mark`, transparent socket behavior, and dual-stack transparent-proxy fallback still require Linux/OpenWrt device validation beyond unit and integration tests
