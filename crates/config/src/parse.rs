@@ -25,11 +25,17 @@ use crate::{
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ParseDiagnostics {
     pub warnings: Vec<ParseWarning>,
-    pub ignored: Vec<String>,
+    pub ignored: Vec<ParseIgnored>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParseWarning {
+    pub path: String,
+    pub message: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParseIgnored {
     pub path: String,
     pub message: &'static str,
 }
@@ -43,7 +49,7 @@ struct ParseReport {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IgnoredDisposition {
-    Ignore,
+    Ignore(&'static str),
     Warn(&'static str),
     Error(&'static str),
 }
@@ -386,10 +392,16 @@ fn classify_ignored_paths(
 
     let mut diagnostics = ParseDiagnostics::default();
     for path in ignored_paths {
-        match classify_ignored_path(input_config, &path) {
-            IgnoredDisposition::Ignore => diagnostics.ignored.push(path),
+        let Some(disposition) = classify_ignored_path(input_config, &path) else {
+            continue;
+        };
+
+        match disposition {
             IgnoredDisposition::Warn(message) => {
                 diagnostics.warnings.push(ParseWarning { path, message })
+            }
+            IgnoredDisposition::Ignore(message) => {
+                diagnostics.ignored.push(ParseIgnored { path, message })
             }
             IgnoredDisposition::Error(message) => {
                 return Err(ConfigError::semantic(path, message));
@@ -418,13 +430,13 @@ fn protocol_extra_paths(input_config: &InputConfig) -> Vec<String> {
     paths
 }
 
-fn classify_ignored_path(input_config: &InputConfig, path: &str) -> IgnoredDisposition {
+fn classify_ignored_path(input_config: &InputConfig, path: &str) -> Option<IgnoredDisposition> {
     if let Some((index, field)) = indexed_field(path, "$.inbounds[") {
         return match input_config.inbounds.get(index).map(|inbound| inbound.kind) {
             Some(InputInboundType::Socks) => classify_socks_ignored(field),
             Some(InputInboundType::Redirect) => classify_redirect_ignored(field),
             Some(InputInboundType::Tproxy) => classify_tproxy_ignored(field),
-            None => IgnoredDisposition::Ignore,
+            None => None,
         };
     }
 
@@ -436,7 +448,7 @@ fn classify_ignored_path(input_config: &InputConfig, path: &str) -> IgnoredDispo
         {
             Some(InputOutboundType::Direct) => classify_direct_ignored(field),
             Some(InputOutboundType::Trojan) => classify_trojan_ignored(field),
-            None => IgnoredDisposition::Ignore,
+            None => None,
         };
     }
 
@@ -446,70 +458,76 @@ fn classify_ignored_path(input_config: &InputConfig, path: &str) -> IgnoredDispo
 
     match path {
         _ if path == "$.route.bypass" || path.starts_with("$.route.bypass[") => {
-            IgnoredDisposition::Error(
+            Some(IgnoredDisposition::Error(
                 "route.bypass has been removed; use route.rules with outbound='direct' instead",
-            )
+            ))
         }
-        "$.dns" | "$.domain_resolver" => IgnoredDisposition::Warn(
+        "$.dns" | "$.domain_resolver" => Some(IgnoredDisposition::Warn(
             "field is accepted for compatibility but ignored by the current config surface",
-        ),
-        "$.log.output" => IgnoredDisposition::Warn(
+        )),
+        "$.log.output" => Some(IgnoredDisposition::Ignore(
             "log compatibility field is accepted but ignored by the current config surface",
-        ),
-        _ if path.starts_with("$.route.") => IgnoredDisposition::Ignore,
-        _ if path.starts_with("$.log.") => IgnoredDisposition::Ignore,
-        _ => IgnoredDisposition::Ignore,
+        )),
+        _ => None,
     }
 }
 
-fn classify_socks_ignored(field: &str) -> IgnoredDisposition {
-    match first_segment(field) {
+fn classify_socks_ignored(field: &str) -> Option<IgnoredDisposition> {
+    Some(match first_segment(field) {
         "udp" | "sniff" | "sniff_override_destination" | "users" | "auth" => {
             IgnoredDisposition::Warn(
                 "field is accepted for compatibility but does not affect the current socks inbound",
             )
         }
-        "set_system_proxy" | "tcp_fast_open" => IgnoredDisposition::Ignore,
-        _ => IgnoredDisposition::Ignore,
-    }
+        "set_system_proxy" | "tcp_fast_open" => IgnoredDisposition::Ignore(
+            "field is accepted for compatibility but ignored by the current socks inbound",
+        ),
+        _ => return None,
+    })
 }
 
-fn classify_redirect_ignored(field: &str) -> IgnoredDisposition {
-    match first_segment(field) {
+fn classify_redirect_ignored(field: &str) -> Option<IgnoredDisposition> {
+    Some(match first_segment(field) {
         "sniff" | "sniff_override_destination" | "udp" => IgnoredDisposition::Warn(
             "field is accepted for compatibility but does not affect the current redirect inbound",
         ),
-        "tcp_fast_open" | "receive_original_destination" => IgnoredDisposition::Ignore,
-        _ => IgnoredDisposition::Ignore,
-    }
+        "tcp_fast_open" | "receive_original_destination" => IgnoredDisposition::Ignore(
+            "field is accepted for compatibility but ignored by the current redirect inbound",
+        ),
+        _ => return None,
+    })
 }
 
-fn classify_tproxy_ignored(field: &str) -> IgnoredDisposition {
-    match first_segment(field) {
+fn classify_tproxy_ignored(field: &str) -> Option<IgnoredDisposition> {
+    Some(match first_segment(field) {
         "udp" => IgnoredDisposition::Error(
             "tproxy inbound does not support UDP capability declarations in the current runtime",
         ),
         "sniff" | "sniff_override_destination" => IgnoredDisposition::Warn(
             "field is accepted for compatibility but does not affect the current tproxy inbound",
         ),
-        "tcp_fast_open" | "udp_timeout" => IgnoredDisposition::Ignore,
-        _ => IgnoredDisposition::Ignore,
-    }
+        "tcp_fast_open" | "udp_timeout" => IgnoredDisposition::Ignore(
+            "field is accepted for compatibility but ignored by the current tproxy inbound",
+        ),
+        _ => return None,
+    })
 }
 
-fn classify_direct_ignored(field: &str) -> IgnoredDisposition {
-    match first_segment(field) {
+fn classify_direct_ignored(field: &str) -> Option<IgnoredDisposition> {
+    Some(match first_segment(field) {
         "bind_interface" | "domain_strategy" | "ipv4_only" | "ipv6_only" => {
             IgnoredDisposition::Warn(
                 "field is accepted for compatibility but does not affect the current direct outbound",
             )
         }
-        "tcp_fast_open" | "fallback_delay" => IgnoredDisposition::Ignore,
-        _ => IgnoredDisposition::Ignore,
-    }
+        "tcp_fast_open" | "fallback_delay" => IgnoredDisposition::Ignore(
+            "field is accepted for compatibility but ignored by the current direct outbound",
+        ),
+        _ => return None,
+    })
 }
 
-fn classify_trojan_ignored(field: &str) -> IgnoredDisposition {
+fn classify_trojan_ignored(field: &str) -> Option<IgnoredDisposition> {
     let field = first_segment(field);
     if matches!(
         field,
@@ -523,30 +541,28 @@ fn classify_trojan_ignored(field: &str) -> IgnoredDisposition {
             | "utls"
     ) || is_udp_related(field)
     {
-        return IgnoredDisposition::Warn(
+        return Some(IgnoredDisposition::Warn(
             "field is accepted for compatibility but does not affect the current trojan outbound",
-        );
+        ));
     }
 
     match field {
-        "tcp_fast_open" => IgnoredDisposition::Ignore,
-        _ => IgnoredDisposition::Ignore,
+        "tcp_fast_open" => Some(IgnoredDisposition::Ignore(
+            "field is accepted for compatibility but ignored by the current trojan outbound",
+        )),
+        _ => None,
     }
 }
 
-fn classify_route_rule_ignored(path: &str) -> IgnoredDisposition {
-    let Some((_, field)) = indexed_field(path, "$.route.rules[") else {
-        return IgnoredDisposition::Ignore;
-    };
+fn classify_route_rule_ignored(path: &str) -> Option<IgnoredDisposition> {
+    let (_, field) = indexed_field(path, "$.route.rules[")?;
 
     match first_segment(field) {
         "domain" | "domain_suffix" | "ip_cidr" | "ip_is_private" | "ip_is_loopback"
-        | "ip_is_link_local" | "port" | "inbound" | "outbound" | "action" | "timeout" => {
-            IgnoredDisposition::Ignore
-        }
-        _ => IgnoredDisposition::Error(
+        | "ip_is_link_local" | "port" | "inbound" | "outbound" | "action" | "timeout" => None,
+        _ => Some(IgnoredDisposition::Error(
             "route rule field is not supported by the current route.rules subset",
-        ),
+        )),
     }
 }
 
@@ -1058,7 +1074,7 @@ mod tests {
     fn collects_warning_and_ignore_paths_with_explicit_policy() {
         let input = r#"
         {
-          "log": { "level": "debug", "timestamp": true, "noise": true },
+          "log": { "level": "debug", "timestamp": true, "output": "stdout", "noise": true },
           "dns": { "servers": ["223.5.5.5"] },
           "experimental": { "enabled": true },
           "inbounds": [
@@ -1109,19 +1125,28 @@ mod tests {
         assert!(report
             .diagnostics
             .ignored
-            .contains(&"$.experimental".to_string()));
+            .iter()
+            .all(|ignored| ignored.path != "$.experimental"));
         assert!(report
             .diagnostics
             .ignored
-            .contains(&"$.inbounds[0].tcp_fast_open".to_string()));
+            .iter()
+            .any(|ignored| ignored.path == "$.inbounds[0].tcp_fast_open"));
         assert!(report
             .diagnostics
             .ignored
-            .contains(&"$.outbounds[0].tcp_fast_open".to_string()));
+            .iter()
+            .any(|ignored| ignored.path == "$.outbounds[0].tcp_fast_open"));
         assert!(report
             .diagnostics
             .ignored
-            .contains(&"$.log.noise".to_string()));
+            .iter()
+            .any(|ignored| ignored.path == "$.log.output"));
+        assert!(report
+            .diagnostics
+            .ignored
+            .iter()
+            .all(|ignored| ignored.path != "$.log.noise"));
     }
 
     #[test]
@@ -1967,7 +1992,8 @@ mod tests {
 
         assert!(diagnostics
             .ignored
-            .contains(&"$.outbounds[1].tls.unknown_field".to_string()));
+            .iter()
+            .all(|ignored| ignored.path != "$.outbounds[1].tls.unknown_field"));
         assert!(diagnostics
             .warnings
             .iter()
