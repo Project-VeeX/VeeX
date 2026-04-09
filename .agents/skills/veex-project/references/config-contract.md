@@ -48,6 +48,7 @@ Current rule execution contract:
 - first match wins
 - within one rule, all populated matcher fields must match
 - `route.final` is lowered into the router's default final action
+- the runtime does not auto-insert recursion-prevention direct rules; operators must configure private/local or upstream-server direct exceptions explicitly in `route.rules`
 - rules that depend on sniffed domains must appear after the `action="sniff"` rule that enriches routing context
 
 ## Removed Compatibility Field

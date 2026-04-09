@@ -163,6 +163,7 @@ Route and compatibility notes:
 - regular route rules still use `outbound` as the final route action
 - private/local direct routing should be modeled as ordinary route rules with `outbound: "direct"`, not as a separate bypass action
 - `route.bypass` is no longer accepted; migrate old exact-match direct exceptions into ordinary `route.rules`
+- VeeX does not auto-insert recursion-prevention rules; private/local destinations, upstream proxy server exceptions, and similar direct-routing policies must be configured explicitly by the user
 - `route.rules[].action="sniff"` is a route upgrade action that extracts `RouteInput.domain` from TLS SNI or HTTP Host
 - `route.rules[].timeout` is only valid for `action="sniff"` and defaults to `300ms`
 - sniff is best effort: timeout, no-match, or unsupported input does not fail the session
@@ -245,5 +246,6 @@ Repository examples:
 - `examples/socks-trojan.json`
 - `examples/redirect-trojan.json`
 - `examples/tproxy-compat.json`
+- `examples/tproxy-sniff-rules.json`
 
 Use these as starting points for local validation and smoke checks.

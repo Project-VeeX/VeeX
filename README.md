@@ -11,6 +11,8 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments. It pr
 - interface: `veex run`, `veex check`, `veex version`
 - config: minimal sing-box-compatible JSON subset
 
+Transparent-proxy recursion prevention is explicit now: VeeX does not auto-insert private/local or upstream-server direct rules. If a deployment needs those exceptions, define them yourself in `route.rules`.
+
 ## Scope
 
 VeeX is aimed at OpenWrt, ImmortalWrt, and other Linux router-oriented environments where a small TCP execution plane is needed for `socks`, `redirect`, or `tproxy` traffic that must reach `direct` or `trojan` outbounds. It is intended for operators, integrators, and downstream projects that need a CLI proxy core rather than a full network platform.
@@ -42,6 +44,7 @@ Example configs:
 - `examples/socks-trojan.json`
 - `examples/redirect-trojan.json`
 - `examples/tproxy-compat.json`
+- `examples/tproxy-sniff-rules.json`
 
 For project structure, runtime model, and compatibility boundaries, see `PROJECT_GUIDE.md`.
 
