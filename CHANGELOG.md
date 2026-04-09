@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+
+- Split sniff timeout semantics out from connect and TLS handshake timeouts. `route.rules[].timeout` now applies only to bounded sniff reads and remains best effort.
+- Added route sniff as an ordered upgrade action for TLS SNI and HTTP `Host`, with stronger parser and replay handling for partial and non-matching inputs.
+- Unified router execution into a single ordered rule/action pipeline: upgrade actions enrich routing context and continue, final actions terminate routing, and `route.final` is lowered into the default final action.
+- Modeled private, loopback, and link-local direct routing as ordinary `route.rules` decisions inside the same pipeline.
+
 ## 0.5.0
 
 - Added minimal `route.rules` support for `domain`, `domain_suffix`, `ip_cidr`, `port`, and `inbound`, with `outbound` as the only action.
