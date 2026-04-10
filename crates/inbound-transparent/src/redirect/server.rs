@@ -5,7 +5,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Instant,
 };
 
 use tokio::{
@@ -15,41 +14,42 @@ use tokio::{
 use tracing::{error, info, warn};
 use veex_core::{
     parse_listen_addr, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher,
-    Inbound, Network, ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
+    Inbound, ProxyError, Result, ShutdownSignal,
 };
-use veex_infra_linux::get_tproxy_dst;
+use veex_infra_linux::get_original_dst as get_original_dst_socket;
 
-use crate::{error::Result as TProxyResult, listener::create_tproxy_listener};
+use crate::shared::session::{build_session_bootstrap, SessionBootstrap};
 
-type ResolveDestination = dyn Fn(&TcpStream) -> TProxyResult<Destination> + Send + Sync;
-type ListenerFactory = dyn Fn(SocketAddr) -> TProxyResult<TcpListener> + Send + Sync;
+use super::{error::RedirectError, listener::create_redirect_listener};
 
-pub struct TProxyInbound {
+type ResolveOriginalDst =
+    dyn Fn(&TcpStream) -> std::result::Result<Destination, RedirectError> + Send + Sync;
+type ListenerFactory =
+    dyn Fn(SocketAddr) -> std::result::Result<TcpListener, RedirectError> + Send + Sync;
+
+fn resolve_original_dst(stream: &TcpStream) -> std::result::Result<Destination, RedirectError> {
+    let destination = get_original_dst_socket(stream)?;
+    Ok(Destination::from_ip(destination.ip(), destination.port()))
+}
+
+pub struct RedirectInbound {
     tag: String,
     listen: String,
     listen_port: u16,
     next_session_id: AtomicU64,
-    resolver: Arc<ResolveDestination>,
+    resolver: Arc<ResolveOriginalDst>,
     listener_factory: Arc<ListenerFactory>,
     shutdown: Option<ShutdownSignal>,
 }
 
-struct SessionBootstrap {
-    id: u64,
-    ctx: SessionContext,
-    inbound_field: String,
-    peer_field: String,
-    destination_field: String,
-}
-
-impl TProxyInbound {
+impl RedirectInbound {
     pub fn new(tag: impl Into<String>, listen: impl Into<String>, listen_port: u16) -> Self {
         Self::new_internal(
             tag,
             listen,
             listen_port,
-            Arc::new(resolve_tproxy_destination),
-            Arc::new(create_tproxy_listener),
+            Arc::new(resolve_original_dst),
+            Arc::new(create_redirect_listener),
             None,
         )
     }
@@ -64,8 +64,8 @@ impl TProxyInbound {
             tag,
             listen,
             listen_port,
-            Arc::new(resolve_tproxy_destination),
-            Arc::new(create_tproxy_listener),
+            Arc::new(resolve_original_dst),
+            Arc::new(create_redirect_listener),
             Some(shutdown),
         )
     }
@@ -75,25 +75,17 @@ impl TProxyInbound {
         tag: impl Into<String>,
         listen: impl Into<String>,
         listen_port: u16,
-        resolver: Arc<ResolveDestination>,
+        resolver: Arc<ResolveOriginalDst>,
         listener_factory: Arc<ListenerFactory>,
-        shutdown: Option<ShutdownSignal>,
     ) -> Self {
-        Self::new_internal(
-            tag,
-            listen,
-            listen_port,
-            resolver,
-            listener_factory,
-            shutdown,
-        )
+        Self::new_internal(tag, listen, listen_port, resolver, listener_factory, None)
     }
 
     fn new_internal(
         tag: impl Into<String>,
         listen: impl Into<String>,
         listen_port: u16,
-        resolver: Arc<ResolveDestination>,
+        resolver: Arc<ResolveOriginalDst>,
         listener_factory: Arc<ListenerFactory>,
         shutdown: Option<ShutdownSignal>,
     ) -> Self {
@@ -123,17 +115,17 @@ impl TProxyInbound {
     pub fn validate(&self) -> Result<()> {
         if self.tag.trim().is_empty() {
             return Err(ProxyError::Config(
-                "tproxy inbound tag must not be empty".into(),
+                "redirect inbound tag must not be empty".into(),
             ));
         }
         if self.listen.trim().is_empty() {
             return Err(ProxyError::Config(
-                "tproxy inbound listen must not be empty".into(),
+                "redirect inbound listen must not be empty".into(),
             ));
         }
         if self.listen_port == 0 {
             return Err(ProxyError::Config(
-                "tproxy inbound listen_port must be within 1..=65535".into(),
+                "redirect inbound listen_port must be within 1..=65535".into(),
             ));
         }
         let _ = self.bind_addr()?;
@@ -143,7 +135,7 @@ impl TProxyInbound {
     fn bind_addr(&self) -> Result<SocketAddr> {
         parse_listen_addr(&self.listen, self.listen_port).map_err(|err| {
             ProxyError::Config(format!(
-                "tproxy inbound listen must be a valid socket address: {err}"
+                "redirect inbound listen must be a valid socket address: {err}"
             ))
         })
     }
@@ -154,30 +146,7 @@ impl TProxyInbound {
 
     fn bootstrap_session(&self, peer: SocketAddr, destination: Destination) -> SessionBootstrap {
         let session_id = self.next_session_id();
-        let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
-        let peer_field = peer.to_string();
-        let peer_field = sanitize_field(&peer_field).into_owned();
-        let destination_field = destination.to_string();
-        let destination_field = sanitize_field(&destination_field).into_owned();
-        let ctx = SessionContext::new(
-            SessionMeta {
-                id: session_id,
-                network: Network::Tcp,
-                inbound_tag: self.tag.clone(),
-                peer,
-                destination,
-                start: Instant::now(),
-            },
-            Vec::new(),
-        );
-
-        SessionBootstrap {
-            id: session_id,
-            ctx,
-            inbound_field,
-            peer_field,
-            destination_field,
-        }
+        build_session_bootstrap(session_id, self.tag.as_str(), peer, destination)
     }
 
     async fn handle_connection(
@@ -186,23 +155,15 @@ impl TProxyInbound {
         stream: TcpStream,
         peer: SocketAddr,
     ) -> Result<()> {
-        let local_addr = stream.local_addr().ok();
-        let socket_family = local_addr
-            .map(|addr| if addr.is_ipv4() { "ipv4" } else { "ipv6" })
-            .unwrap_or("unknown");
-        let listen_field = sanitize_field(self.listen.as_str()).into_owned();
         let destination = match (self.resolver)(&stream) {
             Ok(destination) => destination,
             Err(err) => {
                 warn!(
                     event = "destination_resolve_failed",
                     inbound = %sanitize_field(self.tag.as_str()),
-                    listen = %listen_field,
                     peer = %sanitize_field(&peer.to_string()),
-                    local_addr = ?local_addr,
-                    socket_family = %socket_family,
                     error = %err,
-                    "tproxy destination lookup failed"
+                    "redirect original destination lookup failed"
                 );
                 return Err(err.into());
             }
@@ -212,13 +173,10 @@ impl TProxyInbound {
             event = "session_start",
             session_id = session.id,
             inbound = %session.inbound_field,
-            listen = %listen_field,
             peer = %session.peer_field,
-            local_addr = ?local_addr,
             destination = %session.destination_field,
-            socket_family = %socket_family,
             network = %"tcp",
-            "tproxy session start"
+            "redirect session start"
         );
 
         let stream: BoxedAsyncStream = Box::new(stream);
@@ -228,14 +186,11 @@ impl TProxyInbound {
                 event = "session_failed",
                 session_id = session.id,
                 inbound = %session.inbound_field,
-                listen = %listen_field,
                 peer = %session.peer_field,
-                local_addr = ?local_addr,
                 destination = %session.destination_field,
-                socket_family = %socket_family,
                 error_kind = ?err.kind(),
                 error = %err,
-                "tproxy session failed"
+                "redirect session failed"
             );
         }
         result
@@ -249,7 +204,7 @@ impl TProxyInbound {
     }
 }
 
-impl Inbound for TProxyInbound {
+impl Inbound for RedirectInbound {
     fn tag(&self) -> &str {
         &self.tag
     }
@@ -286,7 +241,7 @@ impl Inbound for TProxyInbound {
                                     peer = %peer_field,
                                     error_kind = ?err.kind(),
                                     error = %err,
-                                    "tproxy inbound connection failed"
+                                    "redirect inbound connection failed"
                                 );
                             }
                         });
@@ -298,10 +253,10 @@ impl Inbound for TProxyInbound {
                                 event = "task_join_failed",
                                 inbound = %inbound_field,
                                 error = %err,
-                                "tproxy connection task join failed"
+                                "redirect connection task join failed"
                             );
                             return Err(ProxyError::protocol_ctx(
-                                "tproxy inbound connection task join failed",
+                                "redirect inbound connection task join failed",
                                 err,
                             ));
                         }
@@ -314,11 +269,6 @@ impl Inbound for TProxyInbound {
     }
 }
 
-fn resolve_tproxy_destination(stream: &TcpStream) -> TProxyResult<Destination> {
-    let destination = get_tproxy_dst(stream)?;
-    Ok(Destination::from_ip(destination.ip(), destination.port()))
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -328,9 +278,9 @@ mod tests {
     };
 
     use tokio::{net::TcpStream, sync::oneshot};
-    use veex_core::{shutdown_channel, BoxFuture, Destination, Dispatcher, Host, Inbound};
+    use veex_core::{BoxFuture, Destination, Dispatcher, Host, Inbound};
 
-    use super::{ListenerFactory, ResolveDestination, TProxyInbound};
+    use super::{resolve_original_dst, ListenerFactory, RedirectError, RedirectInbound};
 
     struct RecordingDispatcher {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,
@@ -354,23 +304,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tproxy_inbound_forwards_resolved_destination_to_dispatcher() {
+    async fn redirect_inbound_forwards_resolved_destination_to_dispatcher() {
         let listen_addr = reserve_local_port().await;
         let expected = Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5))), 443);
         let resolver_destination = expected.clone();
-        let resolver: Arc<ResolveDestination> = Arc::new(move |_| Ok(resolver_destination.clone()));
         let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
             let listener = std::net::TcpListener::bind(addr)?;
             listener.set_nonblocking(true)?;
             Ok(tokio::net::TcpListener::from_std(listener)?)
         });
-        let inbound = Arc::new(TProxyInbound::new_with_hooks(
-            "tproxy-in",
+        let inbound = Arc::new(RedirectInbound::new_with_hooks(
+            "redirect-in",
             "127.0.0.1",
             listen_addr.port(),
-            resolver,
+            Arc::new(move |_| Ok(resolver_destination.clone())),
             listener_factory,
-            None,
         ));
         let (tx, rx) = oneshot::channel();
         let dispatcher: Arc<dyn Dispatcher> = Arc::new(RecordingDispatcher {
@@ -390,56 +338,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tproxy_inbound_stops_after_shutdown() {
-        let listen_addr = reserve_local_port().await;
-        let resolver: Arc<ResolveDestination> =
-            Arc::new(|_| Ok(Destination::from_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), 443)));
-        let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
-            let listener = std::net::TcpListener::bind(addr)?;
-            listener.set_nonblocking(true)?;
-            Ok(tokio::net::TcpListener::from_std(listener)?)
-        });
-        let (trigger, shutdown) = shutdown_channel();
-        let inbound = Arc::new(TProxyInbound::new_with_hooks(
-            "tproxy-in",
-            "127.0.0.1",
-            listen_addr.port(),
-            resolver,
-            listener_factory,
-            Some(shutdown),
-        ));
-        let dispatcher: Arc<dyn Dispatcher> = Arc::new(RecordingDispatcher {
-            tx: Mutex::new(None),
-        });
-
-        let serve_task = tokio::spawn(Arc::clone(&inbound).serve(dispatcher));
-        trigger.trigger();
-
-        tokio::time::timeout(Duration::from_secs(1), serve_task)
+    async fn original_dst_on_plain_socket_fails_or_returns_listener_addr() {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
-            .expect("serve task should stop after shutdown")
-            .expect("serve task should not panic")
-            .expect("serve task should succeed");
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let expected_destination = Destination::from_ip(addr.ip(), addr.port());
+
+        let accept_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept should succeed");
+            resolve_original_dst(&stream)
+        });
+
+        let _client = TcpStream::connect(addr)
+            .await
+            .expect("client should connect");
+        let result = accept_task.await.expect("accept task should join");
+
+        match result {
+            Err(RedirectError::GetSockOpt { .. })
+            | Err(RedirectError::UnsupportedAddressFamily(_)) => {}
+            Err(other) => panic!("unexpected original dst error: {other}"),
+            Ok(destination) => assert_eq!(
+                destination, expected_destination,
+                "plain socket original destination should resolve to the current listener address",
+            ),
+        }
     }
 
     #[test]
-    fn parses_unspecified_ipv6_listen_addr() {
-        let inbound = TProxyInbound::new("tproxy-in", "::", 1041);
+    fn redirect_inbound_accepts_unspecified_ipv6_listen_addr() {
+        let inbound = RedirectInbound::new("redirect-in", "::", 1041);
         assert_eq!(
             inbound
                 .bind_addr()
-                .expect("unspecified ipv6 listen should parse"),
-            SocketAddr::from((Ipv6Addr::UNSPECIFIED, 1041))
-        );
-    }
-
-    #[test]
-    fn parses_bracketed_ipv6_listen_addr() {
-        let inbound = TProxyInbound::new("tproxy-in", "[::]", 1041);
-        assert_eq!(
-            inbound
-                .bind_addr()
-                .expect("bracketed ipv6 listen should parse"),
+                .expect("redirect ipv6 listen should parse"),
             SocketAddr::from((Ipv6Addr::UNSPECIFIED, 1041))
         );
     }

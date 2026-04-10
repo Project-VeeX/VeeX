@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use veex_config::ProxyConfig;
 use veex_core::{Inbound, ProxyError, ShutdownSignal};
-use veex_inbound_redirect::RedirectInbound;
 use veex_inbound_socks::SocksInbound;
-use veex_inbound_tproxy::TProxyInbound;
+use veex_inbound_transparent::{RedirectInbound, TProxyInbound};
 
 use crate::factory::{lower_inbound, LoweredInbound};
 

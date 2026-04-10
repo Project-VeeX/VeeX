@@ -1,8 +1,8 @@
 //! Linux tproxy inbound support built on top of `veex-infra-linux`.
 
 pub mod error;
-mod inbound;
 mod listener;
+mod server;
 
 pub use error::TProxyError;
-pub use inbound::TProxyInbound;
+pub use server::TProxyInbound;

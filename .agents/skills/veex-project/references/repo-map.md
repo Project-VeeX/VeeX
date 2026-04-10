@@ -7,9 +7,8 @@
   - `crates/config`
   - `crates/core`
   - `crates/infra-linux`
-  - `crates/inbound-redirect`
+  - `crates/inbound-transparent`
   - `crates/inbound-socks`
-  - `crates/inbound-tproxy`
   - `crates/observability`
   - `crates/outbound-direct`
   - `crates/outbound-trojan`
@@ -39,14 +38,12 @@
   - Linux transparent-socket capabilities
   - original-destination and transparent helper functions
   - shared system-facing functionality for transparent inbounds
+- `crates/inbound-transparent`
+  - Linux transparent inbound lifecycle
+  - `redirect` original-destination recovery via shared Linux infrastructure
+  - TCP-only `tproxy` inbound and transparent listener / `SessionContext` construction
 - `crates/inbound-socks`
   - SOCKS5 CONNECT inbound
-- `crates/inbound-redirect`
-  - REDIRECT inbound lifecycle
-  - original-destination recovery via shared Linux infrastructure
-- `crates/inbound-tproxy`
-  - TCP-only TPROXY inbound
-  - transparent listener and `SessionContext` construction
 - `crates/outbound-direct`
   - direct outbound
   - Linux `SO_MARK` path and no-loop egress behavior
@@ -77,8 +74,7 @@
   - `docs/architecture.md` when the public boundary changes
 - Transparent proxy, original destination, or dual-stack issues:
   - `crates/infra-linux`
-  - `crates/inbound-redirect`
-  - `crates/inbound-tproxy`
+  - `crates/inbound-transparent`
   - `references/internal-architecture.md`
   - `references/validation-contract.md`
 - Direct no-loop and `routing_mark` behavior:

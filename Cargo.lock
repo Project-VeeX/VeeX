@@ -792,9 +792,8 @@ dependencies = [
  "tracing-subscriber",
  "veex-config",
  "veex-core",
- "veex-inbound-redirect",
  "veex-inbound-socks",
- "veex-inbound-tproxy",
+ "veex-inbound-transparent",
  "veex-observability",
  "veex-outbound-direct",
  "veex-outbound-trojan",
@@ -829,17 +828,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "veex-inbound-redirect"
-version = "0.5.2"
-dependencies = [
- "tokio",
- "tracing",
- "veex-core",
- "veex-infra-linux",
- "veex-observability",
-]
-
-[[package]]
 name = "veex-inbound-socks"
 version = "0.5.2"
 dependencies = [
@@ -850,14 +838,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "veex-inbound-tproxy"
+name = "veex-inbound-transparent"
 version = "0.5.2"
 dependencies = [
  "tokio",
  "tracing",
  "veex-core",
  "veex-infra-linux",
- "veex-observability",
 ]
 
 [[package]]
