@@ -15,8 +15,8 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 use veex_core::{
-    format_listen_addr, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher,
-    Inbound, Network, ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
+    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, Listen, Network,
+    ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
 };
 
 use crate::{
@@ -30,8 +30,7 @@ use crate::{
 #[derive(Debug)]
 pub struct SocksInbound {
     tag: String,
-    listen: String,
-    listen_port: u16,
+    listen: Listen,
     next_session_id: AtomicU64,
     shutdown: Option<ShutdownSignal>,
 }
@@ -45,29 +44,26 @@ struct SessionBootstrap {
 }
 
 impl SocksInbound {
-    pub fn new(tag: impl Into<String>, listen: impl Into<String>, listen_port: u16) -> Self {
-        Self::new_internal(tag, listen, listen_port, None)
+    pub fn new(tag: impl Into<String>, listen: Listen) -> Self {
+        Self::new_internal(tag, listen, None)
     }
 
     pub fn with_shutdown_signal(
         tag: impl Into<String>,
-        listen: impl Into<String>,
-        listen_port: u16,
+        listen: Listen,
         shutdown: ShutdownSignal,
     ) -> Self {
-        Self::new_internal(tag, listen, listen_port, Some(shutdown))
+        Self::new_internal(tag, listen, Some(shutdown))
     }
 
     fn new_internal(
         tag: impl Into<String>,
-        listen: impl Into<String>,
-        listen_port: u16,
+        listen: Listen,
         shutdown: Option<ShutdownSignal>,
     ) -> Self {
         Self {
             tag: tag.into(),
-            listen: listen.into(),
-            listen_port,
+            listen,
             next_session_id: AtomicU64::new(1),
             shutdown,
         }
@@ -78,11 +74,11 @@ impl SocksInbound {
     }
 
     pub fn listen(&self) -> &str {
-        &self.listen
+        self.listen.listen()
     }
 
     pub fn listen_port(&self) -> u16 {
-        self.listen_port
+        self.listen.listen_port()
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -91,12 +87,12 @@ impl SocksInbound {
                 "socks inbound tag must not be empty".into(),
             ));
         }
-        if self.listen.trim().is_empty() {
+        if self.listen.listen().trim().is_empty() {
             return Err(ProxyError::Config(
                 "socks inbound listen must not be empty".into(),
             ));
         }
-        if self.listen_port == 0 {
+        if self.listen.listen_port() == 0 {
             return Err(ProxyError::Config(
                 "socks inbound listen_port must be within 1..=65535".into(),
             ));
@@ -105,7 +101,7 @@ impl SocksInbound {
     }
 
     fn bind_addr(&self) -> String {
-        format_listen_addr(&self.listen, self.listen_port)
+        self.listen.format_addr()
     }
 
     fn next_session_id(&self) -> u64 {

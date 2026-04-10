@@ -24,6 +24,6 @@ pub use shutdown::{shutdown_channel, ShutdownSignal, ShutdownTrigger};
 pub use sniff::{sniff_stream, PrefixedStream, SniffOutcome, SniffedProtocol};
 pub use traits::{BoxFuture, Dispatcher, Inbound, Outbound};
 pub use types::{
-    AsyncStream, BoxedAsyncStream, Destination, Host, Network, RouteReason, SessionContext,
+    AsyncStream, BoxedAsyncStream, Destination, Host, Listen, Network, RouteReason, SessionContext,
     SessionMeta, SessionRoute, SessionState,
 };

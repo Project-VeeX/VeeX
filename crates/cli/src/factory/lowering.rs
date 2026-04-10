@@ -3,15 +3,14 @@ use veex_config::{
     RouteRuleConfig, RouteUpgradeActionConfig, TrojanTlsConfig,
 };
 use veex_core::{
-    RouteAction, RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, SniffAction,
+    Listen, RouteAction, RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, SniffAction,
 };
 use veex_transport::TlsClientOptions;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LoweredListenInbound {
     pub(crate) tag: String,
-    pub(crate) listen: String,
-    pub(crate) listen_port: u16,
+    pub(crate) listen: Listen,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -54,18 +53,15 @@ pub(crate) fn lower_inbound(inbound: &InboundConfig) -> LoweredInbound {
     match inbound {
         InboundConfig::Socks(config) => LoweredInbound::Socks(LoweredListenInbound {
             tag: config.tag.clone(),
-            listen: config.listen.clone(),
-            listen_port: config.listen_port,
+            listen: Listen::new(config.listen.clone(), config.listen_port),
         }),
         InboundConfig::Redirect(config) => LoweredInbound::Redirect(LoweredListenInbound {
             tag: config.tag.clone(),
-            listen: config.listen.clone(),
-            listen_port: config.listen_port,
+            listen: Listen::new(config.listen.clone(), config.listen_port),
         }),
         InboundConfig::TProxy(config) => LoweredInbound::TProxy(LoweredListenInbound {
             tag: config.tag.clone(),
-            listen: config.listen.clone(),
-            listen_port: config.listen_port,
+            listen: Listen::new(config.listen.clone(), config.listen_port),
         }),
     }
 }

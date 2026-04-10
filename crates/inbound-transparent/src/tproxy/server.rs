@@ -13,8 +13,8 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 use veex_core::{
-    parse_listen_addr, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher,
-    Inbound, ProxyError, Result, ShutdownSignal,
+    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, Listen,
+    ProxyError, Result, ShutdownSignal,
 };
 use veex_infra_linux::get_tproxy_dst;
 
@@ -27,8 +27,7 @@ type ListenerFactory = dyn Fn(SocketAddr) -> TProxyResult<TcpListener> + Send + 
 
 pub struct TProxyInbound {
     tag: String,
-    listen: String,
-    listen_port: u16,
+    listen: Listen,
     next_session_id: AtomicU64,
     resolver: Arc<ResolveDestination>,
     listener_factory: Arc<ListenerFactory>,
@@ -36,11 +35,10 @@ pub struct TProxyInbound {
 }
 
 impl TProxyInbound {
-    pub fn new(tag: impl Into<String>, listen: impl Into<String>, listen_port: u16) -> Self {
+    pub fn new(tag: impl Into<String>, listen: Listen) -> Self {
         Self::new_internal(
             tag,
             listen,
-            listen_port,
             Arc::new(resolve_tproxy_destination),
             Arc::new(create_tproxy_listener),
             None,
@@ -49,14 +47,12 @@ impl TProxyInbound {
 
     pub fn with_shutdown_signal(
         tag: impl Into<String>,
-        listen: impl Into<String>,
-        listen_port: u16,
+        listen: Listen,
         shutdown: ShutdownSignal,
     ) -> Self {
         Self::new_internal(
             tag,
             listen,
-            listen_port,
             Arc::new(resolve_tproxy_destination),
             Arc::new(create_tproxy_listener),
             Some(shutdown),
@@ -66,34 +62,24 @@ impl TProxyInbound {
     #[cfg(test)]
     fn new_with_hooks(
         tag: impl Into<String>,
-        listen: impl Into<String>,
-        listen_port: u16,
+        listen: Listen,
         resolver: Arc<ResolveDestination>,
         listener_factory: Arc<ListenerFactory>,
         shutdown: Option<ShutdownSignal>,
     ) -> Self {
-        Self::new_internal(
-            tag,
-            listen,
-            listen_port,
-            resolver,
-            listener_factory,
-            shutdown,
-        )
+        Self::new_internal(tag, listen, resolver, listener_factory, shutdown)
     }
 
     fn new_internal(
         tag: impl Into<String>,
-        listen: impl Into<String>,
-        listen_port: u16,
+        listen: Listen,
         resolver: Arc<ResolveDestination>,
         listener_factory: Arc<ListenerFactory>,
         shutdown: Option<ShutdownSignal>,
     ) -> Self {
         Self {
             tag: tag.into(),
-            listen: listen.into(),
-            listen_port,
+            listen,
             next_session_id: AtomicU64::new(1),
             resolver,
             listener_factory,
@@ -106,11 +92,11 @@ impl TProxyInbound {
     }
 
     pub fn listen(&self) -> &str {
-        &self.listen
+        self.listen.listen()
     }
 
     pub fn listen_port(&self) -> u16 {
-        self.listen_port
+        self.listen.listen_port()
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -119,12 +105,12 @@ impl TProxyInbound {
                 "tproxy inbound tag must not be empty".into(),
             ));
         }
-        if self.listen.trim().is_empty() {
+        if self.listen.listen().trim().is_empty() {
             return Err(ProxyError::Config(
                 "tproxy inbound listen must not be empty".into(),
             ));
         }
-        if self.listen_port == 0 {
+        if self.listen.listen_port() == 0 {
             return Err(ProxyError::Config(
                 "tproxy inbound listen_port must be within 1..=65535".into(),
             ));
@@ -134,7 +120,7 @@ impl TProxyInbound {
     }
 
     fn bind_addr(&self) -> Result<SocketAddr> {
-        parse_listen_addr(&self.listen, self.listen_port).map_err(|err| {
+        self.listen.parse_addr().map_err(|err| {
             ProxyError::Config(format!(
                 "tproxy inbound listen must be a valid socket address: {err}"
             ))
@@ -160,7 +146,7 @@ impl TProxyInbound {
         let socket_family = local_addr
             .map(|addr| if addr.is_ipv4() { "ipv4" } else { "ipv6" })
             .unwrap_or("unknown");
-        let listen_field = sanitize_field(self.listen.as_str()).into_owned();
+        let listen_field = sanitize_field(self.listen.listen()).into_owned();
         let destination = match (self.resolver)(&stream) {
             Ok(destination) => destination,
             Err(err) => {
@@ -298,7 +284,7 @@ mod tests {
     };
 
     use tokio::{net::TcpStream, sync::oneshot};
-    use veex_core::{shutdown_channel, BoxFuture, Destination, Dispatcher, Host, Inbound};
+    use veex_core::{shutdown_channel, BoxFuture, Destination, Dispatcher, Host, Inbound, Listen};
 
     use super::{ListenerFactory, ResolveDestination, TProxyInbound};
 
@@ -336,8 +322,7 @@ mod tests {
         });
         let inbound = Arc::new(TProxyInbound::new_with_hooks(
             "tproxy-in",
-            "127.0.0.1",
-            listen_addr.port(),
+            Listen::new("127.0.0.1", listen_addr.port()),
             resolver,
             listener_factory,
             None,
@@ -372,8 +357,7 @@ mod tests {
         let (trigger, shutdown) = shutdown_channel();
         let inbound = Arc::new(TProxyInbound::new_with_hooks(
             "tproxy-in",
-            "127.0.0.1",
-            listen_addr.port(),
+            Listen::new("127.0.0.1", listen_addr.port()),
             resolver,
             listener_factory,
             Some(shutdown),
@@ -394,7 +378,7 @@ mod tests {
 
     #[test]
     fn parses_unspecified_ipv6_listen_addr() {
-        let inbound = TProxyInbound::new("tproxy-in", "::", 1041);
+        let inbound = TProxyInbound::new("tproxy-in", Listen::new("::", 1041));
         assert_eq!(
             inbound
                 .bind_addr()
@@ -405,7 +389,7 @@ mod tests {
 
     #[test]
     fn parses_bracketed_ipv6_listen_addr() {
-        let inbound = TProxyInbound::new("tproxy-in", "[::]", 1041);
+        let inbound = TProxyInbound::new("tproxy-in", Listen::new("[::]", 1041));
         assert_eq!(
             inbound
                 .bind_addr()

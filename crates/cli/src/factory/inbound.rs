@@ -19,7 +19,6 @@ pub fn build_inbounds(
                 let instance = SocksInbound::with_shutdown_signal(
                     socks.tag,
                     socks.listen,
-                    socks.listen_port,
                     shutdown_signal.clone(),
                 );
                 instance.validate()?;
@@ -29,7 +28,6 @@ pub fn build_inbounds(
                 let instance = RedirectInbound::with_shutdown_signal(
                     redirect.tag,
                     redirect.listen,
-                    redirect.listen_port,
                     shutdown_signal.clone(),
                 );
                 instance.validate()?;
@@ -39,7 +37,6 @@ pub fn build_inbounds(
                 let instance = TProxyInbound::with_shutdown_signal(
                     tproxy.tag,
                     tproxy.listen,
-                    tproxy.listen_port,
                     shutdown_signal.clone(),
                 );
                 instance.validate()?;
