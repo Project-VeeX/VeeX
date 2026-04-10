@@ -6,7 +6,7 @@ use veex_core::{
     shutdown_channel, Dispatcher, Inbound, Outbound, ProxyError, ShutdownTrigger, SimpleDispatcher,
 };
 
-use crate::factory::{build_inbounds, build_outbounds, build_router};
+use crate::factory::{build_inbounds, build_outbounds, build_router, RuntimeServices};
 
 pub struct RuntimeState {
     pub dispatcher: Arc<dyn Dispatcher>,
@@ -34,7 +34,10 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
     }
 
     let (shutdown, shutdown_signal) = shutdown_channel();
-    let outbounds = build_outbounds(config).map_err(BootstrapError::OutboundBuild)?;
+    // Bootstrap owns runtime service wiring so shared dependencies stay out of
+    // core traits and can evolve without altering runtime behavior.
+    let services = RuntimeServices::default();
+    let outbounds = build_outbounds(config, &services).map_err(BootstrapError::OutboundBuild)?;
     // Bootstrap owns runtime factory completeness checks after config parsing and
     // validation have already accepted the static config surface.
     ensure_required_outbounds_built(config, &outbounds)?;

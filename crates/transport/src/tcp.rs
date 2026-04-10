@@ -24,6 +24,9 @@ pub struct ConnectTraceContext {
 
 pub type TcpAttemptFuture = Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send + 'static>>;
 pub type TcpAttemptConnector = dyn Fn(SocketAddr) -> TcpAttemptFuture + Send + Sync;
+pub type HostResolveFuture =
+    Pin<Box<dyn Future<Output = Result<Vec<SocketAddr>>> + Send + 'static>>;
+pub type HostResolver = dyn Fn(Host, u16) -> HostResolveFuture + Send + Sync;
 
 #[derive(Clone, Default)]
 pub struct TcpConnectOptions {
@@ -44,6 +47,16 @@ impl fmt::Debug for TcpConnectOptions {
 
 pub async fn connect_host(host: &Host, port: u16, options: TcpConnectOptions) -> Result<TcpStream> {
     let addresses = resolve_host(host, port).await?;
+    connect_resolved_addresses(&host.to_string(), port, addresses, options).await
+}
+
+pub async fn connect_host_with_resolver(
+    host: &Host,
+    port: u16,
+    resolver: &HostResolver,
+    options: TcpConnectOptions,
+) -> Result<TcpStream> {
+    let addresses = resolver(host.clone(), port).await?;
     connect_resolved_addresses(&host.to_string(), port, addresses, options).await
 }
 
@@ -116,7 +129,7 @@ async fn connect_addresses(
         }))
 }
 
-async fn resolve_host(host: &Host, port: u16) -> Result<Vec<SocketAddr>> {
+pub async fn resolve_host(host: &Host, port: u16) -> Result<Vec<SocketAddr>> {
     match host {
         Host::Ip(ip) => Ok(vec![SocketAddr::new(*ip, port)]),
         Host::Domain(domain) => {

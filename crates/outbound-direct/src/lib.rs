@@ -10,7 +10,10 @@ use veex_core::{
     traits::{BoxFuture, Outbound},
     types::{BoxedAsyncStream, SessionContext},
 };
-use veex_transport::{connect_host, ConnectTraceContext, TcpAttemptConnector, TcpConnectOptions};
+use veex_transport::{
+    connect_host_with_resolver, resolve_host, ConnectTraceContext, HostResolver,
+    TcpAttemptConnector, TcpConnectOptions,
+};
 
 type MarkedConnectorFuture = Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send + 'static>>;
 type MarkedConnector = dyn Fn(SocketAddr, u32) -> MarkedConnectorFuture + Send + Sync;
@@ -20,6 +23,7 @@ pub struct DirectOutbound {
     tag: String,
     connect_timeout: Duration,
     routing_mark: Option<u32>,
+    resolver: Arc<HostResolver>,
     marked_connector: Arc<MarkedConnector>,
 }
 
@@ -39,6 +43,15 @@ impl DirectOutbound {
         routing_mark: Option<u32>,
         connect_timeout: Duration,
     ) -> Result<Self> {
+        Self::new_with_resolver(tag, routing_mark, connect_timeout, system_host_resolver())
+    }
+
+    pub fn new_with_resolver(
+        tag: impl Into<String>,
+        routing_mark: Option<u32>,
+        connect_timeout: Duration,
+        resolver: Arc<HostResolver>,
+    ) -> Result<Self> {
         if routing_mark.is_some() && !cfg!(target_os = "linux") {
             return Err(ProxyError::Config(
                 "direct outbound routing_mark is only supported on linux".into(),
@@ -49,6 +62,7 @@ impl DirectOutbound {
             tag: tag.into(),
             connect_timeout,
             routing_mark,
+            resolver,
             marked_connector: Arc::new(|address, routing_mark| {
                 Box::pin(connect_marked_socket(address, routing_mark))
             }),
@@ -71,6 +85,7 @@ impl Outbound for DirectOutbound {
         let outbound = self.tag.clone();
         let connect_timeout = self.connect_timeout;
         let routing_mark = self.routing_mark;
+        let resolver = Arc::clone(&self.resolver);
         let marked_connector = Arc::clone(&self.marked_connector);
 
         Box::pin(async move {
@@ -80,9 +95,10 @@ impl Outbound for DirectOutbound {
                     as Arc<TcpAttemptConnector>
             });
 
-            let stream = connect_host(
+            let stream = connect_host_with_resolver(
                 &destination.host,
                 destination.port,
+                resolver.as_ref(),
                 TcpConnectOptions {
                     timeout: Some(connect_timeout),
                     trace: Some(ConnectTraceContext {
@@ -98,6 +114,10 @@ impl Outbound for DirectOutbound {
             Ok(Box::new(stream) as BoxedAsyncStream)
         })
     }
+}
+
+fn system_host_resolver() -> Arc<HostResolver> {
+    Arc::new(|host, port| Box::pin(async move { resolve_host(&host, port).await }))
 }
 
 async fn connect_marked_socket(address: SocketAddr, routing_mark: u32) -> io::Result<TcpStream> {
@@ -225,7 +245,7 @@ mod tests {
     };
     use veex_core::{Destination, Host, Network, Outbound, SessionContext, SessionMeta};
 
-    use super::{DirectOutbound, MarkedConnectorFuture};
+    use super::{system_host_resolver, DirectOutbound, MarkedConnectorFuture};
 
     #[derive(Clone, Debug, Default, Eq, PartialEq)]
     struct CapturedEvent {
@@ -354,6 +374,7 @@ mod tests {
             tag: "direct".into(),
             connect_timeout: Duration::from_secs(1),
             routing_mark: Some(9),
+            resolver: system_host_resolver(),
             marked_connector: connector,
         };
         let ctx = SessionContext::new(
@@ -420,6 +441,7 @@ mod tests {
             tag: "direct".into(),
             connect_timeout: Duration::from_secs(1),
             routing_mark: Some(255),
+            resolver: system_host_resolver(),
             marked_connector: connector,
         };
         let ctx = SessionContext::new(
@@ -472,6 +494,7 @@ mod tests {
             tag: "direct".into(),
             connect_timeout: Duration::from_millis(50),
             routing_mark: Some(7),
+            resolver: system_host_resolver(),
             marked_connector: connector,
         };
         let ctx = SessionContext::new(

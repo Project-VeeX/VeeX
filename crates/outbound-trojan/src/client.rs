@@ -44,6 +44,32 @@ impl TrojanOutbound {
         connect_timeout: Duration,
         tls: TlsClientOptions,
     ) -> Self {
+        Self::new_with_connector(
+            tag,
+            server,
+            server_port,
+            password,
+            connect_timeout,
+            tls,
+            |host, port, options| Box::pin(async move { connect_host(&host, port, options).await }),
+        )
+    }
+
+    pub fn new_with_connector<F>(
+        tag: impl Into<String>,
+        server: impl Into<String>,
+        server_port: u16,
+        password: impl Into<String>,
+        connect_timeout: Duration,
+        tls: TlsClientOptions,
+        connector: F,
+    ) -> Self
+    where
+        F: Fn(Host, u16, TcpConnectOptions) -> BoxFuture<'static, TcpStream>
+            + Send
+            + Sync
+            + 'static,
+    {
         let server = parse_host(&server.into());
         Self {
             tag: tag.into(),
@@ -52,9 +78,7 @@ impl TrojanOutbound {
             password: password.into(),
             tls,
             connect_timeout,
-            connector: Arc::new(|host, port, options| {
-                Box::pin(async move { connect_host(&host, port, options).await })
-            }),
+            connector: Arc::new(connector),
         }
     }
 

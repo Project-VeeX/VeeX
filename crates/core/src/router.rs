@@ -139,6 +139,37 @@ impl<'a> RouteInput<'a> {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct RouteRuntimeContext {
+    domain: Option<String>,
+}
+
+impl RouteRuntimeContext {
+    fn from_destination(destination: &Destination) -> Self {
+        Self {
+            domain: destination.host.as_domain().map(str::to_string),
+        }
+    }
+
+    fn input<'a>(
+        &'a self,
+        destination: &'a Destination,
+        inbound_tag: Option<&'a str>,
+    ) -> RouteInput<'a> {
+        RouteInput::new(destination, inbound_tag, self.domain())
+    }
+
+    fn domain(&self) -> Option<&str> {
+        self.domain.as_deref()
+    }
+
+    fn apply_sniffed_domain(&mut self, domain: Option<String>) {
+        if let Some(domain) = domain {
+            self.domain = Some(domain);
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CompiledRouteRule {
     rule_index: usize,
@@ -199,7 +230,10 @@ impl CompiledRouteRule {
         Ok(())
     }
 
-    fn matches_exact_domain(&self, normalized_domain: Option<&str>) -> Result<(), RouteRuleMissReason> {
+    fn matches_exact_domain(
+        &self,
+        normalized_domain: Option<&str>,
+    ) -> Result<(), RouteRuleMissReason> {
         if self.domain.is_empty() {
             return Ok(());
         }
@@ -367,7 +401,8 @@ impl Router {
 
     pub fn with_rule(mut self, rule: RouteRule) -> Self {
         let rule_index = self.rules.len();
-        self.rules.push(CompiledRouteRule::compile(rule, rule_index));
+        self.rules
+            .push(CompiledRouteRule::compile(rule, rule_index));
         self
     }
 
@@ -416,10 +451,10 @@ impl Router {
         let mut stream = inbound_stream;
         let inbound_tag = Some(ctx.meta.inbound_tag.as_str());
         let destination = &ctx.meta.destination;
-        let mut domain = ctx.meta.destination.host.as_domain().map(str::to_string);
+        let mut route_context = RouteRuntimeContext::from_destination(destination);
 
         for rule in &self.rules {
-            let input = RouteInput::new(destination, inbound_tag, domain.as_deref());
+            let input = route_context.input(destination, inbound_tag);
             let normalized_domain = input.domain.map(normalize_domain_str);
             log_route_rule_eval(ctx, rule, input.domain);
 
@@ -429,18 +464,16 @@ impl Router {
 
                 match &rule.action {
                     RouteAction::Upgrade(RouteUpgradeAction::Sniff(action)) => {
-                        let domain_before = domain.clone();
+                        let domain_before = route_context.domain().map(str::to_string);
                         log_sniff_start(ctx, action.timeout);
                         let sniff = sniff_stream_internal(stream, action.timeout).await;
                         log_sniff_result(ctx, action.timeout, &sniff);
-                        if let Some(sniffed_domain) = sniff.outcome.domain.clone() {
-                            domain = Some(sniffed_domain);
-                        }
+                        route_context.apply_sniffed_domain(sniff.outcome.domain.clone());
                         log_route_upgrade_applied(
                             ctx,
                             rule,
                             domain_before.as_deref(),
-                            domain.as_deref(),
+                            route_context.domain(),
                         );
                         stream = Box::new(sniff.outcome.stream);
                     }
@@ -458,11 +491,8 @@ impl Router {
         }
 
         let decision = self.default_final_decision();
-        log_route_default_final_selected(ctx, domain.as_deref(), &decision.outbound_tag);
-        RouteExecution {
-            stream,
-            decision,
-        }
+        log_route_default_final_selected(ctx, route_context.domain(), &decision.outbound_tag);
+        RouteExecution { stream, decision }
     }
 
     fn final_action_decision(
@@ -532,7 +562,11 @@ fn sanitize_optional_domain(domain: Option<&str>) -> String {
         .unwrap_or_else(|| "<none>".to_string())
 }
 
-fn log_route_rule_eval(ctx: &SessionContext, rule: &CompiledRouteRule, domain_before: Option<&str>) {
+fn log_route_rule_eval(
+    ctx: &SessionContext,
+    rule: &CompiledRouteRule,
+    domain_before: Option<&str>,
+) {
     let matcher_summary = sanitize_field(rule.matcher_summary.as_str()).into_owned();
     let domain_before = sanitize_optional_domain(domain_before);
     debug!(

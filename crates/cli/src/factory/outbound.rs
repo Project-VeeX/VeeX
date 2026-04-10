@@ -4,31 +4,43 @@ use veex_config::{OutboundConfig, ProxyConfig, TrojanTlsConfig};
 use veex_core::{Outbound, ProxyError};
 use veex_outbound_direct::DirectOutbound;
 use veex_outbound_trojan::TrojanOutbound;
-use veex_transport::TlsClientOptions;
+use veex_transport::{connect_host_with_resolver, TlsClientOptions};
+
+use crate::factory::RuntimeServices;
 
 pub fn build_outbounds(
     config: &ProxyConfig,
+    services: &RuntimeServices,
 ) -> Result<HashMap<String, Arc<dyn Outbound>>, ProxyError> {
     let mut outbounds: HashMap<String, Arc<dyn Outbound>> = HashMap::new();
 
     for outbound in &config.outbounds {
         match outbound {
             OutboundConfig::Direct(direct) => {
-                let instance: Arc<dyn Outbound> = Arc::new(DirectOutbound::new(
+                let instance: Arc<dyn Outbound> = Arc::new(DirectOutbound::new_with_resolver(
                     direct.tag.clone(),
                     direct.routing_mark,
                     direct.connect_timeout,
+                    Arc::clone(&services.host_resolver),
                 )?);
                 outbounds.insert(direct.tag.clone(), instance);
             }
             OutboundConfig::Trojan(trojan) => {
-                let instance = TrojanOutbound::new(
+                let host_resolver = Arc::clone(&services.host_resolver);
+                let instance = TrojanOutbound::new_with_connector(
                     trojan.tag.clone(),
                     trojan.server.clone(),
                     trojan.server_port,
                     trojan.password.clone(),
                     trojan.connect_timeout,
                     tls_options_from_config(&trojan.tls),
+                    move |host, port, options| {
+                        let host_resolver = Arc::clone(&host_resolver);
+                        Box::pin(async move {
+                            connect_host_with_resolver(&host, port, host_resolver.as_ref(), options)
+                                .await
+                        })
+                    },
                 );
                 instance.validate()?;
                 let instance: Arc<dyn Outbound> = Arc::new(instance);
