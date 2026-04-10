@@ -108,14 +108,16 @@ async fn connect_addresses(
             Err(err) => {
                 log_tcp_connect_failed(
                     options.trace.as_ref(),
-                    host_field,
-                    port,
-                    address,
-                    attempt_index,
-                    start.elapsed(),
-                    options.timeout,
-                    err.failure_reason,
-                    &err.error,
+                    &TcpConnectFailureLog {
+                        host_field,
+                        port,
+                        address,
+                        attempt_index,
+                        elapsed: start.elapsed(),
+                        timeout_duration: options.timeout,
+                        failure_reason: err.failure_reason,
+                        err: &err.error,
+                    },
                 );
                 last_error = Some(err.error);
             }
@@ -176,6 +178,17 @@ async fn connect_socket(
 struct TcpConnectError {
     error: ProxyError,
     failure_reason: &'static str,
+}
+
+struct TcpConnectFailureLog<'a> {
+    host_field: &'a str,
+    port: u16,
+    address: SocketAddr,
+    attempt_index: u64,
+    elapsed: Duration,
+    timeout_duration: Option<Duration>,
+    failure_reason: &'static str,
+    err: &'a ProxyError,
 }
 
 impl TcpConnectError {
@@ -335,18 +348,8 @@ fn log_tcp_connect_success(
     }
 }
 
-fn log_tcp_connect_failed(
-    trace: Option<&ConnectTraceContext>,
-    host_field: &str,
-    port: u16,
-    address: SocketAddr,
-    attempt_index: u64,
-    elapsed: Duration,
-    timeout_duration: Option<Duration>,
-    failure_reason: &'static str,
-    err: &ProxyError,
-) {
-    match (trace, timeout_duration) {
+fn log_tcp_connect_failed(trace: Option<&ConnectTraceContext>, failure: &TcpConnectFailureLog<'_>) {
+    match (trace, failure.timeout_duration) {
         (Some(trace), Some(duration)) => {
             let routing_mark = trace
                 .routing_mark
@@ -358,15 +361,15 @@ fn log_tcp_connect_failed(
                 outbound = %sanitize_field(&trace.outbound),
                 routing_mark = %routing_mark,
                 network = "tcp",
-                host = %host_field,
-                port,
-                resolved_addr = %address,
-                attempt_index,
-                elapsed_ms = elapsed.as_millis() as u64,
+                host = %failure.host_field,
+                port = failure.port,
+                resolved_addr = %failure.address,
+                attempt_index = failure.attempt_index,
+                elapsed_ms = failure.elapsed.as_millis() as u64,
                 timeout_ms = duration.as_millis() as u64,
-                error_kind = %err.kind(),
-                failure_reason,
-                error = %err,
+                error_kind = %failure.err.kind(),
+                failure_reason = failure.failure_reason,
+                error = %failure.err,
                 "tcp connect failed"
             );
         }
@@ -381,14 +384,14 @@ fn log_tcp_connect_failed(
                 outbound = %sanitize_field(&trace.outbound),
                 routing_mark = %routing_mark,
                 network = "tcp",
-                host = %host_field,
-                port,
-                resolved_addr = %address,
-                attempt_index,
-                elapsed_ms = elapsed.as_millis() as u64,
-                error_kind = %err.kind(),
-                failure_reason,
-                error = %err,
+                host = %failure.host_field,
+                port = failure.port,
+                resolved_addr = %failure.address,
+                attempt_index = failure.attempt_index,
+                elapsed_ms = failure.elapsed.as_millis() as u64,
+                error_kind = %failure.err.kind(),
+                failure_reason = failure.failure_reason,
+                error = %failure.err,
                 "tcp connect failed"
             );
         }
@@ -396,15 +399,15 @@ fn log_tcp_connect_failed(
             warn!(
                 event = "tcp_connect_failed",
                 network = "tcp",
-                host = %host_field,
-                port,
-                resolved_addr = %address,
-                attempt_index,
-                elapsed_ms = elapsed.as_millis() as u64,
+                host = %failure.host_field,
+                port = failure.port,
+                resolved_addr = %failure.address,
+                attempt_index = failure.attempt_index,
+                elapsed_ms = failure.elapsed.as_millis() as u64,
                 timeout_ms = duration.as_millis() as u64,
-                error_kind = %err.kind(),
-                failure_reason,
-                error = %err,
+                error_kind = %failure.err.kind(),
+                failure_reason = failure.failure_reason,
+                error = %failure.err,
                 "tcp connect failed"
             );
         }
@@ -412,14 +415,14 @@ fn log_tcp_connect_failed(
             warn!(
                 event = "tcp_connect_failed",
                 network = "tcp",
-                host = %host_field,
-                port,
-                resolved_addr = %address,
-                attempt_index,
-                elapsed_ms = elapsed.as_millis() as u64,
-                error_kind = %err.kind(),
-                failure_reason,
-                error = %err,
+                host = %failure.host_field,
+                port = failure.port,
+                resolved_addr = %failure.address,
+                attempt_index = failure.attempt_index,
+                elapsed_ms = failure.elapsed.as_millis() as u64,
+                error_kind = %failure.err.kind(),
+                failure_reason = failure.failure_reason,
+                error = %failure.err,
                 "tcp connect failed"
             );
         }
