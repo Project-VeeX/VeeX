@@ -37,6 +37,14 @@ pub struct RedirectInbound {
     shutdown: Option<ShutdownSignal>,
 }
 
+struct SessionBootstrap {
+    id: u64,
+    ctx: SessionContext,
+    inbound_field: String,
+    peer_field: String,
+    destination_field: String,
+}
+
 impl RedirectInbound {
     pub fn new(tag: impl Into<String>, listen: impl Into<String>, listen_port: u16) -> Self {
         Self::new_internal(
@@ -139,59 +147,73 @@ impl RedirectInbound {
         self.next_session_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    fn bootstrap_session(&self, peer: SocketAddr, destination: Destination) -> SessionBootstrap {
+        let session_id = self.next_session_id();
+        let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
+        let peer_field = peer.to_string();
+        let peer_field = sanitize_field(&peer_field).into_owned();
+        let destination_field = destination.to_string();
+        let destination_field = sanitize_field(&destination_field).into_owned();
+        let ctx = SessionContext::new(
+            SessionMeta {
+                id: session_id,
+                network: Network::Tcp,
+                inbound_tag: self.tag.clone(),
+                peer,
+                destination,
+                start: Instant::now(),
+            },
+            Vec::new(),
+        );
+
+        SessionBootstrap {
+            id: session_id,
+            ctx,
+            inbound_field,
+            peer_field,
+            destination_field,
+        }
+    }
+
     async fn handle_connection(
         self: Arc<Self>,
         dispatcher: Arc<dyn Dispatcher>,
         stream: TcpStream,
         peer: SocketAddr,
     ) -> Result<()> {
-        let session_id = self.next_session_id();
-        let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
-        let peer_field = peer.to_string();
-        let peer_field = sanitize_field(&peer_field).into_owned();
         let destination = match (self.resolver)(&stream) {
             Ok(destination) => destination,
             Err(err) => {
                 warn!(
                     event = "destination_resolve_failed",
-                    inbound = %inbound_field,
-                    peer = %peer_field,
+                    inbound = %sanitize_field(self.tag.as_str()),
+                    peer = %sanitize_field(&peer.to_string()),
                     error = %err,
                     "redirect original destination lookup failed"
                 );
                 return Err(err.into());
             }
         };
-        let destination_field = destination.to_string();
-        let destination_field = sanitize_field(&destination_field).into_owned();
+        let session = self.bootstrap_session(peer, destination);
         info!(
             event = "session_start",
-            session_id,
-            inbound = %inbound_field,
-            peer = %peer_field,
-            destination = %destination_field,
+            session_id = session.id,
+            inbound = %session.inbound_field,
+            peer = %session.peer_field,
+            destination = %session.destination_field,
             network = %"tcp",
             "redirect session start"
         );
 
-        let meta = SessionMeta {
-            id: session_id,
-            network: Network::Tcp,
-            inbound_tag: self.tag.clone(),
-            peer,
-            destination: destination.clone(),
-            start: Instant::now(),
-        };
-        let ctx = SessionContext::new(meta, Vec::new());
         let stream: BoxedAsyncStream = Box::new(stream);
-        let result = dispatcher.dispatch(stream, ctx).await;
+        let result = dispatcher.dispatch(stream, session.ctx).await;
         if let Err(err) = &result {
             warn!(
                 event = "session_failed",
-                session_id,
-                inbound = %inbound_field,
-                peer = %peer_field,
-                destination = %destination_field,
+                session_id = session.id,
+                inbound = %session.inbound_field,
+                peer = %session.peer_field,
+                destination = %session.destination_field,
                 error_kind = ?err.kind(),
                 error = %err,
                 "redirect session failed"

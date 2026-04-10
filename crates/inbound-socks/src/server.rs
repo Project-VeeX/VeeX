@@ -15,8 +15,8 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 use veex_core::{
-    format_listen_addr, sanitize_field, BoxFuture, BoxedAsyncStream, Dispatcher, Inbound, Network,
-    ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
+    format_listen_addr, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher,
+    Inbound, Network, ProxyError, Result, SessionContext, SessionMeta, ShutdownSignal,
 };
 
 use crate::{
@@ -34,6 +34,14 @@ pub struct SocksInbound {
     listen_port: u16,
     next_session_id: AtomicU64,
     shutdown: Option<ShutdownSignal>,
+}
+
+struct SessionBootstrap {
+    id: u64,
+    ctx: SessionContext,
+    inbound_field: String,
+    peer_field: String,
+    destination_field: String,
 }
 
 impl SocksInbound {
@@ -98,6 +106,38 @@ impl SocksInbound {
 
     fn bind_addr(&self) -> String {
         format_listen_addr(&self.listen, self.listen_port)
+    }
+
+    fn next_session_id(&self) -> u64 {
+        self.next_session_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn bootstrap_session(&self, peer: SocketAddr, destination: Destination) -> SessionBootstrap {
+        let session_id = self.next_session_id();
+        let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
+        let peer_field = peer.to_string();
+        let peer_field = sanitize_field(&peer_field).into_owned();
+        let destination_field = destination.to_string();
+        let destination_field = sanitize_field(&destination_field).into_owned();
+        let ctx = SessionContext::new(
+            SessionMeta {
+                id: session_id,
+                network: Network::Tcp,
+                inbound_tag: self.tag.clone(),
+                peer,
+                destination,
+                start: Instant::now(),
+            },
+            Vec::new(),
+        );
+
+        SessionBootstrap {
+            id: session_id,
+            ctx,
+            inbound_field,
+            peer_field,
+            destination_field,
+        }
     }
 
     async fn handle_connection(
@@ -202,41 +242,26 @@ impl SocksInbound {
                 ProxyError::from(err)
             })?;
 
-        let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
-        let destination = request.destination.clone();
-        let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
-        let peer_field = peer.to_string();
-        let peer_field = sanitize_field(&peer_field).into_owned();
-        let destination_field = destination.to_string();
-        let destination_field = sanitize_field(&destination_field).into_owned();
+        let session = self.bootstrap_session(peer, request.destination);
         info!(
             event = "session_start",
-            session_id,
-            inbound = %inbound_field,
-            peer = %peer_field,
-            destination = %destination_field,
+            session_id = session.id,
+            inbound = %session.inbound_field,
+            peer = %session.peer_field,
+            destination = %session.destination_field,
             network = %"tcp",
             "socks session start"
         );
 
-        let meta = SessionMeta {
-            id: session_id,
-            network: Network::Tcp,
-            inbound_tag: self.tag.clone(),
-            peer,
-            destination: request.destination,
-            start: Instant::now(),
-        };
-        let ctx = SessionContext::new(meta, Vec::new());
         let stream: BoxedAsyncStream = Box::new(stream);
-        let result = dispatcher.dispatch(stream, ctx).await;
+        let result = dispatcher.dispatch(stream, session.ctx).await;
         if let Err(err) = &result {
             warn!(
                 event = "session_failed",
-                session_id,
-                inbound = %inbound_field,
-                peer = %peer_field,
-                destination = %destination_field,
+                session_id = session.id,
+                inbound = %session.inbound_field,
+                peer = %session.peer_field,
+                destination = %session.destination_field,
                 error_kind = ?err.kind(),
                 error = %err,
                 "socks session failed"

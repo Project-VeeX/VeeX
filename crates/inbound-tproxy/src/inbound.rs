@@ -34,6 +34,14 @@ pub struct TProxyInbound {
     shutdown: Option<ShutdownSignal>,
 }
 
+struct SessionBootstrap {
+    id: u64,
+    ctx: SessionContext,
+    inbound_field: String,
+    peer_field: String,
+    destination_field: String,
+}
+
 impl TProxyInbound {
     pub fn new(tag: impl Into<String>, listen: impl Into<String>, listen_port: u16) -> Self {
         Self::new_internal(
@@ -144,29 +152,53 @@ impl TProxyInbound {
         self.next_session_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    fn bootstrap_session(&self, peer: SocketAddr, destination: Destination) -> SessionBootstrap {
+        let session_id = self.next_session_id();
+        let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
+        let peer_field = peer.to_string();
+        let peer_field = sanitize_field(&peer_field).into_owned();
+        let destination_field = destination.to_string();
+        let destination_field = sanitize_field(&destination_field).into_owned();
+        let ctx = SessionContext::new(
+            SessionMeta {
+                id: session_id,
+                network: Network::Tcp,
+                inbound_tag: self.tag.clone(),
+                peer,
+                destination,
+                start: Instant::now(),
+            },
+            Vec::new(),
+        );
+
+        SessionBootstrap {
+            id: session_id,
+            ctx,
+            inbound_field,
+            peer_field,
+            destination_field,
+        }
+    }
+
     async fn handle_connection(
         self: Arc<Self>,
         dispatcher: Arc<dyn Dispatcher>,
         stream: TcpStream,
         peer: SocketAddr,
     ) -> Result<()> {
-        let session_id = self.next_session_id();
         let local_addr = stream.local_addr().ok();
         let socket_family = local_addr
             .map(|addr| if addr.is_ipv4() { "ipv4" } else { "ipv6" })
             .unwrap_or("unknown");
-        let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
         let listen_field = sanitize_field(self.listen.as_str()).into_owned();
-        let peer_field = peer.to_string();
-        let peer_field = sanitize_field(&peer_field).into_owned();
         let destination = match (self.resolver)(&stream) {
             Ok(destination) => destination,
             Err(err) => {
                 warn!(
                     event = "destination_resolve_failed",
-                    inbound = %inbound_field,
+                    inbound = %sanitize_field(self.tag.as_str()),
                     listen = %listen_field,
-                    peer = %peer_field,
+                    peer = %sanitize_field(&peer.to_string()),
                     local_addr = ?local_addr,
                     socket_family = %socket_family,
                     error = %err,
@@ -175,41 +207,31 @@ impl TProxyInbound {
                 return Err(err.into());
             }
         };
-        let destination_field = destination.to_string();
-        let destination_field = sanitize_field(&destination_field).into_owned();
+        let session = self.bootstrap_session(peer, destination);
         info!(
             event = "session_start",
-            session_id,
-            inbound = %inbound_field,
+            session_id = session.id,
+            inbound = %session.inbound_field,
             listen = %listen_field,
-            peer = %peer_field,
+            peer = %session.peer_field,
             local_addr = ?local_addr,
-            destination = %destination_field,
+            destination = %session.destination_field,
             socket_family = %socket_family,
             network = %"tcp",
             "tproxy session start"
         );
 
-        let meta = SessionMeta {
-            id: session_id,
-            network: Network::Tcp,
-            inbound_tag: self.tag.clone(),
-            peer,
-            destination: destination.clone(),
-            start: Instant::now(),
-        };
-        let ctx = SessionContext::new(meta, Vec::new());
         let stream: BoxedAsyncStream = Box::new(stream);
-        let result = dispatcher.dispatch(stream, ctx).await;
+        let result = dispatcher.dispatch(stream, session.ctx).await;
         if let Err(err) = &result {
             warn!(
                 event = "session_failed",
-                session_id,
-                inbound = %inbound_field,
+                session_id = session.id,
+                inbound = %session.inbound_field,
                 listen = %listen_field,
-                peer = %peer_field,
+                peer = %session.peer_field,
                 local_addr = ?local_addr,
-                destination = %destination_field,
+                destination = %session.destination_field,
                 socket_family = %socket_family,
                 error_kind = ?err.kind(),
                 error = %err,
