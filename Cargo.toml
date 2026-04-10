@@ -10,6 +10,7 @@ members = [
     "crates/observability",
     "crates/outbound-direct",
     "crates/outbound-trojan",
+    "crates/test-tracing",
     "crates/transport",
 ]
 resolver = "2"

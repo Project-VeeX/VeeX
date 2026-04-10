@@ -386,10 +386,8 @@ mod tests {
         map_join_result, relay_bidirectional, relay_bidirectional_with_trace, Direction,
         OneWayRelayError, RelayTraceContext,
     };
-    use crate::{
-        test_support::{assert_has_event, captured_events, install_test_subscriber},
-        types::BoxedAsyncStream,
-    };
+    use crate::types::BoxedAsyncStream;
+    use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     enum ReadStep {
         Data(&'static [u8]),

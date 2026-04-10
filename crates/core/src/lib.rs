@@ -8,8 +8,6 @@ pub mod relay;
 pub mod router;
 pub mod shutdown;
 pub mod sniff;
-#[cfg(test)]
-mod test_support;
 pub mod traits;
 pub mod types;
 

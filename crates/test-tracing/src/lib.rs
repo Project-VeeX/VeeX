@@ -1,3 +1,5 @@
+//! Test-only tracing capture helpers shared across workspace crates.
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -10,8 +12,8 @@ use tracing::{
 use tracing_subscriber::{layer::Context as LayerContext, prelude::*, registry::LookupSpan, Layer};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CapturedEvent {
-    pub(crate) fields: BTreeMap<String, String>,
+pub struct CapturedEvent {
+    pub fields: BTreeMap<String, String>,
 }
 
 #[derive(Default)]
@@ -70,7 +72,7 @@ where
     }
 }
 
-pub(crate) fn install_test_subscriber() -> (
+pub fn install_test_subscriber() -> (
     tracing::subscriber::DefaultGuard,
     Arc<Mutex<Vec<CapturedEvent>>>,
 ) {
@@ -82,14 +84,14 @@ pub(crate) fn install_test_subscriber() -> (
     (tracing::subscriber::set_default(subscriber), events)
 }
 
-pub(crate) fn captured_events(buffer: &Arc<Mutex<Vec<CapturedEvent>>>) -> Vec<CapturedEvent> {
+pub fn captured_events(buffer: &Arc<Mutex<Vec<CapturedEvent>>>) -> Vec<CapturedEvent> {
     buffer
         .lock()
         .expect("captured events lock poisoned")
         .clone()
 }
 
-pub(crate) fn assert_has_event(
+pub fn assert_has_event(
     events: &[CapturedEvent],
     event_name: &str,
     expected_fields: &[(&str, &str)],
@@ -99,6 +101,25 @@ pub(crate) fn assert_has_event(
             && expected_fields.iter().all(|(key, expected)| {
                 event.fields.get(*key).map(String::as_str) == Some(*expected)
             })
+    });
+
+    assert!(
+        matched,
+        "expected event `{event_name}` with fields {:?}, captured events: {:?}",
+        expected_fields, events
+    );
+}
+
+pub fn assert_event_has_fields(
+    events: &[CapturedEvent],
+    event_name: &str,
+    expected_fields: &[&str],
+) {
+    let matched = events.iter().any(|event| {
+        event.fields.get("event").map(String::as_str) == Some(event_name)
+            && expected_fields
+                .iter()
+                .all(|field| event.fields.contains_key(*field))
     });
 
     assert!(

@@ -450,10 +450,8 @@ mod tests {
     use super::{
         connect_tls, is_ignorable_tls_close_notify_error, server_name_for_tls, TlsClientOptions,
     };
-    use crate::{
-        tcp::ConnectTraceContext,
-        test_support::{assert_has_event, captured_events, install_test_subscriber},
-    };
+    use crate::tcp::ConnectTraceContext;
+    use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     #[test]
     fn derives_server_name_from_domain() {

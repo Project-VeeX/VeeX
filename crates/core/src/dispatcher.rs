@@ -204,11 +204,11 @@ mod tests {
 
     use super::SimpleDispatcher;
     use crate::{
-        test_support::{assert_has_event, captured_events, install_test_subscriber},
         traits::{Dispatcher, Outbound},
         BoxFuture, BoxedAsyncStream, Destination, ErrorKind, Network, RouteReason, Router,
         SessionContext, SessionMeta, SessionRoute, SessionState,
     };
+    use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     struct ClosedStream;
 

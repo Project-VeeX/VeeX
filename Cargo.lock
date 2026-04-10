@@ -798,6 +798,7 @@ dependencies = [
  "veex-observability",
  "veex-outbound-direct",
  "veex-outbound-trojan",
+ "veex-test-tracing",
  "veex-transport",
 ]
 
@@ -824,6 +825,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "veex-observability",
+ "veex-test-tracing",
 ]
 
 [[package]]
@@ -867,6 +869,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "veex-test-tracing",
 ]
 
 [[package]]
@@ -886,6 +889,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "veex-core",
+ "veex-test-tracing",
  "veex-transport",
 ]
 
@@ -901,7 +905,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "veex-core",
+ "veex-test-tracing",
  "veex-transport",
+]
+
+[[package]]
+name = "veex-test-tracing"
+version = "0.5.1"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -918,6 +931,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "veex-core",
+ "veex-test-tracing",
 ]
 
 [[package]]

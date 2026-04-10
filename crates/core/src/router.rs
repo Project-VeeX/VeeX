@@ -807,10 +807,8 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 
-    use crate::{
-        test_support::{assert_has_event, captured_events, install_test_subscriber},
-        types::{Destination, Network, SessionContext, SessionMeta},
-    };
+    use crate::types::{Destination, Network, SessionContext, SessionMeta};
+    use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     use super::{RouteInput, RouteReason, RouteRule, Router};
 

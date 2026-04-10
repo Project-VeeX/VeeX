@@ -1,15 +1,9 @@
 [package]
-name = "veex-infra-linux"
+name = "veex-test-tracing"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-libc = "0.2"
-socket2 = "0.5"
-tokio.workspace = true
 tracing.workspace = true
-
-[dev-dependencies]
 tracing-subscriber.workspace = true
-veex-test-tracing = { path = "../test-tracing" }

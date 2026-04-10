@@ -13,3 +13,4 @@ veex-observability = { path = "../observability" }
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
+veex-test-tracing = { path = "../test-tracing" }

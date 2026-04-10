@@ -28,3 +28,4 @@ tokio.workspace = true
 rcgen = "0.13"
 rustls.workspace = true
 tokio-rustls.workspace = true
+veex-test-tracing = { path = "../test-tracing" }

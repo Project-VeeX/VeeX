@@ -197,18 +197,10 @@ fn sockopt_status(result: &io::Result<()>) -> SockoptStatus {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use std::{
-        collections::BTreeMap,
         io,
         net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-        sync::{Arc, Mutex},
     };
-
-    use tracing::{field::Field, Event, Subscriber};
-    use tracing_subscriber::{
-        layer::{Context, Layer},
-        prelude::*,
-        registry::LookupSpan,
-    };
+    use veex_test_tracing::{assert_event_has_fields, captured_events, install_test_subscriber};
 
     use super::{
         combine_listener_errors, emit_listener_fallback, emit_transparent_socket_config,
@@ -256,7 +248,8 @@ mod tests {
             None,
         );
 
-        assert_has_event_fields(
+        let events = captured_events(&events);
+        assert_event_has_fields(
             &events,
             "transparent_socket_config",
             &[
@@ -282,102 +275,11 @@ mod tests {
             &reason,
         );
 
-        assert_has_event_fields(
+        let events = captured_events(&events);
+        assert_event_has_fields(
             &events,
             "listener_fallback",
             &["from", "to", "reason", "errno"],
-        );
-    }
-
-    #[derive(Clone, Debug, Default, Eq, PartialEq)]
-    struct CapturedEvent {
-        fields: BTreeMap<String, String>,
-    }
-
-    #[derive(Default)]
-    struct EventVisitor {
-        fields: BTreeMap<String, String>,
-    }
-
-    impl tracing::field::Visit for EventVisitor {
-        fn record_bool(&mut self, field: &Field, value: bool) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_i64(&mut self, field: &Field, value: i64) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_u64(&mut self, field: &Field, value: u64) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_str(&mut self, field: &Field, value: &str) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            self.fields
-                .insert(field.name().to_string(), format!("{value:?}"));
-        }
-    }
-
-    #[derive(Clone)]
-    struct CaptureLayer {
-        events: Arc<Mutex<Vec<CapturedEvent>>>,
-    }
-
-    impl<S> Layer<S> for CaptureLayer
-    where
-        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
-    {
-        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-            let mut visitor = EventVisitor::default();
-            event.record(&mut visitor);
-            self.events
-                .lock()
-                .expect("captured events lock should not be poisoned")
-                .push(CapturedEvent {
-                    fields: visitor.fields,
-                });
-        }
-    }
-
-    fn install_test_subscriber() -> (
-        tracing::subscriber::DefaultGuard,
-        Arc<Mutex<Vec<CapturedEvent>>>,
-    ) {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::registry().with(CaptureLayer {
-            events: Arc::clone(&events),
-        });
-
-        (tracing::subscriber::set_default(subscriber), events)
-    }
-
-    fn assert_has_event_fields(
-        events: &Arc<Mutex<Vec<CapturedEvent>>>,
-        event_name: &str,
-        expected_fields: &[&str],
-    ) {
-        let events = events
-            .lock()
-            .expect("captured events lock should not be poisoned");
-        let matched = events.iter().any(|event| {
-            event.fields.get("event").map(String::as_str) == Some(event_name)
-                && expected_fields
-                    .iter()
-                    .all(|field| event.fields.contains_key(*field))
-        });
-
-        assert!(
-            matched,
-            "expected event `{event_name}` with fields {:?}, captured events: {:?}",
-            expected_fields, *events
         );
     }
 }

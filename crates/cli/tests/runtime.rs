@@ -1,9 +1,8 @@
 use std::{
-    collections::BTreeMap,
     fs,
     net::{Ipv4Addr, SocketAddr},
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -19,11 +18,6 @@ use tokio::{
     sync::oneshot,
 };
 use tokio_rustls::TlsAcceptor;
-use tracing::{
-    field::{Field, Visit},
-    Event, Subscriber,
-};
-use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer};
 use veex_cli::runtime::{run_with_shutdown, RuntimeError};
 use veex_config::{
     DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteActionConfig,
@@ -32,6 +26,9 @@ use veex_config::{
 };
 use veex_core::{Destination, ErrorKind, Host};
 use veex_outbound_trojan::build_trojan_request;
+use veex_test_tracing::{
+    assert_event_has_fields, assert_has_event, captured_events, install_test_subscriber,
+};
 
 #[tokio::test]
 async fn runtime_supports_socks_to_direct_round_trip() {
@@ -931,116 +928,6 @@ async fn wait_for_listener(addr: SocketAddr) {
     }
 
     panic!("listener did not become ready on {addr}");
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct CapturedEvent {
-    fields: BTreeMap<String, String>,
-}
-
-#[derive(Default)]
-struct EventVisitor {
-    fields: BTreeMap<String, String>,
-}
-
-impl Visit for EventVisitor {
-    fn record_bool(&mut self, field: &Field, value: bool) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_i64(&mut self, field: &Field, value: i64) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_u64(&mut self, field: &Field, value: u64) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.fields
-            .insert(field.name().to_string(), format!("{value:?}"));
-    }
-}
-
-#[derive(Clone)]
-struct CaptureLayer {
-    events: Arc<Mutex<Vec<CapturedEvent>>>,
-}
-
-impl<S> Layer<S> for CaptureLayer
-where
-    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
-{
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        let mut visitor = EventVisitor::default();
-        event.record(&mut visitor);
-        visitor
-            .fields
-            .insert("level".to_string(), event.metadata().level().to_string());
-        self.events
-            .lock()
-            .expect("captured events lock should not be poisoned")
-            .push(CapturedEvent {
-                fields: visitor.fields,
-            });
-    }
-}
-
-fn install_test_subscriber() -> (
-    tracing::subscriber::DefaultGuard,
-    Arc<Mutex<Vec<CapturedEvent>>>,
-) {
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(CaptureLayer {
-        events: Arc::clone(&events),
-    });
-
-    (tracing::subscriber::set_default(subscriber), events)
-}
-
-fn captured_events(buffer: &Arc<Mutex<Vec<CapturedEvent>>>) -> Vec<CapturedEvent> {
-    buffer
-        .lock()
-        .expect("captured events lock should not be poisoned")
-        .clone()
-}
-
-fn assert_has_event(events: &[CapturedEvent], event_name: &str, expected_fields: &[(&str, &str)]) {
-    let matched = events.iter().any(|event| {
-        event.fields.get("event").map(String::as_str) == Some(event_name)
-            && expected_fields.iter().all(|(key, expected)| {
-                event.fields.get(*key).map(String::as_str) == Some(*expected)
-            })
-    });
-
-    assert!(
-        matched,
-        "expected event `{event_name}` with fields {:?}, captured events: {:?}",
-        expected_fields, events
-    );
-}
-
-fn assert_event_has_fields(events: &[CapturedEvent], event_name: &str, expected_fields: &[&str]) {
-    let matched = events.iter().any(|event| {
-        event.fields.get("event").map(String::as_str) == Some(event_name)
-            && expected_fields
-                .iter()
-                .all(|field| event.fields.contains_key(*field))
-    });
-
-    assert!(
-        matched,
-        "expected event `{event_name}` with fields {:?}, captured events: {:?}",
-        expected_fields, events
-    );
 }
 
 async fn run_socks_client_round_trip(

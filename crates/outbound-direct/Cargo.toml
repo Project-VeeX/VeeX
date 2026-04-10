@@ -14,3 +14,4 @@ veex-transport = { path = "../transport" }
 [dev-dependencies]
 tracing.workspace = true
 tracing-subscriber.workspace = true
+veex-test-tracing = { path = "../test-tracing" }

@@ -1,8 +1,6 @@
 //! Transport building blocks shared by outbound implementations.
 
 pub mod tcp;
-#[cfg(test)]
-mod test_support;
 pub mod tls;
 pub mod verifier;
 

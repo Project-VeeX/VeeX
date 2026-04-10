@@ -444,10 +444,12 @@ mod tests {
         connect_host, connect_resolved_addresses, ConnectTraceContext, TcpAttemptConnector,
         TcpConnectOptions,
     };
-    use crate::test_support::{assert_has_event, captured_events, install_test_subscriber};
     use veex_core::Host;
+    use veex_test_tracing::{
+        assert_has_event, captured_events, install_test_subscriber, CapturedEvent,
+    };
 
-    fn event_count(events: &[crate::test_support::CapturedEvent], event_name: &str) -> usize {
+    fn event_count(events: &[CapturedEvent], event_name: &str) -> usize {
         events
             .iter()
             .filter(|event| event.fields.get("event").map(String::as_str) == Some(event_name))
