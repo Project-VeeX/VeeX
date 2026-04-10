@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2
+
+- Closed remaining route execution gaps around sniff upgrades and default-final selection, and expanded route explainability tracing/docs for rule-miss, upgrade, and final-selection paths.
+- Clarified config compatibility diagnostics so compatibility-accepted ignored fields are reported more precisely, with stable per-path messages instead of being mixed with unrelated unknown fields.
+- Reorganized runtime assembly and session ownership boundaries without changing the validated session-path behavior: transport resolution/connect seams are explicit, CLI config lowering is centralized, and `session_finish` emission now has a single observability owner.
+- Aligned inbound session bootstrap flow across `socks`, `redirect`, and `tproxy`, and shared tracing test support across workspace crates to reduce maintenance drift while keeping behavior unchanged.
+
 ## 0.5.1
 
 - Split sniff timeout semantics out from connect and TLS handshake timeouts. `route.rules[].timeout` now applies only to bounded sniff reads and remains best effort.
