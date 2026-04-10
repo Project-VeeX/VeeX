@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
-use veex_config::{InboundConfig, ProxyConfig};
+use veex_config::ProxyConfig;
 use veex_core::{Inbound, ProxyError, ShutdownSignal};
 use veex_inbound_redirect::RedirectInbound;
 use veex_inbound_socks::SocksInbound;
 use veex_inbound_tproxy::TProxyInbound;
+
+use crate::factory::{lower_inbound, LoweredInbound};
 
 pub fn build_inbounds(
     config: &ProxyConfig,
@@ -12,32 +14,32 @@ pub fn build_inbounds(
 ) -> Result<Vec<Arc<dyn Inbound>>, ProxyError> {
     let mut inbounds: Vec<Arc<dyn Inbound>> = Vec::new();
 
-    for inbound in &config.inbounds {
+    for inbound in config.inbounds.iter().map(lower_inbound) {
         match inbound {
-            InboundConfig::Socks(socks) => {
+            LoweredInbound::Socks(socks) => {
                 let instance = SocksInbound::with_shutdown_signal(
-                    socks.tag.clone(),
-                    socks.listen.clone(),
+                    socks.tag,
+                    socks.listen,
                     socks.listen_port,
                     shutdown_signal.clone(),
                 );
                 instance.validate()?;
                 inbounds.push(Arc::new(instance));
             }
-            InboundConfig::Redirect(redirect) => {
+            LoweredInbound::Redirect(redirect) => {
                 let instance = RedirectInbound::with_shutdown_signal(
-                    redirect.tag.clone(),
-                    redirect.listen.clone(),
+                    redirect.tag,
+                    redirect.listen,
                     redirect.listen_port,
                     shutdown_signal.clone(),
                 );
                 instance.validate()?;
                 inbounds.push(Arc::new(instance));
             }
-            InboundConfig::TProxy(tproxy) => {
+            LoweredInbound::TProxy(tproxy) => {
                 let instance = TProxyInbound::with_shutdown_signal(
-                    tproxy.tag.clone(),
-                    tproxy.listen.clone(),
+                    tproxy.tag,
+                    tproxy.listen,
                     tproxy.listen_port,
                     shutdown_signal.clone(),
                 );
@@ -52,6 +54,7 @@ pub fn build_inbounds(
 
 #[cfg(test)]
 mod tests {
+    use veex_config::InboundConfig;
     use veex_config::TProxyInboundConfig;
     use veex_config::{
         DirectOutboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,

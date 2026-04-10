@@ -1,48 +1,11 @@
-use veex_config::{
-    ProxyConfig, RouteActionConfig, RouteFinalActionConfig, RouteRuleConfig,
-    RouteUpgradeActionConfig,
-};
-use veex_core::{
-    RouteAction, RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, Router, SniffAction,
-};
+use veex_config::ProxyConfig;
+use veex_core::Router;
+
+use crate::factory::lower_route;
 
 pub fn build_router(config: &ProxyConfig) -> Router {
-    Router::new(default_final_action(config)).with_rules(router_rules(config))
-}
-
-fn default_final_action(config: &ProxyConfig) -> RouteFinalAction {
-    RouteFinalAction::Route(RouteTarget::new(config.route.final_outbound.clone()))
-}
-
-fn router_rules(config: &ProxyConfig) -> Vec<RouteRule> {
-    config.route.rules.iter().map(route_rule).collect()
-}
-
-fn route_rule(rule: &RouteRuleConfig) -> RouteRule {
-    RouteRule {
-        domain: rule.domain.clone(),
-        domain_suffix: rule.domain_suffix.clone(),
-        ip_cidr: rule.ip_cidr.clone(),
-        ip_is_private: rule.ip_is_private,
-        ip_is_loopback: rule.ip_is_loopback,
-        ip_is_link_local: rule.ip_is_link_local,
-        port: rule.port.clone(),
-        inbound: rule.inbound.clone(),
-        action: route_action(&rule.action),
-    }
-}
-
-fn route_action(action: &RouteActionConfig) -> RouteAction {
-    match action {
-        RouteActionConfig::Upgrade(RouteUpgradeActionConfig::Sniff(sniff)) => {
-            RouteAction::Upgrade(RouteUpgradeAction::Sniff(SniffAction {
-                timeout: sniff.timeout,
-            }))
-        }
-        RouteActionConfig::Final(RouteFinalActionConfig::Route(target)) => RouteAction::Final(
-            RouteFinalAction::Route(RouteTarget::new(target.outbound.clone())),
-        ),
-    }
+    let route = lower_route(&config.route);
+    Router::new(route.default_final_action).with_rules(route.rules)
 }
 
 #[cfg(test)]
