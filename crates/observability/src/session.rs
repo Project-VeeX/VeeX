@@ -136,6 +136,65 @@ pub fn emit_session_summary(summary: &SessionSummary) {
     log_line(LogLevel::Info, &format_session_summary(summary));
 }
 
+pub fn emit_session_finish<E>(summary: &SessionSummary, route_reason: &str, error: Option<&E>)
+where
+    E: std::fmt::Display,
+{
+    match (summary.error_kind, error) {
+        (Some(error_kind), Some(error)) => {
+            tracing::warn!(
+                event = "session_finish",
+                session_id = summary.session_id,
+                inbound = %summary.inbound,
+                peer = %summary.peer,
+                destination = %summary.destination,
+                outbound = %summary.outbound,
+                route_reason,
+                success = false,
+                duration_ms = summary.duration.as_millis(),
+                bytes_up = summary.bytes_up,
+                bytes_down = summary.bytes_down,
+                error_kind = %error_kind,
+                error = %error,
+                "session finished with error"
+            );
+        }
+        (Some(error_kind), None) => {
+            tracing::warn!(
+                event = "session_finish",
+                session_id = summary.session_id,
+                inbound = %summary.inbound,
+                peer = %summary.peer,
+                destination = %summary.destination,
+                outbound = %summary.outbound,
+                route_reason,
+                success = false,
+                duration_ms = summary.duration.as_millis(),
+                bytes_up = summary.bytes_up,
+                bytes_down = summary.bytes_down,
+                error_kind = %error_kind,
+                "session finished with error"
+            );
+        }
+        (None, _) => {
+            tracing::info!(
+                event = "session_finish",
+                session_id = summary.session_id,
+                inbound = %summary.inbound,
+                peer = %summary.peer,
+                destination = %summary.destination,
+                outbound = %summary.outbound,
+                route_reason,
+                success = true,
+                duration_ms = summary.duration.as_millis(),
+                bytes_up = summary.bytes_up,
+                bytes_down = summary.bytes_down,
+                "session finished"
+            );
+        }
+    }
+}
+
 pub fn format_session_summary(summary: &SessionSummary) -> String {
     let duration_ms = summary.duration.as_millis();
     let error_kind = summary.error_kind.map(ErrorKind::as_str).unwrap_or("none");

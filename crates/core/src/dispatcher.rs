@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use tracing::{info, warn};
-use veex_observability::SessionSummary;
+use veex_observability::{emit_session_finish, SessionSummary};
 
 use crate::{
     error::ProxyError,
@@ -121,7 +121,7 @@ impl Dispatcher for SimpleDispatcher {
                 }
             };
 
-            log_session_finish(&trace, &summary, result.as_ref().err());
+            emit_session_finish(&summary, trace.route_reason.as_str(), result.as_ref().err());
             result
         })
     }
@@ -186,49 +186,6 @@ fn log_relay_failed(trace: &DispatchTraceContext, relay_err: &crate::relay::Rela
         error = %relay_err.error,
         "relay failed"
     );
-}
-
-fn log_session_finish(
-    trace: &DispatchTraceContext,
-    summary: &SessionSummary,
-    err: Option<&ProxyError>,
-) {
-    match err {
-        Some(err) => {
-            warn!(
-                event = "session_finish",
-                session_id = summary.session_id,
-                inbound = %summary.inbound,
-                peer = %summary.peer,
-                destination = %summary.destination,
-                outbound = %summary.outbound,
-                route_reason = %trace.route_reason.as_str(),
-                success = false,
-                duration_ms = summary.duration.as_millis(),
-                bytes_up = summary.bytes_up,
-                bytes_down = summary.bytes_down,
-                error_kind = %err.kind(),
-                error = %err,
-                "session finished with error"
-            );
-        }
-        None => {
-            info!(
-                event = "session_finish",
-                session_id = summary.session_id,
-                inbound = %summary.inbound,
-                peer = %summary.peer,
-                destination = %summary.destination,
-                outbound = %summary.outbound,
-                route_reason = %trace.route_reason.as_str(),
-                success = true,
-                duration_ms = summary.duration.as_millis(),
-                bytes_up = summary.bytes_up,
-                bytes_down = summary.bytes_down,
-                "session finished"
-            );
-        }
-    }
 }
 
 #[cfg(test)]
