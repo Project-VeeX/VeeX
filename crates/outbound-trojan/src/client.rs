@@ -1,16 +1,15 @@
-use std::{fmt, net::IpAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{fmt, sync::Arc, time::Duration};
 
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use veex_core::{BoxFuture, BoxedAsyncStream, Host, Outbound, ProxyError, Result, SessionContext};
-use veex_transport::{
-    connect_host, connect_tls, ConnectTraceContext, TcpConnectOptions, TlsClientOptions,
+use veex_core::{BoxFuture, BoxedAsyncStream, Host, Outbound, Result, SessionContext};
+use veex_transport::{ConnectTraceContext, TcpConnectOptions, TlsClientOptions};
+
+use crate::{
+    dialer::{connect_server, parse_host, system_tcp_connector, TcpConnector},
+    encode::build_trojan_request,
+    error::{request_write_error, validate_trojan_client},
 };
-
-use crate::request::build_trojan_request;
-
-type TcpConnector =
-    dyn Fn(Host, u16, TcpConnectOptions) -> BoxFuture<'static, TcpStream> + Send + Sync;
 
 #[derive(Clone)]
 pub struct TrojanOutbound {
@@ -44,6 +43,7 @@ impl TrojanOutbound {
         connect_timeout: Duration,
         tls: TlsClientOptions,
     ) -> Self {
+        let connector = system_tcp_connector();
         Self::new_with_connector(
             tag,
             server,
@@ -51,7 +51,7 @@ impl TrojanOutbound {
             password,
             connect_timeout,
             tls,
-            |host, port, options| Box::pin(async move { connect_host(&host, port, options).await }),
+            move |host, port, options| connector(host, port, options),
         )
     }
 
@@ -99,23 +99,7 @@ impl TrojanOutbound {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.tag.trim().is_empty() {
-            return Err(ProxyError::Config(
-                "trojan outbound tag must not be empty".into(),
-            ));
-        }
-        if self.password.is_empty() {
-            return Err(ProxyError::Config(
-                "trojan outbound password must not be empty".into(),
-            ));
-        }
-        if self.server_port == 0 {
-            return Err(ProxyError::Config(
-                "trojan outbound server_port must be within 1..=65535".into(),
-            ));
-        }
-        self.tls.validate()?;
-        Ok(())
+        validate_trojan_client(&self.tag, &self.password, self.server_port, &self.tls)
     }
 }
 
@@ -139,42 +123,25 @@ impl Outbound for TrojanOutbound {
             };
             let connector = Arc::clone(&this.connector);
 
-            let stream = connector(
-                this.server.clone(),
-                this.server_port,
-                TcpConnectOptions {
-                    timeout: Some(this.connect_timeout),
-                    trace: Some(trace.clone()),
-                    connector: None,
-                },
-            )
-            .await?;
-
             // Trojan preserves transport-originated connect/tls errors and only
             // converts outbound framing failures at its own boundary.
-            let mut stream = connect_tls(
-                stream,
+            let mut stream = connect_server(
                 &this.server,
                 this.server_port,
                 &this.tls,
-                Some(&trace),
+                this.connect_timeout,
+                &trace,
+                &connector,
             )
             .await?;
             let request = build_trojan_request(&this.password, &destination, &buffered_payload)?;
             stream
                 .write_all(&request)
                 .await
-                .map_err(|err| ProxyError::protocol_ctx("failed to write trojan request", err))?;
+                .map_err(request_write_error)?;
 
             Ok(stream)
         })
-    }
-}
-
-fn parse_host(value: &str) -> Host {
-    match IpAddr::from_str(value) {
-        Ok(ip) => Host::Ip(ip),
-        Err(_) => Host::Domain(value.to_string()),
     }
 }
 
@@ -200,7 +167,7 @@ mod tests {
     use veex_transport::{connect_resolved_addresses, TlsClientOptions};
 
     use super::TrojanOutbound;
-    use crate::request::build_trojan_request;
+    use crate::encode::build_trojan_request;
 
     fn event_count(events: &[CapturedEvent], event_name: &str) -> usize {
         events
