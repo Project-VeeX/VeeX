@@ -30,8 +30,10 @@ async fn trojan_outbound_connects_and_writes_request() {
             timeout: Some(std::time::Duration::from_secs(1)),
             routing_mark: None,
         }),
-        "127.0.0.1",
-        server.addr.port(),
+        Destination::new(
+            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            server.addr.port(),
+        ),
         "secret",
         TlsClientOptions {
             enabled: true,

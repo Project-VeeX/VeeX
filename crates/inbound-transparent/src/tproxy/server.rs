@@ -9,21 +9,12 @@ use std::{
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
-    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound, InboundMeta, InboundSink,
-    Listener, ListenerAcceptHandler, Logger, Network, ProxyError, Result, TransparentInbound,
+    build_session_bootstrap, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound,
+    InboundMeta, InboundSink, Listener, ListenerAcceptHandler, Logger, Network, ProxyError, Result,
+    SessionBootstrap, TransparentInbound,
 };
-use veex_infra_linux::get_tproxy_dst;
 
-use crate::shared::session::{build_session_bootstrap, SessionBootstrap};
-
-use super::error::Result as TProxyResult;
-
-type ResolveDestination = dyn Fn(&TcpStream) -> TProxyResult<Destination> + Send + Sync;
-
-fn resolve_tproxy_destination(stream: &TcpStream) -> TProxyResult<Destination> {
-    let destination = get_tproxy_dst(stream)?;
-    Ok(Destination::from_ip(destination.ip(), destination.port()))
-}
+use crate::shared::resolver::{SocketTProxyDestinationResolver, TProxyDestinationResolver};
 
 struct TProxyInboundState {
     next_session_id: AtomicU64,
@@ -35,7 +26,7 @@ pub struct TProxyInbound {
     sink: Arc<dyn InboundSink>,
     listener: Listener,
     network: Network,
-    destination_resolver: Arc<ResolveDestination>,
+    resolver: Arc<dyn TProxyDestinationResolver>,
     state: Arc<TProxyInboundState>,
 }
 
@@ -53,7 +44,7 @@ impl TProxyInbound {
             sink,
             listener,
             network,
-            Arc::new(resolve_tproxy_destination),
+            Arc::new(SocketTProxyDestinationResolver),
         )
     }
 
@@ -63,7 +54,7 @@ impl TProxyInbound {
         sink: Arc<dyn InboundSink>,
         listener: Listener,
         network: Network,
-        resolver: Arc<ResolveDestination>,
+        resolver: Arc<dyn TProxyDestinationResolver>,
     ) -> Result<Arc<Self>> {
         let inbound = Arc::new(Self {
             meta,
@@ -71,7 +62,7 @@ impl TProxyInbound {
             sink,
             listener,
             network,
-            destination_resolver: resolver,
+            resolver,
             state: Arc::new(TProxyInboundState {
                 next_session_id: AtomicU64::new(1),
             }),
@@ -129,7 +120,7 @@ impl TProxyInbound {
             .map(|addr| if addr.is_ipv4() { "ipv4" } else { "ipv6" })
             .unwrap_or("unknown");
         let listen_field = sanitize_field(self.listener.listen().listen()).into_owned();
-        let destination = match (self.destination_resolver)(&stream) {
+        let destination = match self.resolver.resolve_tproxy(&stream) {
             Ok(destination) => destination,
             Err(err) => {
                 warn!(
@@ -234,8 +225,8 @@ mod tests {
         Logger, Network,
     };
 
-    use super::{ResolveDestination, TProxyInbound};
-    use crate::TProxyError;
+    use super::TProxyInbound;
+    use crate::{shared::resolver::TProxyDestinationResolver, TProxyError};
 
     struct RecordingSink {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,
@@ -323,12 +314,22 @@ mod tests {
         );
     }
 
-    fn fixed_resolver(destination: Destination) -> Arc<ResolveDestination> {
-        Arc::new(
-            move |_stream: &TcpStream| -> super::TProxyResult<Destination> {
-                Ok(destination.clone())
-            },
-        )
+    #[derive(Debug)]
+    struct FixedResolver {
+        destination: Destination,
+    }
+
+    impl TProxyDestinationResolver for FixedResolver {
+        fn resolve_tproxy(
+            &self,
+            _stream: &TcpStream,
+        ) -> std::result::Result<Destination, TProxyError> {
+            Ok(self.destination.clone())
+        }
+    }
+
+    fn fixed_resolver(destination: Destination) -> Arc<dyn TProxyDestinationResolver> {
+        Arc::new(FixedResolver { destination })
     }
 
     fn test_listener(

@@ -8,16 +8,17 @@ use std::{
 
 use tokio::io::AsyncWriteExt;
 use veex_core::{
-    BoxFuture, BoxedAsyncStream, DialContext, Dialer, Host, Logger, Outbound, OutboundConnector,
-    OutboundMeta, ProxyError, ProxyOutbound, Result, SessionContext,
+    BoxFuture, BoxedAsyncStream, Destination, DialContext, Dialer, Logger, Outbound,
+    OutboundConnector, OutboundMeta, ProxyError, ProxyOutbound, Result, SessionContext,
 };
 use veex_transport::{connect_tls, ConnectTraceContext, TlsClientOptions};
 
 use crate::{
-    dialer::parse_host,
     encode::build_trojan_request,
     error::{request_write_error, validate_trojan_client},
 };
+
+type UpstreamAddr = Destination;
 
 #[derive(Debug)]
 struct TrojanOutboundState {
@@ -28,9 +29,8 @@ pub struct TrojanOutbound {
     meta: OutboundMeta,
     logger: Logger,
     dialer: Dialer,
-    server: Host,
-    server_port: u16,
-    password: String,
+    upstream_addr: UpstreamAddr,
+    key: String,
     tls: TlsClientOptions,
     state: Arc<TrojanOutboundState>,
 }
@@ -41,8 +41,7 @@ impl fmt::Debug for TrojanOutbound {
             .field("meta", &self.meta)
             .field("logger", &self.logger)
             .field("dialer", &self.dialer)
-            .field("server", &self.server)
-            .field("server_port", &self.server_port)
+            .field("upstream_addr", &self.upstream_addr)
             .field("tls", &self.tls)
             .finish()
     }
@@ -53,18 +52,16 @@ impl TrojanOutbound {
         meta: OutboundMeta,
         logger: Logger,
         dialer: Dialer,
-        server: impl Into<String>,
-        server_port: u16,
-        password: impl Into<String>,
+        upstream_addr: UpstreamAddr,
+        key: impl Into<String>,
         tls: TlsClientOptions,
     ) -> Result<Self> {
         let outbound = Self {
             meta,
             logger,
             dialer,
-            server: parse_host(&server.into()),
-            server_port,
-            password: password.into(),
+            upstream_addr,
+            key: key.into(),
             tls,
             state: Arc::new(TrojanOutboundState {
                 closed: AtomicBool::new(false),
@@ -79,7 +76,7 @@ impl TrojanOutbound {
             return Err(ProxyError::config("trojan outbound type must not be empty"));
         }
 
-        validate_trojan_client(&self.meta.tag, &self.password, self.server_port, &self.tls)
+        validate_trojan_client(&self.meta.tag, &self.key, &self.upstream_addr, &self.tls)
     }
 
     fn is_closed(&self) -> bool {
@@ -112,9 +109,8 @@ impl ProxyOutbound for TrojanOutbound {
         let destination = ctx.meta.destination.clone();
         let buffered_payload = ctx.state.buffered_payload.clone();
         let dialer = self.dialer.clone();
-        let server = self.server.clone();
-        let server_port = self.server_port;
-        let password = self.password.clone();
+        let upstream_addr = self.upstream_addr.clone();
+        let key = self.key.clone();
         let tls = self.tls.clone();
         let closed = self.is_closed();
         let tcp_trace = DialContext {
@@ -131,14 +127,22 @@ impl ProxyOutbound for TrojanOutbound {
             if closed {
                 return Err(ProxyError::Shutdown);
             }
-            validate_trojan_client(&tcp_trace.outbound_tag, &password, server_port, &tls)?;
+            validate_trojan_client(&tcp_trace.outbound_tag, &key, &upstream_addr, &tls)?;
 
             // Trojan preserves transport-originated connect/tls errors and only
             // converts outbound framing failures at its own boundary.
-            let tcp_stream = dialer.connect(&server, server_port, tcp_trace).await?;
-            let mut stream =
-                connect_tls(tcp_stream, &server, server_port, &tls, Some(&tls_trace)).await?;
-            let request = build_trojan_request(&password, &destination, &buffered_payload)?;
+            let tcp_stream = dialer
+                .connect(&upstream_addr.host, upstream_addr.port, tcp_trace)
+                .await?;
+            let mut stream = connect_tls(
+                tcp_stream,
+                &upstream_addr.host,
+                upstream_addr.port,
+                &tls,
+                Some(&tls_trace),
+            )
+            .await?;
+            let request = build_trojan_request(&key, &destination, &buffered_payload)?;
             stream
                 .write_all(&request)
                 .await
@@ -217,8 +221,7 @@ mod tests {
             OutboundMeta::new("proxy", "trojan"),
             Logger::new("proxy", "trojan"),
             dialer,
-            "fallback.test",
-            server.addr.port(),
+            Destination::new(Host::Domain("fallback.test".into()), server.addr.port()),
             "secret",
             TlsClientOptions {
                 enabled: true,
@@ -322,8 +325,7 @@ mod tests {
             OutboundMeta::new("proxy", "trojan"),
             Logger::new("proxy", "trojan"),
             dialer,
-            "fallback.test",
-            18443,
+            Destination::new(Host::Domain("fallback.test".into()), 18443),
             "secret",
             TlsClientOptions {
                 enabled: true,

@@ -4,7 +4,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Instant,
 };
 
 use tokio::{
@@ -13,9 +12,9 @@ use tokio::{
 };
 use tracing::{info, warn};
 use veex_core::{
-    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound, InboundMeta, InboundSink,
-    Listener, ListenerAcceptHandler, Logger, Network, ProxyError, Result, SessionContext,
-    SessionMeta, StreamInbound,
+    build_session_bootstrap, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound,
+    InboundMeta, InboundSink, Listener, ListenerAcceptHandler, Logger, ProxyError, Result,
+    SessionBootstrap, StreamInbound,
 };
 
 use crate::{
@@ -36,14 +35,6 @@ pub struct SocksInbound {
     sink: Arc<dyn InboundSink>,
     listener: Listener,
     state: Arc<SocksInboundState>,
-}
-
-struct SessionBootstrap {
-    id: u64,
-    ctx: SessionContext,
-    inbound_field: String,
-    peer_field: String,
-    destination_field: String,
 }
 
 impl SocksInbound {
@@ -101,31 +92,12 @@ impl SocksInbound {
     }
 
     fn bootstrap_session(&self, peer: SocketAddr, destination: Destination) -> SessionBootstrap {
-        let session_id = self.next_session_id();
-        let inbound_field = self.logger.tag_field().into_owned();
-        let peer_field = peer.to_string();
-        let peer_field = sanitize_field(&peer_field).into_owned();
-        let destination_field = destination.to_string();
-        let destination_field = sanitize_field(&destination_field).into_owned();
-        let ctx = SessionContext::new(
-            SessionMeta {
-                id: session_id,
-                network: Network::Tcp,
-                inbound_tag: self.meta.tag.clone(),
-                peer,
-                destination,
-                start: Instant::now(),
-            },
-            Vec::new(),
-        );
-
-        SessionBootstrap {
-            id: session_id,
-            ctx,
-            inbound_field,
-            peer_field,
-            destination_field,
-        }
+        build_session_bootstrap(
+            self.next_session_id(),
+            self.meta.tag.as_str(),
+            peer,
+            destination,
+        )
     }
 
     async fn handle_stream(&self, stream: TcpStream, peer: SocketAddr) -> Result<()> {

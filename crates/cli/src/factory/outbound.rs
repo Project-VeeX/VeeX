@@ -31,9 +31,8 @@ pub fn build_outbounds(
                     trojan.meta,
                     logger,
                     dialer,
-                    trojan.server,
-                    trojan.server_port,
-                    trojan.password,
+                    trojan.upstream_addr,
+                    trojan.key,
                     trojan.tls,
                 )?);
                 registry.register(instance)?;

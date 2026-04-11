@@ -6,8 +6,8 @@ pub enum TrojanCommand {
     Connect = 0x01,
 }
 
-pub fn password_hash_hex(password: &str) -> String {
-    let digest = sha224(password.as_bytes());
+pub fn encode_key_hex(key: &str) -> String {
+    let digest = sha224(key.as_bytes());
     let mut output = String::with_capacity(digest.len() * 2);
     for byte in digest {
         output.push(nibble_to_hex(byte >> 4));
@@ -17,12 +17,12 @@ pub fn password_hash_hex(password: &str) -> String {
 }
 
 pub fn build_trojan_request(
-    password: &str,
+    key: &str,
     destination: &Destination,
     buffered_payload: &[u8],
 ) -> Result<Vec<u8>> {
     let mut output = Vec::new();
-    output.extend_from_slice(password_hash_hex(password).as_bytes());
+    output.extend_from_slice(encode_key_hex(key).as_bytes());
     output.extend_from_slice(b"\r\n");
     output.push(TrojanCommand::Connect as u8);
     encode_destination(destination, &mut output)?;
@@ -82,11 +82,11 @@ mod tests {
 
     use veex_core::Destination;
 
-    use super::{build_trojan_request, password_hash_hex};
+    use super::{build_trojan_request, encode_key_hex};
 
     #[test]
-    fn password_hash_has_expected_length() {
-        let hash = password_hash_hex("secret");
+    fn encoded_key_has_expected_length() {
+        let hash = encode_key_hex("secret");
         assert_eq!(hash.len(), 56);
         assert!(hash
             .chars()
@@ -94,13 +94,13 @@ mod tests {
     }
 
     #[test]
-    fn password_hash_matches_sha224_test_vectors() {
+    fn encoded_key_matches_sha224_test_vectors() {
         assert_eq!(
-            password_hash_hex(""),
+            encode_key_hex(""),
             "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f"
         );
         assert_eq!(
-            password_hash_hex("abc"),
+            encode_key_hex("abc"),
             "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7"
         );
     }

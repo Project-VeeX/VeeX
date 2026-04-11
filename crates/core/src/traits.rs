@@ -45,7 +45,3 @@ pub trait StreamInbound: Inbound {
 pub trait TransparentInbound: Inbound {
     fn accept_transparent_stream(&self, stream: TcpStream, peer: SocketAddr) -> BoxFuture<'_, ()>;
 }
-
-pub trait Dispatcher: Send + Sync {
-    fn dispatch(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()>;
-}

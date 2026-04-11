@@ -1,10 +1,12 @@
+use std::{net::IpAddr, str::FromStr};
+
 use veex_config::{
     InboundConfig, OutboundConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig,
     RouteRuleConfig, RouteUpgradeActionConfig, TrojanTlsConfig,
 };
 use veex_core::{
-    Dial, InboundMeta, Listen, Network, OutboundMeta, RouteAction, RouteFinalAction, RouteRule,
-    RouteTarget, RouteUpgradeAction, SniffAction,
+    Destination, Dial, Host, InboundMeta, Listen, Network, OutboundMeta, RouteAction,
+    RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, SniffAction,
 };
 use veex_transport::TlsClientOptions;
 
@@ -44,9 +46,8 @@ pub(crate) struct LoweredDirectOutbound {
 pub(crate) struct LoweredTrojanOutbound {
     pub(crate) meta: OutboundMeta,
     pub(crate) dial: Dial,
-    pub(crate) server: String,
-    pub(crate) server_port: u16,
-    pub(crate) password: String,
+    pub(crate) upstream_addr: Destination,
+    pub(crate) key: String,
     pub(crate) tls: TlsClientOptions,
 }
 
@@ -95,9 +96,8 @@ pub(crate) fn lower_outbound(outbound: &OutboundConfig) -> LoweredOutbound {
                 timeout: Some(config.connect_timeout),
                 routing_mark: None,
             },
-            server: config.server.clone(),
-            server_port: config.server_port,
-            password: config.password.clone(),
+            upstream_addr: Destination::new(parse_host(&config.server), config.server_port),
+            key: config.password.clone(),
             tls: lower_tls_options(&config.tls),
         }),
     }
@@ -153,4 +153,11 @@ fn lower_tls_options(config: &TrojanTlsConfig) -> TlsClientOptions {
 
 fn normalize_tproxy_network(_network: Option<&str>) -> Network {
     Network::Tcp
+}
+
+fn parse_host(value: &str) -> Host {
+    match IpAddr::from_str(value) {
+        Ok(ip) => Host::Ip(ip),
+        Err(_) => Host::Domain(value.to_string()),
+    }
 }

@@ -1,4 +1,4 @@
-use std::{net::IpAddr, str::FromStr, sync::Arc};
+use std::sync::Arc;
 
 use tokio::net::TcpStream;
 use veex_core::{BoxFuture, Dial, Dialer, Host};
@@ -40,11 +40,4 @@ pub fn build_dialer_with_connector(dial: Dial, connector: Arc<TcpConnector>) -> 
             })
         }),
     )
-}
-
-pub(crate) fn parse_host(value: &str) -> Host {
-    match IpAddr::from_str(value) {
-        Ok(ip) => Host::Ip(ip),
-        Err(_) => Host::Domain(value.to_string()),
-    }
 }

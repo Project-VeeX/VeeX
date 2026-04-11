@@ -1,26 +1,28 @@
 use std::{net::SocketAddr, time::Instant};
 
-use veex_core::{sanitize_field, Destination, Network, SessionContext, SessionMeta};
+use crate::{
+    logging::sanitize_field,
+    types::{Destination, Network, SessionContext, SessionMeta},
+};
 
-pub(crate) struct SessionBootstrap {
-    pub(crate) id: u64,
-    pub(crate) ctx: SessionContext,
-    pub(crate) inbound_field: String,
-    pub(crate) peer_field: String,
-    pub(crate) destination_field: String,
+#[derive(Clone, Debug)]
+pub struct SessionBootstrap {
+    pub id: u64,
+    pub ctx: SessionContext,
+    pub inbound_field: String,
+    pub peer_field: String,
+    pub destination_field: String,
 }
 
-pub(crate) fn build_session_bootstrap(
+pub fn build_session_bootstrap(
     session_id: u64,
     inbound_tag: &str,
     peer: SocketAddr,
     destination: Destination,
 ) -> SessionBootstrap {
     let inbound_field = sanitize_field(inbound_tag).into_owned();
-    let peer_field = peer.to_string();
-    let peer_field = sanitize_field(&peer_field).into_owned();
-    let destination_field = destination.to_string();
-    let destination_field = sanitize_field(&destination_field).into_owned();
+    let peer_field = sanitize_field(&peer.to_string()).into_owned();
+    let destination_field = sanitize_field(&destination.to_string()).into_owned();
     let ctx = SessionContext::new(
         SessionMeta {
             id: session_id,

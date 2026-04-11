@@ -9,22 +9,12 @@ use std::{
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
-    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound, InboundMeta, InboundSink,
-    Listener, ListenerAcceptHandler, Logger, ProxyError, Result, TransparentInbound,
+    build_session_bootstrap, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound,
+    InboundMeta, InboundSink, Listener, ListenerAcceptHandler, Logger, ProxyError, Result,
+    SessionBootstrap, TransparentInbound,
 };
-use veex_infra_linux::get_original_dst as get_original_dst_socket;
 
-use crate::shared::session::{build_session_bootstrap, SessionBootstrap};
-
-use super::error::RedirectError;
-
-type ResolveOriginalDst =
-    dyn Fn(&TcpStream) -> std::result::Result<Destination, RedirectError> + Send + Sync;
-
-fn resolve_original_dst(stream: &TcpStream) -> std::result::Result<Destination, RedirectError> {
-    let destination = get_original_dst_socket(stream)?;
-    Ok(Destination::from_ip(destination.ip(), destination.port()))
-}
+use crate::shared::resolver::{RedirectDestinationResolver, SocketRedirectDestinationResolver};
 
 struct RedirectInboundState {
     next_session_id: AtomicU64,
@@ -35,7 +25,7 @@ pub struct RedirectInbound {
     logger: Logger,
     sink: Arc<dyn InboundSink>,
     listener: Listener,
-    original_dst_resolver: Arc<ResolveOriginalDst>,
+    resolver: Arc<dyn RedirectDestinationResolver>,
     state: Arc<RedirectInboundState>,
 }
 
@@ -46,7 +36,13 @@ impl RedirectInbound {
         sink: Arc<dyn InboundSink>,
         listener: Listener,
     ) -> Result<Arc<Self>> {
-        Self::new_with_resolver(meta, logger, sink, listener, Arc::new(resolve_original_dst))
+        Self::new_with_resolver(
+            meta,
+            logger,
+            sink,
+            listener,
+            Arc::new(SocketRedirectDestinationResolver),
+        )
     }
 
     fn new_with_resolver(
@@ -54,14 +50,14 @@ impl RedirectInbound {
         logger: Logger,
         sink: Arc<dyn InboundSink>,
         listener: Listener,
-        resolver: Arc<ResolveOriginalDst>,
+        resolver: Arc<dyn RedirectDestinationResolver>,
     ) -> Result<Arc<Self>> {
         let inbound = Arc::new(Self {
             meta,
             logger,
             sink,
             listener,
-            original_dst_resolver: resolver,
+            resolver,
             state: Arc::new(RedirectInboundState {
                 next_session_id: AtomicU64::new(1),
             }),
@@ -116,7 +112,7 @@ impl RedirectInbound {
     }
 
     async fn handle_stream(&self, stream: TcpStream, peer: SocketAddr) -> Result<()> {
-        let destination = match (self.original_dst_resolver)(&stream) {
+        let destination = match self.resolver.resolve_redirect(&stream) {
             Ok(destination) => destination,
             Err(err) => {
                 warn!(
@@ -212,7 +208,11 @@ mod tests {
         Logger,
     };
 
-    use super::{RedirectError, RedirectInbound, ResolveOriginalDst};
+    use super::RedirectInbound;
+    use crate::{
+        shared::resolver::{RedirectDestinationResolver, SocketRedirectDestinationResolver},
+        RedirectError,
+    };
 
     struct RecordingSink {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,
@@ -280,7 +280,7 @@ mod tests {
 
         let accept_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept should succeed");
-            super::resolve_original_dst(&stream)
+            SocketRedirectDestinationResolver.resolve_redirect(&stream)
         });
 
         let _client = TcpStream::connect(addr)
@@ -327,12 +327,22 @@ mod tests {
         );
     }
 
-    fn fixed_resolver(destination: Destination) -> Arc<ResolveOriginalDst> {
-        Arc::new(
-            move |_stream: &TcpStream| -> std::result::Result<Destination, RedirectError> {
-                Ok(destination.clone())
-            },
-        )
+    #[derive(Debug)]
+    struct FixedResolver {
+        destination: Destination,
+    }
+
+    impl RedirectDestinationResolver for FixedResolver {
+        fn resolve_redirect(
+            &self,
+            _stream: &TcpStream,
+        ) -> std::result::Result<Destination, RedirectError> {
+            Ok(self.destination.clone())
+        }
+    }
+
+    fn fixed_resolver(destination: Destination) -> Arc<dyn RedirectDestinationResolver> {
+        Arc::new(FixedResolver { destination })
     }
 
     fn test_listener(

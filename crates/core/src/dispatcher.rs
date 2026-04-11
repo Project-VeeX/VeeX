@@ -8,7 +8,7 @@ use crate::{
     logging::sanitize_field,
     relay::{relay_bidirectional_with_trace, RelayTraceContext},
     router::Router,
-    traits::{BoxFuture, Dispatcher, Outbound},
+    traits::{BoxFuture, Outbound},
     types::{BoxedAsyncStream, RouteReason, SessionContext},
 };
 
@@ -65,7 +65,7 @@ impl OutboundRegistry {
     }
 }
 
-pub struct SimpleDispatcher {
+pub struct Dispatcher {
     router: Router,
     outbounds: Arc<OutboundRegistry>,
 }
@@ -80,7 +80,7 @@ struct DispatchTraceContext {
     route_reason: RouteReason,
 }
 
-impl SimpleDispatcher {
+impl Dispatcher {
     pub fn new(router: Router, outbounds: Arc<OutboundRegistry>) -> Self {
         Self { router, outbounds }
     }
@@ -182,14 +182,8 @@ impl SimpleDispatcher {
     }
 }
 
-impl InboundSink for SimpleDispatcher {
+impl InboundSink for Dispatcher {
     fn submit(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()> {
-        self.submit_impl(inbound_stream, ctx)
-    }
-}
-
-impl Dispatcher for SimpleDispatcher {
-    fn dispatch(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()> {
         self.submit_impl(inbound_stream, ctx)
     }
 }
@@ -268,10 +262,10 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-    use super::{OutboundRegistry, SimpleDispatcher};
+    use super::{Dispatcher, InboundSink, OutboundRegistry};
     use crate::{
         dispatcher::OutboundConnector,
-        traits::{Dispatcher, Outbound, StreamOutbound},
+        traits::{Outbound, StreamOutbound},
         BoxFuture, BoxedAsyncStream, Destination, ErrorKind, Logger, Network, OutboundMeta,
         RouteReason, Router, SessionContext, SessionMeta, SessionRoute, SessionState,
     };
@@ -484,7 +478,7 @@ mod tests {
             .register(Arc::new(outbound))
             .expect("outbound should register");
         let dispatcher =
-            SimpleDispatcher::new(Router::with_default_outbound("proxy"), Arc::new(outbounds));
+            Dispatcher::new(Router::with_default_outbound("proxy"), Arc::new(outbounds));
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 7,
@@ -498,9 +492,9 @@ mod tests {
         );
 
         dispatcher
-            .dispatch(Box::new(ClosedStream), ctx)
+            .submit(Box::new(ClosedStream), ctx)
             .await
-            .expect("dispatch should succeed");
+            .expect("submit should succeed");
 
         let captured = captured
             .lock()
@@ -526,7 +520,7 @@ mod tests {
             )))
             .expect("outbound should register");
         let dispatcher =
-            SimpleDispatcher::new(Router::with_default_outbound("proxy"), Arc::new(outbounds));
+            Dispatcher::new(Router::with_default_outbound("proxy"), Arc::new(outbounds));
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 9,
@@ -540,7 +534,7 @@ mod tests {
         );
 
         let err = dispatcher
-            .dispatch(
+            .submit(
                 Box::new(ScriptedStream::new([
                     ReadStep::Data(b"ping"),
                     ReadStep::Error(io::Error::other("boom")),
@@ -548,7 +542,7 @@ mod tests {
                 ctx,
             )
             .await
-            .expect_err("dispatch should surface relay failure");
+            .expect_err("submit should surface relay failure");
 
         assert_eq!(err.kind(), ErrorKind::Relay);
 
