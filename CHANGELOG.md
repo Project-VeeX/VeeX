@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.3
+
+- Refactored the runtime skeleton around protocol-owned subjects: inbound and outbound implementations now own their long-lived state directly, without shadow runtime wrappers or split execution copies.
+- Collapsed outbound execution wiring into a single registry plus a thin dispatcher path, removed the transitional outbound execution enum, and narrowed inbound submission to a small request-sink interface instead of dispatcher internals.
+- Simplified transparent inbound internals by merging the transparent crates, sharing listen/session bootstrap helpers, and keeping protocol-specific original-destination recovery split by `redirect` and `tproxy` behavior.
+- Normalized module layout and runtime field boundaries without changing config semantics, including a shared `listen` value object and a narrower Trojan runtime shape around upstream address, key material, and TLS.
+
 ## 0.5.2
 
 - Closed remaining route execution gaps around sniff upgrades and default-final selection, and expanded route explainability tracing/docs for rule-miss, upgrade, and final-selection paths.
