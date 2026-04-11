@@ -15,6 +15,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 veex-config = { path = "../config" }
 veex-core = { path = "../core" }
+veex-inbound-direct = { path = "../inbound-direct" }
 veex-inbound-transparent = { path = "../inbound-transparent" }
 veex-inbound-socks = { path = "../inbound-socks" }
 veex-observability = { path = "../observability" }

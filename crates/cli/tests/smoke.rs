@@ -167,6 +167,32 @@ fn check_accepts_tproxy_compat_example() {
 }
 
 #[test]
+fn check_accepts_direct_trojan_example() {
+    let config_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/direct-trojan.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_veex"))
+        .args([
+            "check",
+            "-c",
+            config_path.to_str().expect("config path should be utf-8"),
+        ])
+        .output()
+        .expect("veex check should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("config check passed"));
+    assert!(stdout.contains("final=proxy"));
+    assert!(!stderr.contains("config warning at"));
+}
+
+#[test]
 fn check_accepts_tproxy_compat_example_and_prints_warnings_with_verbose() {
     let config_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/tproxy-compat.json");

@@ -1,0 +1,11 @@
+[package]
+name = "veex-inbound-direct"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tracing.workspace = true
+veex-core = { path = "../core" }
+veex-infra-linux = { path = "../infra-linux" }

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use veex_config::ProxyConfig;
 use veex_core::{Inbound, InboundSink, Listener, ListenerFactory, ProxyError};
+use veex_inbound_direct::{create_direct_listener, DirectInbound};
 use veex_inbound_socks::SocksInbound;
 use veex_inbound_transparent::{
     create_redirect_listener, create_tproxy_listener, RedirectInbound, TProxyInbound,
@@ -17,6 +18,23 @@ pub fn build_inbounds(
 
     for inbound in config.inbounds.iter().map(lower_inbound) {
         match inbound {
+            LoweredInbound::Direct(direct) => {
+                let logger =
+                    veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
+                let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
+                    Box::pin(async move { create_direct_listener(addr).map_err(Into::into) })
+                });
+                let listener = Listener::new(direct.listen, listener_factory);
+                let instance = DirectInbound::new(
+                    direct.meta,
+                    logger,
+                    Arc::clone(&sink),
+                    listener,
+                    direct.override_host,
+                    direct.override_port,
+                )?;
+                inbounds.push(instance as Arc<dyn Inbound>);
+            }
             LoweredInbound::Socks(socks) => {
                 let logger =
                     veex_core::Logger::new(socks.meta.tag.clone(), socks.meta.r#type.clone());
@@ -65,12 +83,47 @@ pub fn build_inbounds(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use veex_config::InboundConfig;
-    use veex_config::TProxyInboundConfig;
     use veex_config::{
-        DirectOutboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
-        DEFAULT_CONNECT_TIMEOUT,
+        DirectInboundConfig, DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig,
+        ProxyConfig, RouteConfig, TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT,
     };
+
+    #[test]
+    fn builds_direct_inbound_from_config() {
+        let config = ProxyConfig {
+            log: LogConfig {
+                level: "info".into(),
+                disabled: false,
+                timestamp: false,
+            },
+            inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
+                tag: "direct-in".into(),
+                listen: "127.0.0.1".into(),
+                listen_port: 9000,
+                network: Some("tcp".into()),
+                override_address: Some("example.com".into()),
+                override_port: Some(443),
+            })],
+            outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
+                tag: "direct".into(),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+                routing_mark: None,
+            })],
+            route: RouteConfig {
+                final_outbound: "direct".into(),
+                rules: vec![],
+            },
+        };
+        let sink: Arc<dyn InboundSink> = Arc::new(veex_core::Dispatcher::new(
+            veex_core::Router::with_default_outbound("direct"),
+            Arc::new(veex_core::OutboundRegistry::default()),
+        ));
+
+        let inbounds = build_inbounds(&config, sink).expect("inbounds should build");
+
+        assert_eq!(inbounds.len(), 1);
+        assert_eq!(inbounds[0].meta().tag, "direct-in");
+    }
 
     #[test]
     fn builds_tproxy_inbound_from_config() {

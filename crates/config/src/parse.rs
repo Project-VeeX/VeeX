@@ -14,8 +14,8 @@ use crate::{
     },
     preflight::parse_json,
     schema::{
-        DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
-        RedirectInboundConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig,
+        DirectInboundConfig, DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig,
+        ProxyConfig, RedirectInboundConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig,
         RouteRuleConfig, RouteTargetConfig, RouteUpgradeActionConfig, SniffActionConfig,
         SocksInboundConfig, TProxyInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
     },
@@ -186,6 +186,14 @@ fn input_log_into_config(input_config: InputLogConfig) -> LogConfig {
 
 fn input_inbound_into_config(input_config: InputInbound) -> InboundConfig {
     match input_config.kind {
+        InputInboundType::Direct => InboundConfig::Direct(DirectInboundConfig {
+            tag: input_config.tag,
+            listen: input_config.listen,
+            listen_port: input_config.listen_port,
+            network: input_config.network,
+            override_address: input_config.override_address,
+            override_port: input_config.override_port,
+        }),
         InputInboundType::Socks => InboundConfig::Socks(SocksInboundConfig {
             tag: input_config.tag,
             listen: input_config.listen,
@@ -433,6 +441,7 @@ fn protocol_extra_paths(input_config: &InputConfig) -> Vec<String> {
 fn classify_ignored_path(input_config: &InputConfig, path: &str) -> Option<IgnoredDisposition> {
     if let Some((index, field)) = indexed_field(path, "$.inbounds[") {
         return match input_config.inbounds.get(index).map(|inbound| inbound.kind) {
+            Some(InputInboundType::Direct) => classify_direct_inbound_ignored(field),
             Some(InputInboundType::Socks) => classify_socks_ignored(field),
             Some(InputInboundType::Redirect) => classify_redirect_ignored(field),
             Some(InputInboundType::Tproxy) => classify_tproxy_ignored(field),
@@ -482,6 +491,23 @@ fn classify_socks_ignored(field: &str) -> Option<IgnoredDisposition> {
         "set_system_proxy" | "tcp_fast_open" => IgnoredDisposition::Ignore(
             "field is accepted for compatibility but ignored by the current socks inbound",
         ),
+        _ => return None,
+    })
+}
+
+fn classify_direct_inbound_ignored(field: &str) -> Option<IgnoredDisposition> {
+    Some(match first_segment(field) {
+        "udp" => IgnoredDisposition::Error(
+            "direct inbound does not support UDP capability declarations in the current runtime",
+        ),
+        "sniff" | "sniff_override_destination" => IgnoredDisposition::Warn(
+            "field is accepted for compatibility but does not affect the current direct inbound",
+        ),
+        "tcp_fast_open" | "udp_timeout" | "receive_original_destination" => {
+            IgnoredDisposition::Ignore(
+                "field is accepted for compatibility but ignored by the current direct inbound",
+            )
+        }
         _ => return None,
     })
 }
@@ -784,9 +810,10 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
-        DirectOutboundConfig, InboundConfig, OutboundConfig, RouteActionConfig,
-        RouteFinalActionConfig, RouteUpgradeActionConfig, SniffActionConfig, TProxyInboundConfig,
-        DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+        DirectInboundConfig, DirectOutboundConfig, InboundConfig, OutboundConfig,
+        RouteActionConfig, RouteFinalActionConfig, RouteUpgradeActionConfig, SniffActionConfig,
+        TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT,
+        DEFAULT_TLS_HANDSHAKE_TIMEOUT,
     };
 
     use super::{parse_config, parse_config_report_unvalidated, parse_config_with_diagnostics};
@@ -826,6 +853,14 @@ mod tests {
         {
           "log": { "level": "debug", "disabled": false },
           "inbounds": [
+            {
+              "type": "direct",
+              "tag": "direct-in",
+              "listen": "127.0.0.1",
+              "listen_port": 9000,
+              "override_address": "example.com",
+              "override_port": 443
+            },
             { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 },
             { "type": "redirect", "tag": "redirect-in", "listen": "0.0.0.0", "listen_port": 60080 },
             { "type": "tproxy", "tag": "tproxy-in", "listen": "::", "listen_port": 1041, "network": "tcp" }
@@ -853,7 +888,7 @@ mod tests {
         "#;
 
         let config = parse_config(input).expect("supported protocol mix should parse");
-        assert_eq!(config.inbounds.len(), 3);
+        assert_eq!(config.inbounds.len(), 4);
         assert_eq!(config.outbounds.len(), 2);
         assert_eq!(config.route.final_outbound, "proxy");
     }
@@ -1147,6 +1182,84 @@ mod tests {
             .ignored
             .iter()
             .all(|ignored| ignored.path != "$.log.noise"));
+    }
+
+    #[test]
+    fn parses_direct_inbound_with_optional_override_fields() {
+        let input = r#"
+        {
+          "inbounds": [
+            {
+              "type": "direct",
+              "tag": "direct-in",
+              "listen": "::",
+              "listen_port": 9000,
+              "network": "tcp",
+              "override_address": "example.com",
+              "override_port": 8443
+            }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let config = parse_config(input).expect("direct inbound config should parse");
+        assert_eq!(
+            config.inbounds,
+            vec![InboundConfig::Direct(DirectInboundConfig {
+                tag: "direct-in".into(),
+                listen: "::".into(),
+                listen_port: 9000,
+                network: Some("tcp".into()),
+                override_address: Some("example.com".into()),
+                override_port: Some(8443),
+            })]
+        );
+    }
+
+    #[test]
+    fn collects_direct_inbound_warning_and_ignore_paths() {
+        let input = r#"
+        {
+          "inbounds": [
+            {
+              "type": "direct",
+              "tag": "direct-in",
+              "listen": "127.0.0.1",
+              "listen_port": 9000,
+              "sniff": true,
+              "udp_timeout": "5m",
+              "tcp_fast_open": true
+            }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let report =
+            parse_config_report_unvalidated(input).expect("compatibility fields should not block");
+        let warning_paths: Vec<&str> = report
+            .diagnostics
+            .warnings
+            .iter()
+            .map(|warning| warning.path.as_str())
+            .collect();
+        let ignored_paths: Vec<&str> = report
+            .diagnostics
+            .ignored
+            .iter()
+            .map(|ignored| ignored.path.as_str())
+            .collect();
+
+        assert!(warning_paths.contains(&"$.inbounds[0].sniff"));
+        assert!(ignored_paths.contains(&"$.inbounds[0].udp_timeout"));
+        assert!(ignored_paths.contains(&"$.inbounds[0].tcp_fast_open"));
     }
 
     #[test]
@@ -1595,6 +1708,31 @@ mod tests {
         "#;
 
         let err = parse_config(input).expect_err("non-tcp tproxy network should fail");
+        assert!(err.to_string().contains("$.inbounds[0].network"));
+        assert!(err.to_string().contains("only supports network='tcp'"));
+    }
+
+    #[test]
+    fn rejects_direct_inbound_network_other_than_tcp() {
+        let input = r#"
+        {
+          "inbounds": [
+            {
+              "type": "direct",
+              "tag": "direct-in",
+              "listen": "0.0.0.0",
+              "listen_port": 9000,
+              "network": "udp"
+            }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let err = parse_config(input).expect_err("non-tcp direct inbound network should fail");
         assert!(err.to_string().contains("$.inbounds[0].network"));
         assert!(err.to_string().contains("only supports network='tcp'"));
     }

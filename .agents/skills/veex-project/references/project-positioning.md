@@ -12,11 +12,12 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
   - `veex version`
 - The real target is to replace the TCP data-plane slice sing-box commonly provides in OpenWrt router topologies, not its DNS stack, policy platform, or full protocol surface.
 - The typical target path is:
-  - `SOCKS / REDIRECT / TPROXY -> veex -> direct | trojan`
+  - `DIRECT / SOCKS / REDIRECT / TPROXY -> veex -> direct | trojan`
 
 ## Supported Surface
 
 - Inbounds:
+  - `direct`
   - `socks`
   - `redirect`
   - `tproxy`, TCP only

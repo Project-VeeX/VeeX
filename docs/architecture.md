@@ -175,7 +175,7 @@ Important consequences:
 
 The current public capability surface includes:
 
-- inbound: `socks`, `redirect`, `tproxy` for TCP
+- inbound: `direct`, `socks`, `redirect`, `tproxy` for TCP
 - outbound: `direct`, `trojan`
 - routing: ordered `route.rules`, `route.final`, and `action="sniff"` upgrades
 - connect behavior: sequential multi-address fallback

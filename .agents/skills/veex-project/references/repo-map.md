@@ -7,6 +7,7 @@
   - `crates/config`
   - `crates/core`
   - `crates/infra-linux`
+  - `crates/inbound-direct`
   - `crates/inbound-transparent`
   - `crates/inbound-socks`
   - `crates/observability`
@@ -42,6 +43,9 @@
   - Linux transparent inbound lifecycle
   - `redirect` original-destination recovery via shared Linux infrastructure
   - TCP-only `tproxy` inbound plus protocol-specific transparent destination recovery
+- `crates/inbound-direct`
+  - plain TCP listener ingress
+  - listener-local destination forwarding plus optional override-address / override-port rewriting
 - `crates/inbound-socks`
   - SOCKS5 CONNECT inbound
 - `crates/outbound-direct`

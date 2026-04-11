@@ -4,8 +4,8 @@ use crate::{
     defaults::DEFAULT_DIRECT_OUTBOUND_TAG,
     error::ConfigError,
     schema::{
-        InboundConfig, OutboundConfig, ProxyConfig, RouteActionConfig, RouteFinalActionConfig,
-        RouteRuleConfig,
+        DirectInboundConfig, InboundConfig, OutboundConfig, ProxyConfig, RouteActionConfig,
+        RouteFinalActionConfig, RouteRuleConfig,
     },
 };
 
@@ -51,6 +51,10 @@ fn validate_inbounds(config: &ProxyConfig) -> Result<BTreeSet<String>, ConfigErr
             ));
         }
 
+        if let InboundConfig::Direct(direct) = inbound {
+            validate_direct_inbound(direct, index)?;
+        }
+
         if let InboundConfig::TProxy(tproxy) = inbound {
             if let Some(network) = tproxy.network.as_deref() {
                 if network != "tcp" {
@@ -64,6 +68,35 @@ fn validate_inbounds(config: &ProxyConfig) -> Result<BTreeSet<String>, ConfigErr
     }
 
     Ok(inbound_tags)
+}
+
+fn validate_direct_inbound(direct: &DirectInboundConfig, index: usize) -> Result<(), ConfigError> {
+    if let Some(network) = direct.network.as_deref() {
+        if network != "tcp" {
+            return Err(ConfigError::semantic(
+                format!("$.inbounds[{index}].network"),
+                "direct inbound only supports network='tcp'",
+            ));
+        }
+    }
+
+    if let Some(address) = direct.override_address.as_deref() {
+        if address.trim().is_empty() {
+            return Err(ConfigError::semantic(
+                format!("$.inbounds[{index}].override_address"),
+                "override_address must not be empty",
+            ));
+        }
+    }
+
+    if matches!(direct.override_port, Some(0)) {
+        return Err(ConfigError::semantic(
+            format!("$.inbounds[{index}].override_port"),
+            "override_port must be in 1..=65535",
+        ));
+    }
+
+    Ok(())
 }
 
 fn validate_outbounds(config: &ProxyConfig) -> Result<BTreeSet<String>, ConfigError> {
@@ -158,10 +191,10 @@ fn validate_route_rule(
 #[cfg(test)]
 mod tests {
     use crate::{
-        DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
-        RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig,
-        RouteUpgradeActionConfig, SniffActionConfig, SocksInboundConfig, TProxyInboundConfig,
-        DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT,
+        DirectInboundConfig, DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig,
+        ProxyConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig,
+        RouteTargetConfig, RouteUpgradeActionConfig, SniffActionConfig, SocksInboundConfig,
+        TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT,
     };
 
     use super::validate_config;
@@ -223,6 +256,40 @@ mod tests {
         let err = validate_config(&config).expect_err("non-tcp tproxy network should fail");
         assert!(err.to_string().contains("$.inbounds[0].network"));
         assert!(err.to_string().contains("only supports network='tcp'"));
+    }
+
+    #[test]
+    fn validates_direct_inbound_network_as_a_cross_field_rule() {
+        let mut config = valid_config();
+        config.inbounds = vec![InboundConfig::Direct(DirectInboundConfig {
+            tag: "direct-in".into(),
+            listen: "0.0.0.0".into(),
+            listen_port: 9000,
+            network: Some("udp".into()),
+            override_address: None,
+            override_port: None,
+        })];
+
+        let err = validate_config(&config).expect_err("non-tcp direct network should fail");
+        assert!(err.to_string().contains("$.inbounds[0].network"));
+        assert!(err.to_string().contains("only supports network='tcp'"));
+    }
+
+    #[test]
+    fn rejects_empty_direct_inbound_override_address() {
+        let mut config = valid_config();
+        config.inbounds = vec![InboundConfig::Direct(DirectInboundConfig {
+            tag: "direct-in".into(),
+            listen: "127.0.0.1".into(),
+            listen_port: 9000,
+            network: None,
+            override_address: Some("   ".into()),
+            override_port: None,
+        })];
+
+        let err = validate_config(&config).expect_err("empty override_address should fail");
+        assert!(err.to_string().contains("$.inbounds[0].override_address"));
+        assert!(err.to_string().contains("must not be empty"));
     }
 
     #[test]

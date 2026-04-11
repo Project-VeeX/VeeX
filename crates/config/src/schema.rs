@@ -19,6 +19,7 @@ pub struct LogConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InboundConfig {
+    Direct(DirectInboundConfig),
     Socks(SocksInboundConfig),
     Redirect(RedirectInboundConfig),
     TProxy(TProxyInboundConfig),
@@ -26,9 +27,20 @@ pub enum InboundConfig {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InboundType {
+    Direct,
     Socks,
     Redirect,
     TProxy,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectInboundConfig {
+    pub tag: String,
+    pub listen: String,
+    pub listen_port: u16,
+    pub network: Option<String>,
+    pub override_address: Option<String>,
+    pub override_port: Option<u16>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -144,6 +156,7 @@ pub struct RouteTargetConfig {
 impl InboundConfig {
     pub fn tag(&self) -> &str {
         match self {
+            Self::Direct(config) => &config.tag,
             Self::Socks(config) => &config.tag,
             Self::Redirect(config) => &config.tag,
             Self::TProxy(config) => &config.tag,
@@ -152,6 +165,7 @@ impl InboundConfig {
 
     pub fn kind(&self) -> InboundType {
         match self {
+            Self::Direct(_) => InboundType::Direct,
             Self::Socks(_) => InboundType::Socks,
             Self::Redirect(_) => InboundType::Redirect,
             Self::TProxy(_) => InboundType::TProxy,

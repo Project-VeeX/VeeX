@@ -1,0 +1,40 @@
+{
+  "log": {
+    "level": "info",
+    "disabled": false,
+    "timestamp": false
+  },
+  "inbounds": [
+    {
+      "type": "direct",
+      "tag": "direct-in",
+      "listen": "127.0.0.1",
+      "listen_port": 9443,
+      "network": "tcp",
+      "override_address": "example.com",
+      "override_port": 443
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "trojan",
+      "tag": "proxy",
+      "server": "trojan.example.com",
+      "server_port": 443,
+      "password": "change-me",
+      "tls": {
+        "enabled": true,
+        "server_name": "trojan.example.com",
+        "disable_sni": false,
+        "insecure": false
+      }
+    }
+  ],
+  "route": {
+    "final": "proxy"
+  }
+}

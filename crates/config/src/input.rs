@@ -42,6 +42,8 @@ pub struct InputLogConfig {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 pub enum InputInboundType {
+    #[serde(rename = "direct")]
+    Direct,
     #[serde(rename = "socks")]
     Socks,
     #[serde(rename = "redirect")]
@@ -59,6 +61,10 @@ pub struct InputInbound {
     pub listen_port: u16,
     #[serde(default)]
     pub network: Option<String>,
+    #[serde(default)]
+    pub override_address: Option<String>,
+    #[serde(default)]
+    pub override_port: Option<u16>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

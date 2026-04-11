@@ -7,6 +7,7 @@ This reference records the exact accepted configuration surface and the current 
 Current supported configuration surface:
 
 - inbound types:
+  - `direct`
   - `socks`
   - `redirect`
   - `tproxy`
@@ -14,6 +15,16 @@ Current supported configuration surface:
   - IPv4 literals such as `0.0.0.0`
   - IPv6 literals such as `::`
   - bracketed IPv6 literals such as `[::]`
+- `direct.network`:
+  - omitted: treated as TCP
+  - `"tcp"`: accepted
+  - any other value: rejected
+- direct inbound fields:
+  - `tag`
+  - `listen`
+  - `listen_port`
+  - `override_address`
+  - `override_port`
 - `tproxy.network`:
   - omitted: treated as TCP
   - `"tcp"`: accepted
@@ -77,14 +88,15 @@ Known fields remain strictly typed. An unsupported type on a known field is stil
 
 The repository compatibility fixture is:
 
+- `examples/direct-trojan.json`
 - `examples/tproxy-compat.json`
 
-That fixture intentionally uses `listen="::"` to cover dual-stack validation more closely.
+`examples/tproxy-compat.json` intentionally uses `listen="::"` to cover dual-stack validation more closely.
 
 Typical validation command:
 
 ```sh
-veex check -c examples/tproxy-compat.json
+veex check -c examples/direct-trojan.json
 ```
 
 ## Contract Notes

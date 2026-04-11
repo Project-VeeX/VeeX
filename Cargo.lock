@@ -792,6 +792,7 @@ dependencies = [
  "tracing-subscriber",
  "veex-config",
  "veex-core",
+ "veex-inbound-direct",
  "veex-inbound-socks",
  "veex-inbound-transparent",
  "veex-observability",
@@ -825,6 +826,16 @@ dependencies = [
  "tracing-subscriber",
  "veex-observability",
  "veex-test-tracing",
+]
+
+[[package]]
+name = "veex-inbound-direct"
+version = "0.5.3"
+dependencies = [
+ "tokio",
+ "tracing",
+ "veex-core",
+ "veex-infra-linux",
 ]
 
 [[package]]

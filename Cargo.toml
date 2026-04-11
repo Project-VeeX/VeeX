@@ -4,6 +4,7 @@ members = [
     "crates/config",
     "crates/core",
     "crates/infra-linux",
+    "crates/inbound-direct",
     "crates/inbound-transparent",
     "crates/inbound-socks",
     "crates/observability",

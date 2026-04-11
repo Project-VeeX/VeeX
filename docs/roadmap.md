@@ -10,7 +10,7 @@ As of the current repository state (`0.5.3`), VeeX has established a narrow but 
 
 That baseline includes:
 
-- TCP ingress through `socks`, `redirect`, and `tproxy`
+- TCP ingress through `direct`, `socks`, `redirect`, and `tproxy`
 - outbound execution through `direct` and `trojan`
 - ordered `route.rules` evaluation with `route.final`
 - bounded `action="sniff"` context enrichment

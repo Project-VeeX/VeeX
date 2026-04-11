@@ -17,6 +17,14 @@ pub(crate) struct LoweredSocksInbound {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LoweredDirectInbound {
+    pub(crate) meta: InboundMeta,
+    pub(crate) listen: Listen,
+    pub(crate) override_host: Option<Host>,
+    pub(crate) override_port: Option<u16>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LoweredRedirectInbound {
     pub(crate) meta: InboundMeta,
     pub(crate) listen: Listen,
@@ -31,6 +39,7 @@ pub(crate) struct LoweredTProxyInbound {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum LoweredInbound {
+    Direct(LoweredDirectInbound),
     Socks(LoweredSocksInbound),
     Redirect(LoweredRedirectInbound),
     TProxy(LoweredTProxyInbound),
@@ -65,6 +74,12 @@ pub(crate) struct LoweredRoute {
 
 pub(crate) fn lower_inbound(inbound: &InboundConfig) -> LoweredInbound {
     match inbound {
+        InboundConfig::Direct(config) => LoweredInbound::Direct(LoweredDirectInbound {
+            meta: InboundMeta::new(config.tag.clone(), "direct"),
+            listen: Listen::new(config.listen.clone(), config.listen_port),
+            override_host: config.override_address.as_deref().map(parse_host),
+            override_port: config.override_port,
+        }),
         InboundConfig::Socks(config) => LoweredInbound::Socks(LoweredSocksInbound {
             meta: InboundMeta::new(config.tag.clone(), "socks"),
             listen: Listen::new(config.listen.clone(), config.listen_port),
