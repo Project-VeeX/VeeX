@@ -6,23 +6,31 @@ pub mod listen;
 pub mod logging;
 pub mod relay;
 pub mod router;
+pub mod service;
 pub mod shutdown;
 pub mod sniff;
 pub mod traits;
 pub mod types;
 
-pub use dispatcher::SimpleDispatcher;
+pub use dispatcher::{RuntimeOutbound, SimpleDispatcher};
 pub use error::{ErrorKind, ProxyError, Result};
 pub use listen::{format_listen_addr, parse_listen_addr};
-pub use logging::sanitize_field;
+pub use logging::{sanitize_field, Logger};
 pub use relay::{relay_bidirectional, RelayErrorWithStats, RelayStats};
 pub use router::{
     RouteAction, RouteDecision, RouteFinalAction, RouteInput, RouteRule, RouteTarget,
     RouteUpgradeAction, Router, SniffAction,
 };
+pub use service::{
+    Dial, DialConnect, DialContext, Dialer, InboundMeta, Listener, ListenerAcceptHandler,
+    ListenerFactory, OutboundMeta,
+};
 pub use shutdown::{shutdown_channel, ShutdownSignal, ShutdownTrigger};
 pub use sniff::{sniff_stream, PrefixedStream, SniffOutcome, SniffedProtocol};
-pub use traits::{BoxFuture, Dispatcher, Inbound, Outbound};
+pub use traits::{
+    BoxFuture, Dispatcher, Inbound, Outbound, ProxyOutbound, StreamInbound, StreamOutbound,
+    TransparentInbound,
+};
 pub use types::{
     AsyncStream, BoxedAsyncStream, Destination, Host, Listen, Network, RouteReason, SessionContext,
     SessionMeta, SessionRoute, SessionState,

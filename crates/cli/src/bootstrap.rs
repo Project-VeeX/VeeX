@@ -2,16 +2,13 @@ use std::{collections::HashMap, sync::Arc};
 
 use thiserror::Error;
 use veex_config::{ProxyConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
-use veex_core::{
-    shutdown_channel, Dispatcher, Inbound, Outbound, ProxyError, ShutdownTrigger, SimpleDispatcher,
-};
+use veex_core::{Dispatcher, Inbound, Outbound, ProxyError, RuntimeOutbound, SimpleDispatcher};
 
 use crate::factory::{build_inbounds, build_outbounds, build_router, RuntimeServices};
 
 pub struct RuntimeState {
-    pub dispatcher: Arc<dyn Dispatcher>,
     pub inbounds: Vec<Arc<dyn Inbound>>,
-    pub shutdown: ShutdownTrigger,
+    pub outbounds: Vec<Arc<dyn Outbound>>,
 }
 
 #[derive(Debug, Error)]
@@ -33,28 +30,25 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
         return Err(BootstrapError::MissingInbound);
     }
 
-    let (shutdown, shutdown_signal) = shutdown_channel();
-    // Bootstrap owns runtime service wiring so shared dependencies stay out of
-    // core traits and can evolve without altering runtime behavior.
     let services = RuntimeServices::default();
-    let outbounds = build_outbounds(config, &services).map_err(BootstrapError::OutboundBuild)?;
-    // Bootstrap owns runtime factory completeness checks after config parsing and
-    // validation have already accepted the static config surface.
-    ensure_required_outbounds_built(config, &outbounds)?;
-    let dispatcher: Arc<dyn Dispatcher> =
-        Arc::new(SimpleDispatcher::new(build_router(config), outbounds));
-    let inbounds = build_inbounds(config, shutdown_signal).map_err(BootstrapError::InboundBuild)?;
+    let built_outbounds =
+        build_outbounds(config, &services).map_err(BootstrapError::OutboundBuild)?;
+    ensure_required_outbounds_built(config, &built_outbounds.routing)?;
+    let dispatcher: Arc<dyn Dispatcher> = Arc::new(SimpleDispatcher::new(
+        build_router(config),
+        built_outbounds.routing,
+    ));
+    let inbounds = build_inbounds(config, dispatcher).map_err(BootstrapError::InboundBuild)?;
 
     Ok(RuntimeState {
-        dispatcher,
         inbounds,
-        shutdown,
+        outbounds: built_outbounds.registry,
     })
 }
 
 fn ensure_required_outbounds_built(
     config: &ProxyConfig,
-    outbounds: &HashMap<String, Arc<dyn Outbound>>,
+    outbounds: &HashMap<String, RuntimeOutbound>,
 ) -> Result<(), BootstrapError> {
     if !outbounds.contains_key(&config.route.final_outbound) {
         return Err(BootstrapError::MissingFinalOutbound(

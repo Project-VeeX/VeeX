@@ -1,18 +1,45 @@
-use std::{net::IpAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{net::IpAddr, str::FromStr, sync::Arc};
 
 use tokio::net::TcpStream;
-use veex_core::{BoxFuture, BoxedAsyncStream, Host, Result};
-use veex_transport::{
-    connect_host, connect_tls, ConnectTraceContext, TcpConnectOptions, TlsClientOptions,
-};
+use veex_core::{BoxFuture, Dial, Dialer, Host};
+use veex_transport::{connect_host, ConnectTraceContext, TcpConnectOptions};
 
-pub(crate) type TcpConnector =
+pub type TcpConnector =
     dyn Fn(Host, u16, TcpConnectOptions) -> BoxFuture<'static, TcpStream> + Send + Sync;
 
-pub(crate) fn system_tcp_connector() -> Arc<TcpConnector> {
+pub fn system_tcp_connector() -> Arc<TcpConnector> {
     Arc::new(|host, port, options| {
         Box::pin(async move { connect_host(&host, port, options).await })
     })
+}
+
+pub fn build_dialer(dial: Dial) -> Dialer {
+    build_dialer_with_connector(dial, system_tcp_connector())
+}
+
+pub fn build_dialer_with_connector(dial: Dial, connector: Arc<TcpConnector>) -> Dialer {
+    Dialer::new(
+        dial,
+        Arc::new(move |host, port, dial, ctx| {
+            let connector = Arc::clone(&connector);
+            Box::pin(async move {
+                connector(
+                    host,
+                    port,
+                    TcpConnectOptions {
+                        timeout: dial.timeout,
+                        trace: Some(ConnectTraceContext {
+                            session_id: ctx.session_id,
+                            outbound: ctx.outbound_tag,
+                            routing_mark: dial.routing_mark,
+                        }),
+                        connector: None,
+                    },
+                )
+                .await
+            })
+        }),
+    )
 }
 
 pub(crate) fn parse_host(value: &str) -> Host {
@@ -20,26 +47,4 @@ pub(crate) fn parse_host(value: &str) -> Host {
         Ok(ip) => Host::Ip(ip),
         Err(_) => Host::Domain(value.to_string()),
     }
-}
-
-pub(crate) async fn connect_server(
-    server: &Host,
-    server_port: u16,
-    tls: &TlsClientOptions,
-    connect_timeout: Duration,
-    trace: &ConnectTraceContext,
-    connector: &Arc<TcpConnector>,
-) -> Result<BoxedAsyncStream> {
-    let stream = connector(
-        server.clone(),
-        server_port,
-        TcpConnectOptions {
-            timeout: Some(connect_timeout),
-            trace: Some(trace.clone()),
-            connector: None,
-        },
-    )
-    .await?;
-
-    connect_tls(stream, server, server_port, tls, Some(trace)).await
 }

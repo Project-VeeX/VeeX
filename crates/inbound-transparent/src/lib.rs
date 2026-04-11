@@ -4,5 +4,5 @@ pub mod redirect;
 mod shared;
 pub mod tproxy;
 
-pub use redirect::{RedirectError, RedirectInbound};
-pub use tproxy::{TProxyError, TProxyInbound};
+pub use redirect::{create_redirect_listener, RedirectError, RedirectInbound};
+pub use tproxy::{create_tproxy_listener, TProxyError, TProxyInbound};

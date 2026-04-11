@@ -1,140 +1,144 @@
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
-use veex_core::{BoxFuture, BoxedAsyncStream, Host, Outbound, Result, SessionContext};
-use veex_transport::{ConnectTraceContext, TcpConnectOptions, TlsClientOptions};
+use veex_core::{
+    BoxFuture, BoxedAsyncStream, DialContext, Dialer, Host, Logger, Outbound, OutboundMeta,
+    ProxyError, ProxyOutbound, Result, SessionContext,
+};
+use veex_transport::{connect_tls, ConnectTraceContext, TlsClientOptions};
 
 use crate::{
-    dialer::{connect_server, parse_host, system_tcp_connector, TcpConnector},
+    dialer::parse_host,
     encode::build_trojan_request,
     error::{request_write_error, validate_trojan_client},
 };
 
-#[derive(Clone)]
+#[derive(Debug)]
+struct TrojanOutboundState {
+    closed: AtomicBool,
+}
+
 pub struct TrojanOutbound {
-    tag: String,
+    meta: OutboundMeta,
+    logger: Logger,
+    dialer: Dialer,
     server: Host,
     server_port: u16,
     password: String,
     tls: TlsClientOptions,
-    connect_timeout: Duration,
-    connector: Arc<TcpConnector>,
+    state: Arc<TrojanOutboundState>,
 }
 
 impl fmt::Debug for TrojanOutbound {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TrojanOutbound")
-            .field("tag", &self.tag)
+            .field("meta", &self.meta)
+            .field("logger", &self.logger)
+            .field("dialer", &self.dialer)
             .field("server", &self.server)
             .field("server_port", &self.server_port)
             .field("tls", &self.tls)
-            .field("connect_timeout", &self.connect_timeout)
             .finish()
     }
 }
 
 impl TrojanOutbound {
     pub fn new(
-        tag: impl Into<String>,
+        meta: OutboundMeta,
+        logger: Logger,
+        dialer: Dialer,
         server: impl Into<String>,
         server_port: u16,
         password: impl Into<String>,
-        connect_timeout: Duration,
         tls: TlsClientOptions,
-    ) -> Self {
-        let connector = system_tcp_connector();
-        Self::new_with_connector(
-            tag,
-            server,
-            server_port,
-            password,
-            connect_timeout,
-            tls,
-            move |host, port, options| connector(host, port, options),
-        )
-    }
-
-    pub fn new_with_connector<F>(
-        tag: impl Into<String>,
-        server: impl Into<String>,
-        server_port: u16,
-        password: impl Into<String>,
-        connect_timeout: Duration,
-        tls: TlsClientOptions,
-        connector: F,
-    ) -> Self
-    where
-        F: Fn(Host, u16, TcpConnectOptions) -> BoxFuture<'static, TcpStream>
-            + Send
-            + Sync
-            + 'static,
-    {
-        let server = parse_host(&server.into());
-        Self {
-            tag: tag.into(),
-            server,
+    ) -> Result<Self> {
+        let outbound = Self {
+            meta,
+            logger,
+            dialer,
+            server: parse_host(&server.into()),
             server_port,
             password: password.into(),
             tls,
-            connect_timeout,
-            connector: Arc::new(connector),
-        }
-    }
-
-    pub fn tag(&self) -> &str {
-        &self.tag
-    }
-
-    pub fn server(&self) -> &Host {
-        &self.server
-    }
-
-    pub fn server_port(&self) -> u16 {
-        self.server_port
-    }
-
-    pub fn tls(&self) -> &TlsClientOptions {
-        &self.tls
+            state: Arc::new(TrojanOutboundState {
+                closed: AtomicBool::new(false),
+            }),
+        };
+        outbound.validate()?;
+        Ok(outbound)
     }
 
     pub fn validate(&self) -> Result<()> {
-        validate_trojan_client(&self.tag, &self.password, self.server_port, &self.tls)
+        if self.meta.r#type.trim().is_empty() {
+            return Err(ProxyError::config("trojan outbound type must not be empty"));
+        }
+
+        validate_trojan_client(&self.meta.tag, &self.password, self.server_port, &self.tls)
+    }
+
+    fn is_closed(&self) -> bool {
+        self.state.closed.load(Ordering::Relaxed)
     }
 }
 
 impl Outbound for TrojanOutbound {
-    fn tag(&self) -> &str {
-        &self.tag
+    fn meta(&self) -> &OutboundMeta {
+        &self.meta
     }
 
-    fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
-        let this = self.clone();
-        let session_id = ctx.meta.id;
+    fn logger(&self) -> &Logger {
+        &self.logger
+    }
+
+    fn start(&self) -> BoxFuture<'_, ()> {
+        self.state.closed.store(false, Ordering::Relaxed);
+        Box::pin(async { Ok(()) })
+    }
+
+    fn close(&self) -> BoxFuture<'_, ()> {
+        self.state.closed.store(true, Ordering::Relaxed);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+impl ProxyOutbound for TrojanOutbound {
+    fn connect_proxy_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
         let destination = ctx.meta.destination.clone();
         let buffered_payload = ctx.state.buffered_payload.clone();
+        let dialer = self.dialer.clone();
+        let server = self.server.clone();
+        let server_port = self.server_port;
+        let password = self.password.clone();
+        let tls = self.tls.clone();
+        let closed = self.is_closed();
+        let tcp_trace = DialContext {
+            session_id: ctx.meta.id,
+            outbound_tag: self.meta.tag.clone(),
+        };
+        let tls_trace = ConnectTraceContext {
+            session_id: ctx.meta.id,
+            outbound: self.meta.tag.clone(),
+            routing_mark: self.dialer.dial().routing_mark,
+        };
 
         Box::pin(async move {
-            this.validate()?;
-            let trace = ConnectTraceContext {
-                session_id,
-                outbound: this.tag.clone(),
-                routing_mark: None,
-            };
-            let connector = Arc::clone(&this.connector);
+            if closed {
+                return Err(ProxyError::Shutdown);
+            }
+            validate_trojan_client(&tcp_trace.outbound_tag, &password, server_port, &tls)?;
 
             // Trojan preserves transport-originated connect/tls errors and only
             // converts outbound framing failures at its own boundary.
-            let mut stream = connect_server(
-                &this.server,
-                this.server_port,
-                &this.tls,
-                this.connect_timeout,
-                &trace,
-                &connector,
-            )
-            .await?;
-            let request = build_trojan_request(&this.password, &destination, &buffered_payload)?;
+            let tcp_stream = dialer.connect(&server, server_port, tcp_trace).await?;
+            let mut stream =
+                connect_tls(tcp_stream, &server, server_port, &tls, Some(&tls_trace)).await?;
+            let request = build_trojan_request(&password, &destination, &buffered_payload)?;
             stream
                 .write_all(&request)
                 .await
@@ -160,13 +164,17 @@ mod tests {
     };
     use tokio::{io::AsyncReadExt, net::TcpListener};
     use tokio_rustls::TlsAcceptor;
-    use veex_core::{Destination, Host, Network, Outbound, SessionContext, SessionMeta};
+    use veex_core::{
+        Destination, Dial, Host, Logger, Network, OutboundMeta, ProxyOutbound, SessionContext,
+        SessionMeta,
+    };
     use veex_test_tracing::{
         assert_has_event, captured_events, install_test_subscriber, CapturedEvent,
     };
     use veex_transport::{connect_resolved_addresses, TlsClientOptions};
 
     use super::TrojanOutbound;
+    use crate::dialer::build_dialer_with_connector;
     use crate::encode::build_trojan_request;
 
     fn event_count(events: &[CapturedEvent], event_name: &str) -> usize {
@@ -182,19 +190,12 @@ mod tests {
         let server = spawn_tls_server("localhost").await;
         let bad_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), server.addr.port());
         let good_addr = server.addr;
-        let outbound = TrojanOutbound {
-            tag: "proxy".into(),
-            server: Host::Domain("fallback.test".into()),
-            server_port: server.addr.port(),
-            password: "secret".into(),
-            tls: TlsClientOptions {
-                enabled: true,
-                insecure: true,
-                server_name: Some("localhost".into()),
-                ..TlsClientOptions::default()
+        let dialer = build_dialer_with_connector(
+            Dial {
+                timeout: Some(Duration::from_secs(1)),
+                routing_mark: None,
             },
-            connect_timeout: Duration::from_secs(1),
-            connector: Arc::new(move |_host, port, options| {
+            Arc::new(move |_host, port, options| {
                 Box::pin(async move {
                     connect_resolved_addresses(
                         "fallback.test",
@@ -205,7 +206,22 @@ mod tests {
                     .await
                 })
             }),
-        };
+        );
+        let outbound = TrojanOutbound::new(
+            OutboundMeta::new("proxy", "trojan"),
+            Logger::new("proxy", "trojan"),
+            dialer,
+            "fallback.test",
+            server.addr.port(),
+            "secret",
+            TlsClientOptions {
+                enabled: true,
+                insecure: true,
+                server_name: Some("localhost".into()),
+                ..TlsClientOptions::default()
+            },
+        )
+        .expect("trojan outbound should build");
 
         let destination = Destination::new(Host::Domain("example.com".into()), 443);
         let buffered_payload = b"GET / HTTP/1.1\r\n\r\n".to_vec();
@@ -224,7 +240,7 @@ mod tests {
         );
 
         let stream = outbound
-            .connect(&ctx)
+            .connect_proxy_stream(&ctx)
             .await
             .expect("trojan outbound should connect on the second address");
         drop(stream);
@@ -284,25 +300,33 @@ mod tests {
         let (_guard, trace_buffer) = install_test_subscriber();
         let first = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), 18443);
         let second = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)), 18443);
-        let outbound = TrojanOutbound {
-            tag: "proxy".into(),
-            server: Host::Domain("fallback.test".into()),
-            server_port: 18443,
-            password: "secret".into(),
-            tls: TlsClientOptions {
-                enabled: true,
-                insecure: true,
-                server_name: Some("localhost".into()),
-                ..TlsClientOptions::default()
+        let dialer = build_dialer_with_connector(
+            Dial {
+                timeout: Some(Duration::from_millis(200)),
+                routing_mark: None,
             },
-            connect_timeout: Duration::from_millis(200),
-            connector: Arc::new(move |_host, port, options| {
+            Arc::new(move |_host, port, options| {
                 Box::pin(async move {
                     connect_resolved_addresses("fallback.test", port, vec![first, second], options)
                         .await
                 })
             }),
-        };
+        );
+        let outbound = TrojanOutbound::new(
+            OutboundMeta::new("proxy", "trojan"),
+            Logger::new("proxy", "trojan"),
+            dialer,
+            "fallback.test",
+            18443,
+            "secret",
+            TlsClientOptions {
+                enabled: true,
+                insecure: true,
+                server_name: Some("localhost".into()),
+                ..TlsClientOptions::default()
+            },
+        )
+        .expect("trojan outbound should build");
 
         let ctx = SessionContext::new(
             SessionMeta {
@@ -316,7 +340,7 @@ mod tests {
             Vec::new(),
         );
 
-        let err = match outbound.connect(&ctx).await {
+        let err = match outbound.connect_proxy_stream(&ctx).await {
             Ok(_) => panic!("all addresses should fail"),
             Err(err) => err,
         };

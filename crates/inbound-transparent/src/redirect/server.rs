@@ -1,5 +1,4 @@
 use std::{
-    future::pending,
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -7,153 +6,128 @@ use std::{
     },
 };
 
-use tokio::{
-    net::{TcpListener, TcpStream},
-    task::JoinSet,
-};
-use tracing::{error, info, warn};
+use tokio::net::TcpStream;
+use tracing::{info, warn};
 use veex_core::{
-    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, Listen,
-    ProxyError, Result, ShutdownSignal,
+    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, InboundMeta,
+    Listener, ListenerAcceptHandler, Logger, ProxyError, Result, TransparentInbound,
 };
 use veex_infra_linux::get_original_dst as get_original_dst_socket;
 
 use crate::shared::session::{build_session_bootstrap, SessionBootstrap};
 
-use super::{error::RedirectError, listener::create_redirect_listener};
+use super::error::RedirectError;
 
 type ResolveOriginalDst =
     dyn Fn(&TcpStream) -> std::result::Result<Destination, RedirectError> + Send + Sync;
-type ListenerFactory =
-    dyn Fn(SocketAddr) -> std::result::Result<TcpListener, RedirectError> + Send + Sync;
 
 fn resolve_original_dst(stream: &TcpStream) -> std::result::Result<Destination, RedirectError> {
     let destination = get_original_dst_socket(stream)?;
     Ok(Destination::from_ip(destination.ip(), destination.port()))
 }
 
-pub struct RedirectInbound {
-    tag: String,
-    listen: Listen,
+struct RedirectInboundState {
     next_session_id: AtomicU64,
-    resolver: Arc<ResolveOriginalDst>,
-    listener_factory: Arc<ListenerFactory>,
-    shutdown: Option<ShutdownSignal>,
+}
+
+pub struct RedirectInbound {
+    meta: InboundMeta,
+    logger: Logger,
+    router: Arc<dyn Dispatcher>,
+    listener: Listener,
+    original_dst_resolver: Arc<ResolveOriginalDst>,
+    state: Arc<RedirectInboundState>,
 }
 
 impl RedirectInbound {
-    pub fn new(tag: impl Into<String>, listen: Listen) -> Self {
-        Self::new_internal(
-            tag,
-            listen,
+    pub fn new(
+        meta: InboundMeta,
+        logger: Logger,
+        router: Arc<dyn Dispatcher>,
+        listener: Listener,
+    ) -> Result<Arc<Self>> {
+        Self::new_with_resolver(
+            meta,
+            logger,
+            router,
+            listener,
             Arc::new(resolve_original_dst),
-            Arc::new(create_redirect_listener),
-            None,
         )
     }
 
-    pub fn with_shutdown_signal(
-        tag: impl Into<String>,
-        listen: Listen,
-        shutdown: ShutdownSignal,
-    ) -> Self {
-        Self::new_internal(
-            tag,
-            listen,
-            Arc::new(resolve_original_dst),
-            Arc::new(create_redirect_listener),
-            Some(shutdown),
-        )
-    }
-
-    #[cfg(test)]
-    fn new_with_hooks(
-        tag: impl Into<String>,
-        listen: Listen,
+    fn new_with_resolver(
+        meta: InboundMeta,
+        logger: Logger,
+        router: Arc<dyn Dispatcher>,
+        listener: Listener,
         resolver: Arc<ResolveOriginalDst>,
-        listener_factory: Arc<ListenerFactory>,
-    ) -> Self {
-        Self::new_internal(tag, listen, resolver, listener_factory, None)
-    }
-
-    fn new_internal(
-        tag: impl Into<String>,
-        listen: Listen,
-        resolver: Arc<ResolveOriginalDst>,
-        listener_factory: Arc<ListenerFactory>,
-        shutdown: Option<ShutdownSignal>,
-    ) -> Self {
-        Self {
-            tag: tag.into(),
-            listen,
-            next_session_id: AtomicU64::new(1),
-            resolver,
-            listener_factory,
-            shutdown,
-        }
-    }
-
-    pub fn tag(&self) -> &str {
-        &self.tag
-    }
-
-    pub fn listen(&self) -> &str {
-        self.listen.listen()
-    }
-
-    pub fn listen_port(&self) -> u16 {
-        self.listen.listen_port()
+    ) -> Result<Arc<Self>> {
+        let inbound = Arc::new(Self {
+            meta,
+            logger,
+            router,
+            listener,
+            original_dst_resolver: resolver,
+            state: Arc::new(RedirectInboundState {
+                next_session_id: AtomicU64::new(1),
+            }),
+        });
+        inbound.validate()?;
+        inbound.bind_listener_handler()?;
+        Ok(inbound)
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.tag.trim().is_empty() {
-            return Err(ProxyError::Config(
-                "redirect inbound tag must not be empty".into(),
+        if self.meta.tag.trim().is_empty() {
+            return Err(ProxyError::config("redirect inbound tag must not be empty"));
+        }
+        if self.meta.r#type.trim().is_empty() {
+            return Err(ProxyError::config(
+                "redirect inbound type must not be empty",
             ));
         }
-        if self.listen.listen().trim().is_empty() {
-            return Err(ProxyError::Config(
-                "redirect inbound listen must not be empty".into(),
+        if self.listener.listen().listen().trim().is_empty() {
+            return Err(ProxyError::config(
+                "redirect inbound listen must not be empty",
             ));
         }
-        if self.listen.listen_port() == 0 {
-            return Err(ProxyError::Config(
-                "redirect inbound listen_port must be within 1..=65535".into(),
+        if self.listener.listen().listen_port() == 0 {
+            return Err(ProxyError::config(
+                "redirect inbound listen_port must be within 1..=65535",
             ));
         }
-        let _ = self.bind_addr()?;
-        Ok(())
+        self.listener.bind_addr().map(|_| ())
     }
 
-    fn bind_addr(&self) -> Result<SocketAddr> {
-        self.listen.parse_addr().map_err(|err| {
-            ProxyError::Config(format!(
-                "redirect inbound listen must be a valid socket address: {err}"
-            ))
-        })
+    fn bind_listener_handler(self: &Arc<Self>) -> Result<()> {
+        let inbound = Arc::clone(self);
+        let handler: Arc<ListenerAcceptHandler> = Arc::new(move |stream, peer| {
+            let inbound = Arc::clone(&inbound);
+            Box::pin(async move {
+                if let Err(err) = inbound.accept_transparent_stream(stream, peer).await {
+                    inbound.log_connection_failed(peer, &err);
+                }
+            })
+        });
+        self.listener.bind_handler(handler)
     }
 
     fn next_session_id(&self) -> u64 {
-        self.next_session_id.fetch_add(1, Ordering::Relaxed)
+        self.state.next_session_id.fetch_add(1, Ordering::Relaxed)
     }
 
     fn bootstrap_session(&self, peer: SocketAddr, destination: Destination) -> SessionBootstrap {
         let session_id = self.next_session_id();
-        build_session_bootstrap(session_id, self.tag.as_str(), peer, destination)
+        build_session_bootstrap(session_id, self.meta.tag.as_str(), peer, destination)
     }
 
-    async fn handle_connection(
-        self: Arc<Self>,
-        dispatcher: Arc<dyn Dispatcher>,
-        stream: TcpStream,
-        peer: SocketAddr,
-    ) -> Result<()> {
-        let destination = match (self.resolver)(&stream) {
+    async fn handle_stream(&self, stream: TcpStream, peer: SocketAddr) -> Result<()> {
+        let destination = match (self.original_dst_resolver)(&stream) {
             Ok(destination) => destination,
             Err(err) => {
                 warn!(
                     event = "destination_resolve_failed",
-                    inbound = %sanitize_field(self.tag.as_str()),
+                    inbound = %self.logger.tag_field(),
                     peer = %sanitize_field(&peer.to_string()),
                     error = %err,
                     "redirect original destination lookup failed"
@@ -173,7 +147,7 @@ impl RedirectInbound {
         );
 
         let stream: BoxedAsyncStream = Box::new(stream);
-        let result = dispatcher.dispatch(stream, session.ctx).await;
+        let result = self.router.dispatch(stream, session.ctx).await;
         if let Err(err) = &result {
             warn!(
                 event = "session_failed",
@@ -189,76 +163,44 @@ impl RedirectInbound {
         result
     }
 
-    async fn wait_for_shutdown(&self) {
-        match &self.shutdown {
-            Some(shutdown) => shutdown.wait().await,
-            None => pending::<()>().await,
-        }
+    fn log_connection_failed(&self, peer: SocketAddr, err: &ProxyError) {
+        let peer_field = peer.to_string();
+        let peer_field = sanitize_field(&peer_field).into_owned();
+        warn!(
+            event = "inbound_connection_failed",
+            inbound = %self.logger.tag_field(),
+            peer = %peer_field,
+            error_kind = ?err.kind(),
+            error = %err,
+            "redirect inbound connection failed"
+        );
     }
 }
 
 impl Inbound for RedirectInbound {
-    fn tag(&self) -> &str {
-        &self.tag
+    fn meta(&self) -> &InboundMeta {
+        &self.meta
     }
 
-    fn serve(self: Arc<Self>, dispatcher: Arc<dyn Dispatcher>) -> BoxFuture<'static, ()> {
+    fn logger(&self) -> &Logger {
+        &self.logger
+    }
+
+    fn start(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             self.validate()?;
-            let listener = (self.listener_factory)(self.bind_addr()?)?;
-            let mut connections = JoinSet::new();
-            let mut shutting_down = false;
-
-            loop {
-                if shutting_down && connections.is_empty() {
-                    break;
-                }
-
-                tokio::select! {
-                    _ = self.wait_for_shutdown(), if !shutting_down => {
-                        shutting_down = true;
-                    }
-                    accept_result = listener.accept(), if !shutting_down => {
-                        let (stream, peer) = accept_result?;
-                        let inbound = Arc::clone(&self);
-                        let inbound_tag = sanitize_field(inbound.tag.as_str()).into_owned();
-                        let dispatcher = Arc::clone(&dispatcher);
-
-                        connections.spawn(async move {
-                            if let Err(err) = inbound.handle_connection(dispatcher, stream, peer).await {
-                                let peer_field = peer.to_string();
-                                let peer_field = sanitize_field(&peer_field).into_owned();
-                                warn!(
-                                    event = "inbound_connection_failed",
-                                    inbound = %inbound_tag,
-                                    peer = %peer_field,
-                                    error_kind = ?err.kind(),
-                                    error = %err,
-                                    "redirect inbound connection failed"
-                                );
-                            }
-                        });
-                    }
-                    maybe_task = connections.join_next(), if !connections.is_empty() => {
-                        if let Some(Err(err)) = maybe_task {
-                            let inbound_field = sanitize_field(self.tag.as_str()).into_owned();
-                            error!(
-                                event = "task_join_failed",
-                                inbound = %inbound_field,
-                                error = %err,
-                                "redirect connection task join failed"
-                            );
-                            return Err(ProxyError::protocol_ctx(
-                                "redirect inbound connection task join failed",
-                                err,
-                            ));
-                        }
-                    }
-                }
-            }
-
-            Ok(())
+            self.listener.start().await
         })
+    }
+
+    fn close(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move { self.listener.close().await })
+    }
+}
+
+impl TransparentInbound for RedirectInbound {
+    fn accept_transparent_stream(&self, stream: TcpStream, peer: SocketAddr) -> BoxFuture<'_, ()> {
+        Box::pin(async move { self.handle_stream(stream, peer).await })
     }
 }
 
@@ -270,10 +212,12 @@ mod tests {
         time::Duration,
     };
 
-    use tokio::{net::TcpStream, sync::oneshot};
-    use veex_core::{BoxFuture, Destination, Dispatcher, Host, Inbound, Listen};
+    use tokio::{net::TcpListener, net::TcpStream, sync::oneshot};
+    use veex_core::{
+        BoxFuture, Destination, Dispatcher, Inbound, InboundMeta, Listener, ListenerFactory, Logger,
+    };
 
-    use super::{resolve_original_dst, ListenerFactory, RedirectError, RedirectInbound};
+    use super::{RedirectError, RedirectInbound, ResolveOriginalDst};
 
     struct RecordingDispatcher {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,
@@ -299,34 +243,36 @@ mod tests {
     #[tokio::test]
     async fn redirect_inbound_forwards_resolved_destination_to_dispatcher() {
         let listen_addr = reserve_local_port().await;
-        let expected = Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5))), 443);
-        let resolver_destination = expected.clone();
-        let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
-            let listener = std::net::TcpListener::bind(addr)?;
-            listener.set_nonblocking(true)?;
-            Ok(tokio::net::TcpListener::from_std(listener)?)
-        });
-        let inbound = Arc::new(RedirectInbound::new_with_hooks(
-            "redirect-in",
-            Listen::new("127.0.0.1", listen_addr.port()),
-            Arc::new(move |_| Ok(resolver_destination.clone())),
-            listener_factory,
-        ));
+        let expected = Destination::from_ip(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5)), 443);
         let (tx, rx) = oneshot::channel();
         let dispatcher: Arc<dyn Dispatcher> = Arc::new(RecordingDispatcher {
             tx: Mutex::new(Some(tx)),
         });
+        let resolved = expected.clone();
+        let inbound = RedirectInbound::new_with_resolver(
+            InboundMeta::new("redirect-in", "redirect"),
+            Logger::new("redirect-in", "redirect"),
+            dispatcher,
+            test_listener(
+                listen_addr,
+                Arc::new(|addr| {
+                    let listener = std::net::TcpListener::bind(addr)?;
+                    listener.set_nonblocking(true)?;
+                    Ok(TcpListener::from_std(listener)?)
+                }),
+            ),
+            fixed_resolver(resolved),
+        )
+        .expect("redirect inbound should build");
 
-        let serve_task = tokio::spawn(Arc::clone(&inbound).serve(dispatcher));
+        inbound.start().await.expect("redirect should start");
         let _client = connect_with_retry(listen_addr).await;
         let received = tokio::time::timeout(Duration::from_secs(1), rx)
             .await
             .expect("dispatcher should receive destination")
             .expect("destination should be delivered");
         assert_eq!(received, expected);
-
-        serve_task.abort();
-        let _ = serve_task.await;
+        inbound.close().await.expect("redirect should close");
     }
 
     #[tokio::test]
@@ -339,7 +285,7 @@ mod tests {
 
         let accept_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept should succeed");
-            resolve_original_dst(&stream)
+            super::resolve_original_dst(&stream)
         });
 
         let _client = TcpStream::connect(addr)
@@ -360,13 +306,52 @@ mod tests {
 
     #[test]
     fn redirect_inbound_accepts_unspecified_ipv6_listen_addr() {
-        let inbound = RedirectInbound::new("redirect-in", Listen::new("::", 1041));
+        let inbound = RedirectInbound::new_with_resolver(
+            InboundMeta::new("redirect-in", "redirect"),
+            Logger::new("redirect-in", "redirect"),
+            Arc::new(RecordingDispatcher {
+                tx: Mutex::new(None),
+            }),
+            test_listener(
+                SocketAddr::from((Ipv6Addr::UNSPECIFIED, 1041)),
+                Arc::new(|addr| {
+                    let listener = std::net::TcpListener::bind(addr)?;
+                    listener.set_nonblocking(true)?;
+                    Ok(TcpListener::from_std(listener)?)
+                }),
+            ),
+            fixed_resolver(Destination::from_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), 443)),
+        )
+        .expect("redirect inbound should build");
         assert_eq!(
             inbound
+                .listener
                 .bind_addr()
                 .expect("redirect ipv6 listen should parse"),
             SocketAddr::from((Ipv6Addr::UNSPECIFIED, 1041))
         );
+    }
+
+    fn fixed_resolver(destination: Destination) -> Arc<ResolveOriginalDst> {
+        Arc::new(
+            move |_stream: &TcpStream| -> std::result::Result<Destination, RedirectError> {
+                Ok(destination.clone())
+            },
+        )
+    }
+
+    fn test_listener(
+        addr: SocketAddr,
+        factory: Arc<
+            dyn Fn(SocketAddr) -> std::result::Result<TcpListener, RedirectError> + Send + Sync,
+        >,
+    ) -> Listener {
+        let listen = veex_core::Listen::new(addr.ip().to_string(), addr.port());
+        let factory: Arc<ListenerFactory> = Arc::new(move |addr| {
+            let factory = Arc::clone(&factory);
+            Box::pin(async move { factory(addr).map_err(Into::into) })
+        });
+        Listener::new(listen, factory)
     }
 
     async fn reserve_local_port() -> SocketAddr {
@@ -378,10 +363,10 @@ mod tests {
 
     async fn connect_with_retry(addr: SocketAddr) -> TcpStream {
         for _ in 0..50 {
-            match TcpStream::connect(addr).await {
-                Ok(stream) => return stream,
-                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            if let Ok(stream) = TcpStream::connect(addr).await {
+                return stream;
             }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
         panic!("listener did not become ready on {addr}");

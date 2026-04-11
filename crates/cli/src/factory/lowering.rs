@@ -3,37 +3,50 @@ use veex_config::{
     RouteRuleConfig, RouteUpgradeActionConfig, TrojanTlsConfig,
 };
 use veex_core::{
-    Listen, RouteAction, RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, SniffAction,
+    Dial, InboundMeta, Listen, Network, OutboundMeta, RouteAction, RouteFinalAction, RouteRule,
+    RouteTarget, RouteUpgradeAction, SniffAction,
 };
 use veex_transport::TlsClientOptions;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct LoweredListenInbound {
-    pub(crate) tag: String,
+pub(crate) struct LoweredSocksInbound {
+    pub(crate) meta: InboundMeta,
     pub(crate) listen: Listen,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LoweredRedirectInbound {
+    pub(crate) meta: InboundMeta,
+    pub(crate) listen: Listen,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LoweredTProxyInbound {
+    pub(crate) meta: InboundMeta,
+    pub(crate) listen: Listen,
+    pub(crate) network: Network,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum LoweredInbound {
-    Socks(LoweredListenInbound),
-    Redirect(LoweredListenInbound),
-    TProxy(LoweredListenInbound),
+    Socks(LoweredSocksInbound),
+    Redirect(LoweredRedirectInbound),
+    TProxy(LoweredTProxyInbound),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LoweredDirectOutbound {
-    pub(crate) tag: String,
-    pub(crate) connect_timeout: std::time::Duration,
-    pub(crate) routing_mark: Option<u32>,
+    pub(crate) meta: OutboundMeta,
+    pub(crate) dial: Dial,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct LoweredTrojanOutbound {
-    pub(crate) tag: String,
+    pub(crate) meta: OutboundMeta,
+    pub(crate) dial: Dial,
     pub(crate) server: String,
     pub(crate) server_port: u16,
     pub(crate) password: String,
-    pub(crate) connect_timeout: std::time::Duration,
     pub(crate) tls: TlsClientOptions,
 }
 
@@ -51,17 +64,18 @@ pub(crate) struct LoweredRoute {
 
 pub(crate) fn lower_inbound(inbound: &InboundConfig) -> LoweredInbound {
     match inbound {
-        InboundConfig::Socks(config) => LoweredInbound::Socks(LoweredListenInbound {
-            tag: config.tag.clone(),
+        InboundConfig::Socks(config) => LoweredInbound::Socks(LoweredSocksInbound {
+            meta: InboundMeta::new(config.tag.clone(), "socks"),
             listen: Listen::new(config.listen.clone(), config.listen_port),
         }),
-        InboundConfig::Redirect(config) => LoweredInbound::Redirect(LoweredListenInbound {
-            tag: config.tag.clone(),
+        InboundConfig::Redirect(config) => LoweredInbound::Redirect(LoweredRedirectInbound {
+            meta: InboundMeta::new(config.tag.clone(), "redirect"),
             listen: Listen::new(config.listen.clone(), config.listen_port),
         }),
-        InboundConfig::TProxy(config) => LoweredInbound::TProxy(LoweredListenInbound {
-            tag: config.tag.clone(),
+        InboundConfig::TProxy(config) => LoweredInbound::TProxy(LoweredTProxyInbound {
+            meta: InboundMeta::new(config.tag.clone(), "tproxy"),
             listen: Listen::new(config.listen.clone(), config.listen_port),
+            network: normalize_tproxy_network(config.network.as_deref()),
         }),
     }
 }
@@ -69,16 +83,21 @@ pub(crate) fn lower_inbound(inbound: &InboundConfig) -> LoweredInbound {
 pub(crate) fn lower_outbound(outbound: &OutboundConfig) -> LoweredOutbound {
     match outbound {
         OutboundConfig::Direct(config) => LoweredOutbound::Direct(LoweredDirectOutbound {
-            tag: config.tag.clone(),
-            connect_timeout: config.connect_timeout,
-            routing_mark: config.routing_mark,
+            meta: OutboundMeta::new(config.tag.clone(), "direct"),
+            dial: Dial {
+                timeout: Some(config.connect_timeout),
+                routing_mark: config.routing_mark,
+            },
         }),
         OutboundConfig::Trojan(config) => LoweredOutbound::Trojan(LoweredTrojanOutbound {
-            tag: config.tag.clone(),
+            meta: OutboundMeta::new(config.tag.clone(), "trojan"),
+            dial: Dial {
+                timeout: Some(config.connect_timeout),
+                routing_mark: None,
+            },
             server: config.server.clone(),
             server_port: config.server_port,
             password: config.password.clone(),
-            connect_timeout: config.connect_timeout,
             tls: lower_tls_options(&config.tls),
         }),
     }
@@ -130,4 +149,8 @@ fn lower_tls_options(config: &TrojanTlsConfig) -> TlsClientOptions {
         ca_path: config.ca_path.clone(),
         handshake_timeout: config.handshake_timeout,
     }
+}
+
+fn normalize_tproxy_network(_network: Option<&str>) -> Network {
+    Network::Tcp
 }

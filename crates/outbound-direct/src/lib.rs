@@ -6,3 +6,4 @@ mod dialer;
 mod error;
 
 pub use client::DirectOutbound;
+pub use dialer::{build_dialer, build_dialer_with_connector, system_host_resolver};

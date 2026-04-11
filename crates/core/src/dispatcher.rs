@@ -8,13 +8,36 @@ use crate::{
     logging::sanitize_field,
     relay::{relay_bidirectional_with_trace, RelayTraceContext},
     router::Router,
-    traits::{BoxFuture, Dispatcher, Outbound},
+    service::OutboundMeta,
+    traits::{BoxFuture, Dispatcher, ProxyOutbound, StreamOutbound},
     types::{BoxedAsyncStream, RouteReason, SessionContext},
 };
 
+#[derive(Clone)]
+pub enum RuntimeOutbound {
+    Stream(Arc<dyn StreamOutbound>),
+    Proxy(Arc<dyn ProxyOutbound>),
+}
+
+impl RuntimeOutbound {
+    pub fn meta(&self) -> &OutboundMeta {
+        match self {
+            Self::Stream(outbound) => outbound.meta(),
+            Self::Proxy(outbound) => outbound.meta(),
+        }
+    }
+
+    fn connect_selected(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        match self {
+            Self::Stream(outbound) => outbound.connect_stream(ctx),
+            Self::Proxy(outbound) => outbound.connect_proxy_stream(ctx),
+        }
+    }
+}
+
 pub struct SimpleDispatcher {
     router: Router,
-    outbounds: HashMap<String, Arc<dyn Outbound>>,
+    outbounds: HashMap<String, RuntimeOutbound>,
 }
 
 #[derive(Clone, Debug)]
@@ -28,7 +51,7 @@ struct DispatchTraceContext {
 }
 
 impl SimpleDispatcher {
-    pub fn new(router: Router, outbounds: HashMap<String, Arc<dyn Outbound>>) -> Self {
+    pub fn new(router: Router, outbounds: HashMap<String, RuntimeOutbound>) -> Self {
         Self { router, outbounds }
     }
 }
@@ -57,7 +80,7 @@ impl Dispatcher for SimpleDispatcher {
                 ProxyError::config(format!("missing outbound tag: {outbound_tag}"))
             })?;
 
-            let (summary, result) = match outbound.connect(&ctx).await {
+            let (summary, result) = match outbound.connect_selected(&ctx).await {
                 Ok(outbound_stream) => {
                     log_relay_start(&trace);
                     match relay_bidirectional_with_trace(
@@ -202,11 +225,11 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-    use super::SimpleDispatcher;
+    use super::{RuntimeOutbound, SimpleDispatcher};
     use crate::{
-        traits::{Dispatcher, Outbound},
-        BoxFuture, BoxedAsyncStream, Destination, ErrorKind, Network, RouteReason, Router,
-        SessionContext, SessionMeta, SessionRoute, SessionState,
+        traits::{Dispatcher, Outbound, StreamOutbound},
+        BoxFuture, BoxedAsyncStream, Destination, ErrorKind, Logger, Network, OutboundMeta,
+        RouteReason, Router, SessionContext, SessionMeta, SessionRoute, SessionState,
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
@@ -305,7 +328,8 @@ mod tests {
     }
 
     struct CaptureOutbound {
-        tag: String,
+        meta: OutboundMeta,
+        logger: Logger,
         captured: Arc<Mutex<Option<CapturedContext>>>,
     }
 
@@ -314,7 +338,8 @@ mod tests {
             let captured = Arc::new(Mutex::new(None));
             (
                 Self {
-                    tag: tag.into(),
+                    meta: OutboundMeta::new(tag.into(), "capture"),
+                    logger: Logger::new("capture-out", "capture"),
                     captured: Arc::clone(&captured),
                 },
                 captured,
@@ -323,11 +348,21 @@ mod tests {
     }
 
     impl Outbound for CaptureOutbound {
-        fn tag(&self) -> &str {
-            &self.tag
+        fn meta(&self) -> &OutboundMeta {
+            &self.meta
         }
 
-        fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        fn logger(&self) -> &Logger {
+            &self.logger
+        }
+
+        fn close(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl StreamOutbound for CaptureOutbound {
+        fn connect_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             let captured = Arc::clone(&self.captured);
             let route = ctx.route.clone();
             let state = ctx.state.clone();
@@ -342,25 +377,38 @@ mod tests {
     }
 
     struct ScriptedOutbound {
-        tag: String,
+        meta: OutboundMeta,
+        logger: Logger,
         stream: Mutex<Option<BoxedAsyncStream>>,
     }
 
     impl ScriptedOutbound {
         fn new(tag: impl Into<String>, stream: BoxedAsyncStream) -> Self {
+            let tag = tag.into();
             Self {
-                tag: tag.into(),
+                meta: OutboundMeta::new(tag.clone(), "scripted"),
+                logger: Logger::new(tag, "scripted"),
                 stream: Mutex::new(Some(stream)),
             }
         }
     }
 
     impl Outbound for ScriptedOutbound {
-        fn tag(&self) -> &str {
-            &self.tag
+        fn meta(&self) -> &OutboundMeta {
+            &self.meta
         }
 
-        fn connect(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        fn logger(&self) -> &Logger {
+            &self.logger
+        }
+
+        fn close(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl StreamOutbound for ScriptedOutbound {
+        fn connect_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             let stream = self
                 .stream
                 .lock()
@@ -375,8 +423,8 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_writes_route_and_passes_state_to_outbound() {
         let (outbound, captured) = CaptureOutbound::new("proxy");
-        let mut outbounds: HashMap<String, Arc<dyn Outbound>> = HashMap::new();
-        outbounds.insert("proxy".into(), Arc::new(outbound));
+        let mut outbounds: HashMap<String, RuntimeOutbound> = HashMap::new();
+        outbounds.insert("proxy".into(), RuntimeOutbound::Stream(Arc::new(outbound)));
         let dispatcher = SimpleDispatcher::new(Router::with_default_outbound("proxy"), outbounds);
         let ctx = SessionContext::new(
             SessionMeta {
@@ -408,14 +456,14 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_preserves_partial_relay_stats_on_failure() {
         let (_guard, events) = install_test_subscriber();
-        let outbound: Arc<dyn Outbound> = Arc::new(ScriptedOutbound::new(
+        let outbound = RuntimeOutbound::Stream(Arc::new(ScriptedOutbound::new(
             "proxy",
             Box::new(ScriptedStream::new([
                 ReadStep::Data(b"pong"),
                 ReadStep::Eof,
             ])),
-        ));
-        let mut outbounds: HashMap<String, Arc<dyn Outbound>> = HashMap::new();
+        )));
+        let mut outbounds: HashMap<String, RuntimeOutbound> = HashMap::new();
         outbounds.insert("proxy".into(), outbound);
         let dispatcher = SimpleDispatcher::new(Router::with_default_outbound("proxy"), outbounds);
         let ctx = SessionContext::new(

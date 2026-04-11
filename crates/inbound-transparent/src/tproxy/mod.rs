@@ -5,4 +5,5 @@ mod listener;
 mod server;
 
 pub use error::TProxyError;
+pub use listener::create_tproxy_listener;
 pub use server::TProxyInbound;

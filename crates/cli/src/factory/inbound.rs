@@ -1,46 +1,61 @@
 use std::sync::Arc;
 
 use veex_config::ProxyConfig;
-use veex_core::{Inbound, ProxyError, ShutdownSignal};
+use veex_core::{Dispatcher, Inbound, Listener, ListenerFactory, ProxyError};
 use veex_inbound_socks::SocksInbound;
-use veex_inbound_transparent::{RedirectInbound, TProxyInbound};
+use veex_inbound_transparent::{
+    create_redirect_listener, create_tproxy_listener, RedirectInbound, TProxyInbound,
+};
 
 use crate::factory::{lower_inbound, LoweredInbound};
 
 pub fn build_inbounds(
     config: &ProxyConfig,
-    shutdown_signal: ShutdownSignal,
+    router: Arc<dyn Dispatcher>,
 ) -> Result<Vec<Arc<dyn Inbound>>, ProxyError> {
     let mut inbounds: Vec<Arc<dyn Inbound>> = Vec::new();
 
     for inbound in config.inbounds.iter().map(lower_inbound) {
         match inbound {
             LoweredInbound::Socks(socks) => {
-                let instance = SocksInbound::with_shutdown_signal(
-                    socks.tag,
+                let logger =
+                    veex_core::Logger::new(socks.meta.tag.clone(), socks.meta.r#type.clone());
+                let listener = Listener::new(
                     socks.listen,
-                    shutdown_signal.clone(),
+                    Arc::new(|addr| {
+                        Box::pin(async move { Ok(tokio::net::TcpListener::bind(addr).await?) })
+                    }),
                 );
-                instance.validate()?;
-                inbounds.push(Arc::new(instance));
+                let instance =
+                    SocksInbound::new(socks.meta, logger, Arc::clone(&router), listener)?;
+                inbounds.push(instance as Arc<dyn Inbound>);
             }
             LoweredInbound::Redirect(redirect) => {
-                let instance = RedirectInbound::with_shutdown_signal(
-                    redirect.tag,
-                    redirect.listen,
-                    shutdown_signal.clone(),
-                );
-                instance.validate()?;
-                inbounds.push(Arc::new(instance));
+                let logger =
+                    veex_core::Logger::new(redirect.meta.tag.clone(), redirect.meta.r#type.clone());
+                let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
+                    Box::pin(async move { create_redirect_listener(addr).map_err(Into::into) })
+                });
+                let listener = Listener::new(redirect.listen, listener_factory);
+                let instance =
+                    RedirectInbound::new(redirect.meta, logger, Arc::clone(&router), listener)?;
+                inbounds.push(instance as Arc<dyn Inbound>);
             }
             LoweredInbound::TProxy(tproxy) => {
-                let instance = TProxyInbound::with_shutdown_signal(
-                    tproxy.tag,
-                    tproxy.listen,
-                    shutdown_signal.clone(),
-                );
-                instance.validate()?;
-                inbounds.push(Arc::new(instance));
+                let logger =
+                    veex_core::Logger::new(tproxy.meta.tag.clone(), tproxy.meta.r#type.clone());
+                let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
+                    Box::pin(async move { create_tproxy_listener(addr).map_err(Into::into) })
+                });
+                let listener = Listener::new(tproxy.listen, listener_factory);
+                let instance = TProxyInbound::new(
+                    tproxy.meta,
+                    logger,
+                    Arc::clone(&router),
+                    listener,
+                    tproxy.network,
+                )?;
+                inbounds.push(instance as Arc<dyn Inbound>);
             }
         }
     }
@@ -50,19 +65,18 @@ pub fn build_inbounds(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
     use veex_config::InboundConfig;
     use veex_config::TProxyInboundConfig;
     use veex_config::{
         DirectOutboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
         DEFAULT_CONNECT_TIMEOUT,
     };
-    use veex_core::shutdown_channel;
-
-    use super::*;
 
     #[test]
     fn builds_tproxy_inbound_from_config() {
-        let (_trigger, shutdown_signal) = shutdown_channel();
         let config = ProxyConfig {
             log: LogConfig {
                 level: "info".into(),
@@ -85,10 +99,14 @@ mod tests {
                 rules: vec![],
             },
         };
+        let router: Arc<dyn Dispatcher> = Arc::new(veex_core::SimpleDispatcher::new(
+            veex_core::Router::with_default_outbound("direct"),
+            HashMap::new(),
+        ));
 
-        let inbounds = build_inbounds(&config, shutdown_signal).expect("inbounds should build");
+        let inbounds = build_inbounds(&config, router).expect("inbounds should build");
 
         assert_eq!(inbounds.len(), 1);
-        assert_eq!(inbounds[0].tag(), "tproxy-in");
+        assert_eq!(inbounds[0].meta().tag, "tproxy-in");
     }
 }

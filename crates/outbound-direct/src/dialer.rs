@@ -1,43 +1,76 @@
-use std::{future::Future, io, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
+use std::{future::Future, io, net::SocketAddr, pin::Pin, sync::Arc};
 
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::TcpStream;
-use veex_core::{Destination, Result};
+use veex_core::{Dial, DialContext, Dialer, Host, Result};
 use veex_transport::{
     connect_host_with_resolver, resolve_host, ConnectTraceContext, HostResolver,
     TcpAttemptConnector, TcpConnectOptions,
 };
 
-use crate::error::{io_error_with_context, last_os_error_with_context};
+use crate::error::{
+    io_error_with_context, last_os_error_with_context, validate_routing_mark_support,
+};
 
-pub(crate) type MarkedConnectorFuture =
+pub type MarkedConnectorFuture =
     Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send + 'static>>;
-pub(crate) type MarkedConnector = dyn Fn(SocketAddr, u32) -> MarkedConnectorFuture + Send + Sync;
+pub type MarkedConnector = dyn Fn(SocketAddr, u32) -> MarkedConnectorFuture + Send + Sync;
 
-pub(crate) fn system_host_resolver() -> Arc<HostResolver> {
+pub fn system_host_resolver() -> Arc<HostResolver> {
     Arc::new(|host, port| Box::pin(async move { resolve_host(&host, port).await }))
 }
 
-pub(crate) async fn connect_destination(
-    destination: &Destination,
+pub fn build_dialer(dial: Dial, resolver: Arc<HostResolver>) -> Result<Dialer> {
+    let marked_connector = Arc::new(|address, routing_mark| {
+        Box::pin(connect_marked_socket(address, routing_mark)) as MarkedConnectorFuture
+    });
+    build_dialer_with_connector(dial, resolver, marked_connector)
+}
+
+pub fn build_dialer_with_connector(
+    dial: Dial,
+    resolver: Arc<HostResolver>,
+    marked_connector: Arc<MarkedConnector>,
+) -> Result<Dialer> {
+    validate_routing_mark_support(dial.routing_mark)?;
+
+    Ok(Dialer::new(
+        dial,
+        Arc::new(move |host, port, dial, ctx| {
+            let resolver = Arc::clone(&resolver);
+            let marked_connector = Arc::clone(&marked_connector);
+            Box::pin(async move {
+                connect_destination(&host, port, resolver.as_ref(), dial, ctx, &marked_connector)
+                    .await
+            })
+        }),
+    ))
+}
+
+async fn connect_destination(
+    host: &Host,
+    port: u16,
     resolver: &HostResolver,
-    connect_timeout: Duration,
-    trace: ConnectTraceContext,
-    routing_mark: Option<u32>,
+    dial: Dial,
+    ctx: DialContext,
     marked_connector: &Arc<MarkedConnector>,
 ) -> Result<TcpStream> {
-    let connector = routing_mark.map(|routing_mark| {
+    let connector = dial.routing_mark.map(|routing_mark| {
         let marked_connector = Arc::clone(marked_connector);
         Arc::new(move |address| marked_connector(address, routing_mark)) as Arc<TcpAttemptConnector>
     });
 
     connect_host_with_resolver(
-        &destination.host,
-        destination.port,
+        host,
+        port,
         resolver,
         TcpConnectOptions {
-            timeout: Some(connect_timeout),
-            trace: Some(trace),
+            timeout: dial.timeout,
+            trace: Some(ConnectTraceContext {
+                session_id: ctx.session_id,
+                outbound: ctx.outbound_tag,
+                routing_mark: dial.routing_mark,
+            }),
             connector,
         },
     )

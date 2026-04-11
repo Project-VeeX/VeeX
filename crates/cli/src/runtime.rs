@@ -1,7 +1,6 @@
-use std::{future::Future, sync::Arc};
+use std::future::Future;
 
 use thiserror::Error;
-use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 use veex_config::ProxyConfig;
 use veex_core::{sanitize_field, ProxyError};
@@ -20,10 +19,11 @@ pub enum RuntimeError {
         #[source]
         source: ProxyError,
     },
-    #[error("runtime task join failed: {source}")]
-    TaskJoin {
+    #[error("runtime outbound task `{outbound}` failed: {source}")]
+    OutboundTask {
+        outbound: String,
         #[source]
-        source: tokio::task::JoinError,
+        source: ProxyError,
     },
 }
 
@@ -41,8 +41,11 @@ impl RuntimeError {
         }
     }
 
-    fn task_join(source: tokio::task::JoinError) -> Self {
-        Self::TaskJoin { source }
+    fn outbound_task(outbound: impl Into<String>, source: ProxyError) -> Self {
+        Self::OutboundTask {
+            outbound: outbound.into(),
+            source,
+        }
     }
 }
 
@@ -52,11 +55,9 @@ where
 {
     let state = build_runtime_state(config)?;
     let RuntimeState {
-        dispatcher,
         inbounds,
-        shutdown: shutdown_trigger,
+        outbounds,
     } = state;
-    let mut tasks = JoinSet::new();
 
     info!(
         event = "runtime_start",
@@ -66,67 +67,116 @@ where
         "runtime start"
     );
 
+    start_outbounds(&outbounds).await?;
+    start_inbounds(&inbounds).await?;
+
+    tokio::pin!(shutdown);
+    shutdown.await.map_err(RuntimeError::shutdown_wait)?;
+
+    info!(
+        event = "shutdown_begin",
+        remaining_inbounds = inbounds.len(),
+        remaining_outbounds = outbounds.len(),
+        "shutdown begin"
+    );
+
+    close_inbounds(&inbounds).await?;
+    close_outbounds(&outbounds).await?;
+
+    info!(event = "shutdown_complete", "shutdown complete");
+    Ok(())
+}
+
+async fn start_inbounds(
+    inbounds: &[std::sync::Arc<dyn veex_core::Inbound>],
+) -> Result<(), RuntimeError> {
     for inbound in inbounds {
-        let inbound_tag = inbound.tag().to_string();
-        let dispatcher = Arc::clone(&dispatcher);
+        let inbound_tag = inbound.meta().tag.clone();
         let inbound_field = sanitize_field(&inbound_tag).into_owned();
         info!(
             event = "service_start",
             inbound = %inbound_field,
             "starting inbound service"
         );
-        tasks.spawn(async move {
-            let result = inbound.serve(dispatcher).await;
-            (inbound_tag, result)
-        });
-    }
-
-    tokio::pin!(shutdown);
-    let mut shutdown_requested = false;
-
-    loop {
-        if shutdown_requested && tasks.is_empty() {
-            info!(event = "shutdown_complete", "shutdown complete");
-            return Ok(());
-        }
-
-        tokio::select! {
-            result = &mut shutdown, if !shutdown_requested => {
-                result.map_err(RuntimeError::shutdown_wait)?;
-                info!(event = "shutdown_begin", remaining_tasks = tasks.len(), "shutdown begin");
-                shutdown_trigger.trigger();
-                shutdown_requested = true;
-            }
-            maybe_task = tasks.join_next(), if !tasks.is_empty() => {
-                match maybe_task {
-                    Some(Ok((_inbound, Ok(())))) => continue,
-                    Some(Ok((inbound, Err(err)))) => {
-                        let inbound_field = sanitize_field(&inbound).into_owned();
-                        warn!(
-                            event = "inbound_service_failed",
-                            inbound = %inbound_field,
-                            error_kind = ?err.kind(),
-                            error = %err,
-                            "inbound service failed"
-                        );
-                        return Err(RuntimeError::task(inbound, err));
-                    }
-                    Some(Err(err)) => {
-                        error!(
-                            event = "task_join_failed",
-                            error = %err,
-                            "runtime task join failed"
-                        );
-                        return Err(RuntimeError::task_join(err));
-                    }
-                    None => {
-                        if shutdown_requested {
-                            info!(event = "shutdown_complete", "shutdown complete");
-                        }
-                        return Ok(());
-                    }
-                }
-            }
+        if let Err(err) = inbound.start().await {
+            warn!(
+                event = "inbound_service_failed",
+                inbound = %inbound_field,
+                error_kind = ?err.kind(),
+                error = %err,
+                "inbound service failed"
+            );
+            return Err(RuntimeError::task(inbound_tag, err));
         }
     }
+
+    Ok(())
+}
+
+async fn start_outbounds(
+    outbounds: &[std::sync::Arc<dyn veex_core::Outbound>],
+) -> Result<(), RuntimeError> {
+    for outbound in outbounds {
+        let outbound_tag = outbound.meta().tag.clone();
+        let outbound_field = sanitize_field(&outbound_tag).into_owned();
+        info!(
+            event = "service_start",
+            outbound = %outbound_field,
+            "starting outbound service"
+        );
+        if let Err(err) = outbound.start().await {
+            warn!(
+                event = "outbound_service_failed",
+                outbound = %outbound_field,
+                error_kind = ?err.kind(),
+                error = %err,
+                "outbound service failed"
+            );
+            return Err(RuntimeError::outbound_task(outbound_tag, err));
+        }
+    }
+
+    Ok(())
+}
+
+async fn close_inbounds(
+    inbounds: &[std::sync::Arc<dyn veex_core::Inbound>],
+) -> Result<(), RuntimeError> {
+    for inbound in inbounds {
+        let inbound_tag = inbound.meta().tag.clone();
+        let inbound_field = sanitize_field(&inbound_tag).into_owned();
+        if let Err(err) = inbound.close().await {
+            warn!(
+                event = "inbound_service_failed",
+                inbound = %inbound_field,
+                error_kind = ?err.kind(),
+                error = %err,
+                "inbound service failed during close"
+            );
+            return Err(RuntimeError::task(inbound_tag, err));
+        }
+    }
+
+    Ok(())
+}
+
+async fn close_outbounds(
+    outbounds: &[std::sync::Arc<dyn veex_core::Outbound>],
+) -> Result<(), RuntimeError> {
+    for outbound in outbounds {
+        let outbound_tag = outbound.meta().tag.clone();
+        let outbound_field = sanitize_field(&outbound_tag).into_owned();
+        if let Err(err) = outbound.close().await {
+            error!(
+                event = "outbound_service_failed",
+                outbound = %outbound_field,
+                error_kind = ?err.kind(),
+                error = %err,
+                "outbound service failed during close"
+            );
+            return Err(RuntimeError::outbound_task(outbound_tag, err));
+        }
+    }
+
+    Ok(())
 }

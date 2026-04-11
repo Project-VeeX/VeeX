@@ -1,100 +1,108 @@
 //! Direct outbound implementation kept outside `veex-core` so platform-specific
 //! egress behavior can evolve without polluting core runtime abstractions.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use veex_core::{
-    error::Result,
-    traits::{BoxFuture, Outbound},
-    types::{BoxedAsyncStream, SessionContext},
-};
-use veex_transport::{ConnectTraceContext, HostResolver};
-
-use crate::{
-    dialer::{connect_destination, connect_marked_socket, system_host_resolver, MarkedConnector},
-    error::validate_routing_mark_support,
+    BoxFuture, BoxedAsyncStream, DialContext, Dialer, Logger, Outbound, OutboundMeta, ProxyError,
+    Result, SessionContext, StreamOutbound,
 };
 
-#[derive(Clone)]
+#[derive(Debug)]
+struct DirectOutboundState {
+    closed: AtomicBool,
+}
+
 pub struct DirectOutbound {
-    tag: String,
-    connect_timeout: Duration,
-    routing_mark: Option<u32>,
-    resolver: Arc<HostResolver>,
-    marked_connector: Arc<MarkedConnector>,
+    meta: OutboundMeta,
+    logger: Logger,
+    dialer: Dialer,
+    state: Arc<DirectOutboundState>,
 }
 
 impl fmt::Debug for DirectOutbound {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DirectOutbound")
-            .field("tag", &self.tag)
-            .field("connect_timeout", &self.connect_timeout)
-            .field("routing_mark", &self.routing_mark)
+            .field("meta", &self.meta)
+            .field("logger", &self.logger)
+            .field("dialer", &self.dialer)
             .finish()
     }
 }
 
 impl DirectOutbound {
-    pub fn new(
-        tag: impl Into<String>,
-        routing_mark: Option<u32>,
-        connect_timeout: Duration,
-    ) -> Result<Self> {
-        Self::new_with_resolver(tag, routing_mark, connect_timeout, system_host_resolver())
-    }
-
-    pub fn new_with_resolver(
-        tag: impl Into<String>,
-        routing_mark: Option<u32>,
-        connect_timeout: Duration,
-        resolver: Arc<HostResolver>,
-    ) -> Result<Self> {
-        validate_routing_mark_support(routing_mark)?;
-
-        Ok(Self {
-            tag: tag.into(),
-            connect_timeout,
-            routing_mark,
-            resolver,
-            marked_connector: Arc::new(|address, routing_mark| {
-                Box::pin(connect_marked_socket(address, routing_mark))
+    pub fn new(meta: OutboundMeta, logger: Logger, dialer: Dialer) -> Result<Self> {
+        let outbound = Self {
+            meta,
+            logger,
+            dialer,
+            state: Arc::new(DirectOutboundState {
+                closed: AtomicBool::new(false),
             }),
-        })
+        };
+        outbound.validate()?;
+        Ok(outbound)
     }
 
-    pub fn tag(&self) -> &str {
-        &self.tag
+    pub fn validate(&self) -> Result<()> {
+        if self.meta.tag.trim().is_empty() {
+            return Err(ProxyError::config("direct outbound tag must not be empty"));
+        }
+        if self.meta.r#type.trim().is_empty() {
+            return Err(ProxyError::config("direct outbound type must not be empty"));
+        }
+
+        Ok(())
+    }
+
+    fn is_closed(&self) -> bool {
+        self.state.closed.load(Ordering::Relaxed)
     }
 }
 
 impl Outbound for DirectOutbound {
-    fn tag(&self) -> &str {
-        &self.tag
+    fn meta(&self) -> &OutboundMeta {
+        &self.meta
     }
 
-    fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+    fn logger(&self) -> &Logger {
+        &self.logger
+    }
+
+    fn start(&self) -> BoxFuture<'_, ()> {
+        self.state.closed.store(false, Ordering::Relaxed);
+        Box::pin(async { Ok(()) })
+    }
+
+    fn close(&self) -> BoxFuture<'_, ()> {
+        self.state.closed.store(true, Ordering::Relaxed);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+impl StreamOutbound for DirectOutbound {
+    fn connect_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
         let destination = ctx.meta.destination.clone();
-        let session_id = ctx.meta.id;
-        let outbound = self.tag.clone();
-        let connect_timeout = self.connect_timeout;
-        let routing_mark = self.routing_mark;
-        let resolver = Arc::clone(&self.resolver);
-        let marked_connector = Arc::clone(&self.marked_connector);
+        let dialer = self.dialer.clone();
+        let trace = DialContext {
+            session_id: ctx.meta.id,
+            outbound_tag: self.meta.tag.clone(),
+        };
+        let closed = self.is_closed();
 
         Box::pin(async move {
-            let stream = connect_destination(
-                &destination,
-                resolver.as_ref(),
-                connect_timeout,
-                ConnectTraceContext {
-                    session_id,
-                    outbound,
-                    routing_mark,
-                },
-                routing_mark,
-                &marked_connector,
-            )
-            .await?;
+            if closed {
+                return Err(ProxyError::Shutdown);
+            }
+            let stream = dialer
+                .connect(&destination.host, destination.port, trace)
+                .await?;
 
             Ok(Box::new(stream) as BoxedAsyncStream)
         })
@@ -113,19 +121,35 @@ mod tests {
         net::{TcpListener, TcpStream},
         time::sleep,
     };
-    use veex_core::{Destination, Host, Network, Outbound, SessionContext, SessionMeta};
+    use veex_core::{
+        Destination, Dial, Dialer, Host, Logger, Network, Outbound, OutboundMeta, SessionContext,
+        SessionMeta, StreamOutbound,
+    };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
-    use crate::dialer::{system_host_resolver, MarkedConnectorFuture};
+    use crate::dialer::{build_dialer_with_connector, system_host_resolver, MarkedConnectorFuture};
 
     use super::DirectOutbound;
 
     #[test]
     fn direct_outbound_is_constructible_for_dispatcher_registration() {
-        let direct =
-            DirectOutbound::new("direct", None, Duration::from_secs(1)).expect("build direct");
+        let dialer = Dialer::new(
+            Dial {
+                timeout: Some(Duration::from_secs(1)),
+                routing_mark: None,
+            },
+            Arc::new(|_host, _port, _dial, _ctx| {
+                Box::pin(async { Err(veex_core::ProxyError::Shutdown) })
+            }),
+        );
+        let direct = DirectOutbound::new(
+            OutboundMeta::new("direct", "direct"),
+            Logger::new("direct", "direct"),
+            dialer,
+        )
+        .expect("build direct");
 
-        assert_eq!(direct.tag(), "direct");
+        assert_eq!(direct.meta().tag, "direct");
     }
 
     #[tokio::test]
@@ -144,13 +168,21 @@ mod tests {
                 TcpStream::connect(connect_address).await
             }) as MarkedConnectorFuture
         });
-        let direct = DirectOutbound {
-            tag: "direct".into(),
-            connect_timeout: Duration::from_secs(1),
-            routing_mark: Some(9),
-            resolver: system_host_resolver(),
-            marked_connector: connector,
-        };
+        let dialer = build_dialer_with_connector(
+            Dial {
+                timeout: Some(Duration::from_secs(1)),
+                routing_mark: Some(9),
+            },
+            system_host_resolver(),
+            connector,
+        )
+        .expect("dialer should build");
+        let direct = DirectOutbound::new(
+            OutboundMeta::new("direct", "direct"),
+            Logger::new("direct", "direct"),
+            dialer,
+        )
+        .expect("direct should build");
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 1,
@@ -166,7 +198,10 @@ mod tests {
         let accept_task = tokio::spawn(async move {
             let (_stream, _) = listener.accept().await.expect("accept should succeed");
         });
-        let stream = direct.connect(&ctx).await.expect("direct should connect");
+        let stream = direct
+            .connect_stream(&ctx)
+            .await
+            .expect("direct should connect");
         drop(stream);
         accept_task.await.expect("accept task should join");
 
@@ -211,13 +246,21 @@ mod tests {
                 ))
             }) as MarkedConnectorFuture
         });
-        let direct = DirectOutbound {
-            tag: "direct".into(),
-            connect_timeout: Duration::from_secs(1),
-            routing_mark: Some(255),
-            resolver: system_host_resolver(),
-            marked_connector: connector,
-        };
+        let dialer = build_dialer_with_connector(
+            Dial {
+                timeout: Some(Duration::from_secs(1)),
+                routing_mark: Some(255),
+            },
+            system_host_resolver(),
+            connector,
+        )
+        .expect("dialer should build");
+        let direct = DirectOutbound::new(
+            OutboundMeta::new("direct", "direct"),
+            Logger::new("direct", "direct"),
+            dialer,
+        )
+        .expect("direct should build");
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 2,
@@ -230,7 +273,7 @@ mod tests {
             Vec::new(),
         );
 
-        let err = match direct.connect(&ctx).await {
+        let err = match direct.connect_stream(&ctx).await {
             Ok(_) => panic!("direct should fail"),
             Err(err) => err,
         };
@@ -264,13 +307,21 @@ mod tests {
                 ))
             }) as MarkedConnectorFuture
         });
-        let direct = DirectOutbound {
-            tag: "direct".into(),
-            connect_timeout: Duration::from_millis(50),
-            routing_mark: Some(7),
-            resolver: system_host_resolver(),
-            marked_connector: connector,
-        };
+        let dialer = build_dialer_with_connector(
+            Dial {
+                timeout: Some(Duration::from_millis(50)),
+                routing_mark: Some(7),
+            },
+            system_host_resolver(),
+            connector,
+        )
+        .expect("dialer should build");
+        let direct = DirectOutbound::new(
+            OutboundMeta::new("direct", "direct"),
+            Logger::new("direct", "direct"),
+            dialer,
+        )
+        .expect("direct should build");
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 3,
@@ -283,7 +334,7 @@ mod tests {
             Vec::new(),
         );
 
-        let err = match direct.connect(&ctx).await {
+        let err = match direct.connect_stream(&ctx).await {
             Ok(_) => panic!("direct should time out"),
             Err(err) => err,
         };

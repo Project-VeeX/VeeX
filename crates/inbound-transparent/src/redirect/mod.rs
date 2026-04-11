@@ -5,4 +5,5 @@ mod listener;
 mod server;
 
 pub use error::RedirectError;
+pub use listener::create_redirect_listener;
 pub use server::RedirectInbound;

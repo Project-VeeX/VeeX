@@ -13,26 +13,34 @@ use rustls::{
 };
 use tokio::{io::AsyncReadExt, net::TcpListener};
 use tokio_rustls::TlsAcceptor;
-use veex_core::{Destination, Host, Network, Outbound, SessionContext, SessionMeta};
-use veex_outbound_trojan::{build_trojan_request, TrojanOutbound};
+use veex_core::{
+    Destination, Dial, Host, Logger, Network, OutboundMeta, ProxyOutbound, SessionContext,
+    SessionMeta,
+};
+use veex_outbound_trojan::{build_dialer, build_trojan_request, TrojanOutbound};
 use veex_transport::TlsClientOptions;
 
 #[tokio::test]
 async fn trojan_outbound_connects_and_writes_request() {
     let server = spawn_tls_server("localhost").await;
     let outbound = TrojanOutbound::new(
-        "proxy",
+        OutboundMeta::new("proxy", "trojan"),
+        Logger::new("proxy", "trojan"),
+        build_dialer(Dial {
+            timeout: Some(std::time::Duration::from_secs(1)),
+            routing_mark: None,
+        }),
         "127.0.0.1",
         server.addr.port(),
         "secret",
-        std::time::Duration::from_secs(1),
         TlsClientOptions {
             enabled: true,
             insecure: true,
             server_name: Some("localhost".into()),
             ..TlsClientOptions::default()
         },
-    );
+    )
+    .expect("trojan outbound should build");
 
     let destination = Destination::new(Host::Domain("example.com".into()), 443);
     let buffered_payload = b"GET / HTTP/1.1\r\n\r\n".to_vec();
@@ -51,7 +59,7 @@ async fn trojan_outbound_connects_and_writes_request() {
     );
 
     let stream = outbound
-        .connect(&ctx)
+        .connect_proxy_stream(&ctx)
         .await
         .expect("trojan outbound should connect");
 
