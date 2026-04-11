@@ -9,7 +9,7 @@ use std::{
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
-    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, InboundMeta,
+    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound, InboundMeta, InboundSink,
     Listener, ListenerAcceptHandler, Logger, Network, ProxyError, Result, TransparentInbound,
 };
 use veex_infra_linux::get_tproxy_dst;
@@ -32,7 +32,7 @@ struct TProxyInboundState {
 pub struct TProxyInbound {
     meta: InboundMeta,
     logger: Logger,
-    router: Arc<dyn Dispatcher>,
+    sink: Arc<dyn InboundSink>,
     listener: Listener,
     network: Network,
     destination_resolver: Arc<ResolveDestination>,
@@ -43,14 +43,14 @@ impl TProxyInbound {
     pub fn new(
         meta: InboundMeta,
         logger: Logger,
-        router: Arc<dyn Dispatcher>,
+        sink: Arc<dyn InboundSink>,
         listener: Listener,
         network: Network,
     ) -> Result<Arc<Self>> {
         Self::new_with_resolver(
             meta,
             logger,
-            router,
+            sink,
             listener,
             network,
             Arc::new(resolve_tproxy_destination),
@@ -60,7 +60,7 @@ impl TProxyInbound {
     fn new_with_resolver(
         meta: InboundMeta,
         logger: Logger,
-        router: Arc<dyn Dispatcher>,
+        sink: Arc<dyn InboundSink>,
         listener: Listener,
         network: Network,
         resolver: Arc<ResolveDestination>,
@@ -68,7 +68,7 @@ impl TProxyInbound {
         let inbound = Arc::new(Self {
             meta,
             logger,
-            router,
+            sink,
             listener,
             network,
             destination_resolver: resolver,
@@ -160,7 +160,7 @@ impl TProxyInbound {
         );
 
         let stream: BoxedAsyncStream = Box::new(stream);
-        let result = self.router.dispatch(stream, session.ctx).await;
+        let result = self.sink.submit(stream, session.ctx).await;
         if let Err(err) = &result {
             warn!(
                 event = "session_failed",
@@ -230,19 +230,19 @@ mod tests {
 
     use tokio::{net::TcpListener, net::TcpStream, sync::oneshot};
     use veex_core::{
-        BoxFuture, Destination, Dispatcher, Inbound, InboundMeta, Listener, ListenerFactory,
+        BoxFuture, Destination, Inbound, InboundMeta, InboundSink, Listener, ListenerFactory,
         Logger, Network,
     };
 
     use super::{ResolveDestination, TProxyInbound};
     use crate::TProxyError;
 
-    struct RecordingDispatcher {
+    struct RecordingSink {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,
     }
 
-    impl Dispatcher for RecordingDispatcher {
-        fn dispatch(
+    impl InboundSink for RecordingSink {
+        fn submit(
             &self,
             _inbound_stream: veex_core::BoxedAsyncStream,
             ctx: veex_core::SessionContext,
@@ -259,18 +259,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tproxy_inbound_forwards_resolved_destination_to_dispatcher() {
+    async fn tproxy_inbound_forwards_resolved_destination_to_executor() {
         let listen_addr = reserve_local_port().await;
         let expected = Destination::from_ip(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5)), 443);
         let resolver = fixed_resolver(expected.clone());
         let (tx, rx) = oneshot::channel();
-        let dispatcher: Arc<dyn Dispatcher> = Arc::new(RecordingDispatcher {
+        let sink: Arc<dyn InboundSink> = Arc::new(RecordingSink {
             tx: Mutex::new(Some(tx)),
         });
         let inbound = TProxyInbound::new_with_resolver(
             InboundMeta::new("tproxy-in", "tproxy"),
             Logger::new("tproxy-in", "tproxy"),
-            dispatcher,
+            sink,
             test_listener(
                 listen_addr,
                 Arc::new(|addr| {
@@ -288,7 +288,7 @@ mod tests {
         let _client = connect_with_retry(listen_addr).await;
         let received = tokio::time::timeout(Duration::from_secs(1), rx)
             .await
-            .expect("dispatcher should receive destination")
+            .expect("sink should receive destination")
             .expect("destination should be delivered");
         assert_eq!(received, expected);
         inbound.close().await.expect("tproxy should close");
@@ -299,7 +299,7 @@ mod tests {
         let inbound = TProxyInbound::new_with_resolver(
             InboundMeta::new("tproxy-in", "tproxy"),
             Logger::new("tproxy-in", "tproxy"),
-            Arc::new(RecordingDispatcher {
+            Arc::new(RecordingSink {
                 tx: Mutex::new(None),
             }),
             test_listener(

@@ -8,8 +8,8 @@ use std::{
 
 use tokio::io::AsyncWriteExt;
 use veex_core::{
-    BoxFuture, BoxedAsyncStream, DialContext, Dialer, Host, Logger, Outbound, OutboundMeta,
-    ProxyError, ProxyOutbound, Result, SessionContext,
+    BoxFuture, BoxedAsyncStream, DialContext, Dialer, Host, Logger, Outbound, OutboundConnector,
+    OutboundMeta, ProxyError, ProxyOutbound, Result, SessionContext,
 };
 use veex_transport::{connect_tls, ConnectTraceContext, TlsClientOptions};
 
@@ -146,6 +146,12 @@ impl ProxyOutbound for TrojanOutbound {
 
             Ok(stream)
         })
+    }
+}
+
+impl OutboundConnector for TrojanOutbound {
+    fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        self.connect_proxy_stream(ctx)
     }
 }
 

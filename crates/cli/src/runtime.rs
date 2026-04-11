@@ -3,7 +3,7 @@ use std::future::Future;
 use thiserror::Error;
 use tracing::{error, info, warn};
 use veex_config::ProxyConfig;
-use veex_core::{sanitize_field, ProxyError};
+use veex_core::{sanitize_field, OutboundRegistry, ProxyError};
 
 use crate::bootstrap::{build_runtime_state, BootstrapError, RuntimeState};
 
@@ -113,10 +113,8 @@ async fn start_inbounds(
     Ok(())
 }
 
-async fn start_outbounds(
-    outbounds: &[std::sync::Arc<dyn veex_core::Outbound>],
-) -> Result<(), RuntimeError> {
-    for outbound in outbounds {
+async fn start_outbounds(outbounds: &OutboundRegistry) -> Result<(), RuntimeError> {
+    for outbound in outbounds.iter() {
         let outbound_tag = outbound.meta().tag.clone();
         let outbound_field = sanitize_field(&outbound_tag).into_owned();
         info!(
@@ -160,10 +158,8 @@ async fn close_inbounds(
     Ok(())
 }
 
-async fn close_outbounds(
-    outbounds: &[std::sync::Arc<dyn veex_core::Outbound>],
-) -> Result<(), RuntimeError> {
-    for outbound in outbounds {
+async fn close_outbounds(outbounds: &OutboundRegistry) -> Result<(), RuntimeError> {
+    for outbound in outbounds.iter() {
         let outbound_tag = outbound.meta().tag.clone();
         let outbound_field = sanitize_field(&outbound_tag).into_owned();
         if let Err(err) = outbound.close().await {
@@ -179,4 +175,176 @@ async fn close_outbounds(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        pin::Pin,
+        sync::atomic::{AtomicBool, Ordering},
+        sync::Arc,
+        task::{Context, Poll},
+        time::Instant,
+    };
+
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+    use veex_core::{
+        BoxFuture, BoxedAsyncStream, Destination, ErrorKind, Host, Logger, Network, Outbound,
+        OutboundConnector, OutboundMeta, OutboundRegistry, ProxyError, SessionContext, SessionMeta,
+    };
+
+    use super::{close_outbounds, start_outbounds};
+
+    struct ClosedStream;
+
+    impl AsyncRead for ClosedStream {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for ClosedStream {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    struct TestOutboundConnector {
+        meta: OutboundMeta,
+        logger: Logger,
+        closed: AtomicBool,
+    }
+
+    impl TestOutboundConnector {
+        fn new(tag: impl Into<String>) -> Self {
+            let tag = tag.into();
+            Self {
+                meta: OutboundMeta::new(tag.clone(), "test"),
+                logger: Logger::new(tag, "test"),
+                closed: AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl Outbound for TestOutboundConnector {
+        fn meta(&self) -> &OutboundMeta {
+            &self.meta
+        }
+
+        fn logger(&self) -> &Logger {
+            &self.logger
+        }
+
+        fn start(&self) -> BoxFuture<'_, ()> {
+            self.closed.store(false, Ordering::Relaxed);
+            Box::pin(async { Ok(()) })
+        }
+
+        fn close(&self) -> BoxFuture<'_, ()> {
+            self.closed.store(true, Ordering::Relaxed);
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl OutboundConnector for TestOutboundConnector {
+        fn connect(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+            let closed = self.closed.load(Ordering::Relaxed);
+            Box::pin(async move {
+                if closed {
+                    return Err(ProxyError::Shutdown);
+                }
+
+                Ok(Box::new(ClosedStream) as BoxedAsyncStream)
+            })
+        }
+    }
+
+    fn test_context() -> SessionContext {
+        SessionContext::new(
+            SessionMeta {
+                id: 101,
+                network: Network::Tcp,
+                inbound_tag: "socks-in".into(),
+                peer: "127.0.0.1:30000".parse().expect("peer addr should parse"),
+                destination: Destination::new(Host::Domain("example.com".into()), 443),
+                start: Instant::now(),
+            },
+            Vec::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn runtime_close_outbounds_is_visible_to_dispatch_view() {
+        let mut registry = OutboundRegistry::default();
+        registry
+            .register(Arc::new(TestOutboundConnector::new("direct")))
+            .expect("outbound should register");
+
+        close_outbounds(&registry)
+            .await
+            .expect("runtime close should succeed");
+
+        let outbound = registry
+            .get("direct")
+            .expect("registry should return dispatch view");
+        let err = match outbound.connect(&test_context()).await {
+            Ok(_) => panic!("dispatch view should observe runtime close"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::Shutdown);
+    }
+
+    #[tokio::test]
+    async fn runtime_start_outbounds_reopens_dispatch_view() {
+        let mut registry = OutboundRegistry::default();
+        registry
+            .register(Arc::new(TestOutboundConnector::new("direct")))
+            .expect("outbound should register");
+
+        close_outbounds(&registry)
+            .await
+            .expect("runtime close should succeed");
+        start_outbounds(&registry)
+            .await
+            .expect("runtime start should succeed");
+
+        let outbound = registry
+            .get("direct")
+            .expect("registry should return dispatch view");
+        outbound
+            .connect(&test_context())
+            .await
+            .expect("dispatch view should reuse same runtime object after start");
+    }
+
+    #[tokio::test]
+    async fn runtime_close_outbounds_is_idempotent() {
+        let mut registry = OutboundRegistry::default();
+        registry
+            .register(Arc::new(TestOutboundConnector::new("direct")))
+            .expect("outbound should register");
+
+        close_outbounds(&registry)
+            .await
+            .expect("first runtime close should succeed");
+        close_outbounds(&registry)
+            .await
+            .expect("second runtime close should succeed");
+    }
 }

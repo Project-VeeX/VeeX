@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use veex_config::ProxyConfig;
-use veex_core::{Dispatcher, Inbound, Listener, ListenerFactory, ProxyError};
+use veex_core::{Inbound, InboundSink, Listener, ListenerFactory, ProxyError};
 use veex_inbound_socks::SocksInbound;
 use veex_inbound_transparent::{
     create_redirect_listener, create_tproxy_listener, RedirectInbound, TProxyInbound,
@@ -11,7 +11,7 @@ use crate::factory::{lower_inbound, LoweredInbound};
 
 pub fn build_inbounds(
     config: &ProxyConfig,
-    router: Arc<dyn Dispatcher>,
+    sink: Arc<dyn InboundSink>,
 ) -> Result<Vec<Arc<dyn Inbound>>, ProxyError> {
     let mut inbounds: Vec<Arc<dyn Inbound>> = Vec::new();
 
@@ -26,8 +26,7 @@ pub fn build_inbounds(
                         Box::pin(async move { Ok(tokio::net::TcpListener::bind(addr).await?) })
                     }),
                 );
-                let instance =
-                    SocksInbound::new(socks.meta, logger, Arc::clone(&router), listener)?;
+                let instance = SocksInbound::new(socks.meta, logger, Arc::clone(&sink), listener)?;
                 inbounds.push(instance as Arc<dyn Inbound>);
             }
             LoweredInbound::Redirect(redirect) => {
@@ -38,7 +37,7 @@ pub fn build_inbounds(
                 });
                 let listener = Listener::new(redirect.listen, listener_factory);
                 let instance =
-                    RedirectInbound::new(redirect.meta, logger, Arc::clone(&router), listener)?;
+                    RedirectInbound::new(redirect.meta, logger, Arc::clone(&sink), listener)?;
                 inbounds.push(instance as Arc<dyn Inbound>);
             }
             LoweredInbound::TProxy(tproxy) => {
@@ -51,7 +50,7 @@ pub fn build_inbounds(
                 let instance = TProxyInbound::new(
                     tproxy.meta,
                     logger,
-                    Arc::clone(&router),
+                    Arc::clone(&sink),
                     listener,
                     tproxy.network,
                 )?;
@@ -65,8 +64,6 @@ pub fn build_inbounds(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
     use veex_config::InboundConfig;
     use veex_config::TProxyInboundConfig;
@@ -99,12 +96,12 @@ mod tests {
                 rules: vec![],
             },
         };
-        let router: Arc<dyn Dispatcher> = Arc::new(veex_core::SimpleDispatcher::new(
+        let sink: Arc<dyn InboundSink> = Arc::new(veex_core::SimpleDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
-            HashMap::new(),
+            Arc::new(veex_core::OutboundRegistry::default()),
         ));
 
-        let inbounds = build_inbounds(&config, router).expect("inbounds should build");
+        let inbounds = build_inbounds(&config, sink).expect("inbounds should build");
 
         assert_eq!(inbounds.len(), 1);
         assert_eq!(inbounds[0].meta().tag, "tproxy-in");

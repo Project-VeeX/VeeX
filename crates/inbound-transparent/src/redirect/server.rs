@@ -9,7 +9,7 @@ use std::{
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
-    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, InboundMeta,
+    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound, InboundMeta, InboundSink,
     Listener, ListenerAcceptHandler, Logger, ProxyError, Result, TransparentInbound,
 };
 use veex_infra_linux::get_original_dst as get_original_dst_socket;
@@ -33,7 +33,7 @@ struct RedirectInboundState {
 pub struct RedirectInbound {
     meta: InboundMeta,
     logger: Logger,
-    router: Arc<dyn Dispatcher>,
+    sink: Arc<dyn InboundSink>,
     listener: Listener,
     original_dst_resolver: Arc<ResolveOriginalDst>,
     state: Arc<RedirectInboundState>,
@@ -43,29 +43,23 @@ impl RedirectInbound {
     pub fn new(
         meta: InboundMeta,
         logger: Logger,
-        router: Arc<dyn Dispatcher>,
+        sink: Arc<dyn InboundSink>,
         listener: Listener,
     ) -> Result<Arc<Self>> {
-        Self::new_with_resolver(
-            meta,
-            logger,
-            router,
-            listener,
-            Arc::new(resolve_original_dst),
-        )
+        Self::new_with_resolver(meta, logger, sink, listener, Arc::new(resolve_original_dst))
     }
 
     fn new_with_resolver(
         meta: InboundMeta,
         logger: Logger,
-        router: Arc<dyn Dispatcher>,
+        sink: Arc<dyn InboundSink>,
         listener: Listener,
         resolver: Arc<ResolveOriginalDst>,
     ) -> Result<Arc<Self>> {
         let inbound = Arc::new(Self {
             meta,
             logger,
-            router,
+            sink,
             listener,
             original_dst_resolver: resolver,
             state: Arc::new(RedirectInboundState {
@@ -147,7 +141,7 @@ impl RedirectInbound {
         );
 
         let stream: BoxedAsyncStream = Box::new(stream);
-        let result = self.router.dispatch(stream, session.ctx).await;
+        let result = self.sink.submit(stream, session.ctx).await;
         if let Err(err) = &result {
             warn!(
                 event = "session_failed",
@@ -214,17 +208,18 @@ mod tests {
 
     use tokio::{net::TcpListener, net::TcpStream, sync::oneshot};
     use veex_core::{
-        BoxFuture, Destination, Dispatcher, Inbound, InboundMeta, Listener, ListenerFactory, Logger,
+        BoxFuture, Destination, Inbound, InboundMeta, InboundSink, Listener, ListenerFactory,
+        Logger,
     };
 
     use super::{RedirectError, RedirectInbound, ResolveOriginalDst};
 
-    struct RecordingDispatcher {
+    struct RecordingSink {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,
     }
 
-    impl Dispatcher for RecordingDispatcher {
-        fn dispatch(
+    impl InboundSink for RecordingSink {
+        fn submit(
             &self,
             _inbound_stream: veex_core::BoxedAsyncStream,
             ctx: veex_core::SessionContext,
@@ -241,18 +236,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn redirect_inbound_forwards_resolved_destination_to_dispatcher() {
+    async fn redirect_inbound_forwards_resolved_destination_to_executor() {
         let listen_addr = reserve_local_port().await;
         let expected = Destination::from_ip(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5)), 443);
         let (tx, rx) = oneshot::channel();
-        let dispatcher: Arc<dyn Dispatcher> = Arc::new(RecordingDispatcher {
+        let sink: Arc<dyn InboundSink> = Arc::new(RecordingSink {
             tx: Mutex::new(Some(tx)),
         });
         let resolved = expected.clone();
         let inbound = RedirectInbound::new_with_resolver(
             InboundMeta::new("redirect-in", "redirect"),
             Logger::new("redirect-in", "redirect"),
-            dispatcher,
+            sink,
             test_listener(
                 listen_addr,
                 Arc::new(|addr| {
@@ -269,7 +264,7 @@ mod tests {
         let _client = connect_with_retry(listen_addr).await;
         let received = tokio::time::timeout(Duration::from_secs(1), rx)
             .await
-            .expect("dispatcher should receive destination")
+            .expect("sink should receive destination")
             .expect("destination should be delivered");
         assert_eq!(received, expected);
         inbound.close().await.expect("redirect should close");
@@ -309,7 +304,7 @@ mod tests {
         let inbound = RedirectInbound::new_with_resolver(
             InboundMeta::new("redirect-in", "redirect"),
             Logger::new("redirect-in", "redirect"),
-            Arc::new(RecordingDispatcher {
+            Arc::new(RecordingSink {
                 tx: Mutex::new(None),
             }),
             test_listener(

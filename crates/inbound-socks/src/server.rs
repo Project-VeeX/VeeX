@@ -13,7 +13,7 @@ use tokio::{
 };
 use tracing::{info, warn};
 use veex_core::{
-    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Dispatcher, Inbound, InboundMeta,
+    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound, InboundMeta, InboundSink,
     Listener, ListenerAcceptHandler, Logger, Network, ProxyError, Result, SessionContext,
     SessionMeta, StreamInbound,
 };
@@ -33,7 +33,7 @@ struct SocksInboundState {
 pub struct SocksInbound {
     meta: InboundMeta,
     logger: Logger,
-    router: Arc<dyn Dispatcher>,
+    sink: Arc<dyn InboundSink>,
     listener: Listener,
     state: Arc<SocksInboundState>,
 }
@@ -50,13 +50,13 @@ impl SocksInbound {
     pub fn new(
         meta: InboundMeta,
         logger: Logger,
-        router: Arc<dyn Dispatcher>,
+        sink: Arc<dyn InboundSink>,
         listener: Listener,
     ) -> Result<Arc<Self>> {
         let inbound = Arc::new(Self {
             meta,
             logger,
-            router,
+            sink,
             listener,
             state: Arc::new(SocksInboundState {
                 next_session_id: AtomicU64::new(1),
@@ -232,7 +232,7 @@ impl SocksInbound {
         );
 
         let stream: BoxedAsyncStream = Box::new(stream);
-        let result = self.router.dispatch(stream, session.ctx).await;
+        let result = self.sink.submit(stream, session.ctx).await;
         if let Err(err) = &result {
             warn!(
                 event = "session_failed",
@@ -259,6 +259,131 @@ impl SocksInbound {
             error = %err,
             "socks handshake failed"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        net::{Ipv4Addr, SocketAddr},
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+        sync::oneshot,
+    };
+    use veex_core::{
+        BoxFuture, Destination, Inbound, InboundMeta, InboundSink, Listener, ListenerFactory,
+        Logger,
+    };
+
+    use super::SocksInbound;
+
+    struct RecordingSink {
+        tx: Mutex<Option<oneshot::Sender<Destination>>>,
+    }
+
+    impl InboundSink for RecordingSink {
+        fn submit(
+            &self,
+            _inbound_stream: veex_core::BoxedAsyncStream,
+            ctx: veex_core::SessionContext,
+        ) -> BoxFuture<'_, ()> {
+            let destination = ctx.meta.destination.clone();
+            let tx = self.tx.lock().expect("tx mutex should lock").take();
+            Box::pin(async move {
+                tx.expect("sender should exist")
+                    .send(destination)
+                    .expect("destination should be sent");
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn socks_inbound_submits_request_to_sink() {
+        let listen_addr = reserve_local_port().await;
+        let expected = Destination::from_domain("example.com", 443);
+        let (tx, rx) = oneshot::channel();
+        let sink: Arc<dyn InboundSink> = Arc::new(RecordingSink {
+            tx: Mutex::new(Some(tx)),
+        });
+        let inbound = SocksInbound::new(
+            InboundMeta::new("socks-in", "socks"),
+            Logger::new("socks-in", "socks"),
+            sink,
+            test_listener(listen_addr),
+        )
+        .expect("socks inbound should build");
+
+        inbound.start().await.expect("socks should start");
+        let mut client = connect_with_retry(listen_addr).await;
+        client
+            .write_all(&[0x05, 0x01, 0x00])
+            .await
+            .expect("greeting should send");
+
+        let mut greeting_reply = [0u8; 2];
+        client
+            .read_exact(&mut greeting_reply)
+            .await
+            .expect("greeting reply should read");
+        assert_eq!(greeting_reply, [0x05, 0x00]);
+
+        client
+            .write_all(&[
+                0x05, 0x01, 0x00, 0x03, 0x0b, b'e', b'x', b'a', b'm', b'p', b'l', b'e', b'.', b'c',
+                b'o', b'm', 0x01, 0xbb,
+            ])
+            .await
+            .expect("request should send");
+
+        let mut request_reply = [0u8; 10];
+        client
+            .read_exact(&mut request_reply)
+            .await
+            .expect("reply should read");
+        assert_eq!(&request_reply[..2], &[0x05, 0x00]);
+
+        let received = tokio::time::timeout(Duration::from_secs(1), rx)
+            .await
+            .expect("sink should receive destination")
+            .expect("destination should be delivered");
+        assert_eq!(received, expected);
+        inbound.close().await.expect("socks should close");
+    }
+
+    fn test_listener(addr: SocketAddr) -> Listener {
+        let listen = veex_core::Listen::new(addr.ip().to_string(), addr.port());
+        let factory: Arc<ListenerFactory> = Arc::new(|addr| {
+            Box::pin(async move {
+                let listener = std::net::TcpListener::bind(addr)?;
+                listener.set_nonblocking(true)?;
+                Ok(TcpListener::from_std(listener)?)
+            })
+        });
+        Listener::new(listen, factory)
+    }
+
+    async fn reserve_local_port() -> SocketAddr {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("temporary listener should bind");
+        listener.local_addr().expect("temporary addr should exist")
+    }
+
+    async fn connect_with_retry(addr: SocketAddr) -> TcpStream {
+        for _ in 0..50 {
+            if let Ok(stream) = TcpStream::connect(addr).await {
+                return stream;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        panic!("client should connect within retry budget");
     }
 }
 

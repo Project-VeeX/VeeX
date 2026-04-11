@@ -1,23 +1,17 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use veex_config::ProxyConfig;
-use veex_core::{Outbound, ProxyError, ProxyOutbound, RuntimeOutbound, StreamOutbound};
+use veex_core::{OutboundConnector, OutboundRegistry, ProxyError};
 use veex_outbound_direct::{build_dialer as build_direct_dialer, DirectOutbound};
 use veex_outbound_trojan::{build_dialer as build_trojan_dialer, TrojanOutbound};
 
 use crate::factory::{lower_outbound, LoweredOutbound, RuntimeServices};
 
-pub struct BuiltOutbounds {
-    pub registry: Vec<Arc<dyn Outbound>>,
-    pub routing: HashMap<String, RuntimeOutbound>,
-}
-
 pub fn build_outbounds(
     config: &ProxyConfig,
     services: &RuntimeServices,
-) -> Result<BuiltOutbounds, ProxyError> {
-    let mut registry: Vec<Arc<dyn Outbound>> = Vec::new();
-    let mut routing: HashMap<String, RuntimeOutbound> = HashMap::new();
+) -> Result<Arc<OutboundRegistry>, ProxyError> {
+    let mut registry = OutboundRegistry::default();
 
     for outbound in config.outbounds.iter().map(lower_outbound) {
         match outbound {
@@ -25,19 +19,16 @@ pub fn build_outbounds(
                 let logger =
                     veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
                 let dialer = build_direct_dialer(direct.dial, Arc::clone(&services.host_resolver))?;
-                let instance = Arc::new(DirectOutbound::new(direct.meta.clone(), logger, dialer)?);
-                registry.push(Arc::clone(&instance) as Arc<dyn Outbound>);
-                routing.insert(
-                    direct.meta.tag.clone(),
-                    RuntimeOutbound::Stream(Arc::clone(&instance) as Arc<dyn StreamOutbound>),
-                );
+                let instance: Arc<dyn OutboundConnector> =
+                    Arc::new(DirectOutbound::new(direct.meta, logger, dialer)?);
+                registry.register(instance)?;
             }
             LoweredOutbound::Trojan(trojan) => {
                 let logger =
                     veex_core::Logger::new(trojan.meta.tag.clone(), trojan.meta.r#type.clone());
                 let dialer = build_trojan_dialer(trojan.dial);
-                let instance = Arc::new(TrojanOutbound::new(
-                    trojan.meta.clone(),
+                let instance: Arc<dyn OutboundConnector> = Arc::new(TrojanOutbound::new(
+                    trojan.meta,
                     logger,
                     dialer,
                     trojan.server,
@@ -45,16 +36,12 @@ pub fn build_outbounds(
                     trojan.password,
                     trojan.tls,
                 )?);
-                registry.push(Arc::clone(&instance) as Arc<dyn Outbound>);
-                routing.insert(
-                    trojan.meta.tag.clone(),
-                    RuntimeOutbound::Proxy(Arc::clone(&instance) as Arc<dyn ProxyOutbound>),
-                );
+                registry.register(instance)?;
             }
         }
     }
 
-    Ok(BuiltOutbounds { registry, routing })
+    Ok(Arc::new(registry))
 }
 
 #[cfg(test)]
@@ -69,9 +56,7 @@ mod tests {
         TrojanOutboundConfig, TrojanTlsConfig, DEFAULT_CONNECT_TIMEOUT,
         DEFAULT_TLS_HANDSHAKE_TIMEOUT,
     };
-    use veex_core::{
-        Destination, ErrorKind, Host, Network, RuntimeOutbound, SessionContext, SessionMeta,
-    };
+    use veex_core::{Destination, ErrorKind, Host, Network, SessionContext, SessionMeta};
 
     use super::build_outbounds;
     use crate::factory::RuntimeServices;
@@ -91,7 +76,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closing_registry_direct_outbound_is_visible_to_routing_view() {
+    async fn closing_registry_direct_outbound_is_visible_to_dispatch_view() {
         let config = ProxyConfig {
             log: LogConfig {
                 level: "info".into(),
@@ -112,8 +97,8 @@ mod tests {
         let built =
             build_outbounds(&config, &RuntimeServices::default()).expect("outbounds should build");
         let registry_outbound = built
-            .registry
-            .first()
+            .iter()
+            .next()
             .expect("registry should contain direct outbound");
         registry_outbound
             .close()
@@ -121,23 +106,17 @@ mod tests {
             .expect("registry direct outbound should close");
 
         let route_outbound = built
-            .routing
             .get("direct")
-            .expect("routing view should contain direct outbound");
-        let err = match route_outbound {
-            RuntimeOutbound::Stream(outbound) => {
-                match outbound.connect_stream(&test_context("direct")).await {
-                    Ok(_) => panic!("routing view should observe shutdown"),
-                    Err(err) => err,
-                }
-            }
-            RuntimeOutbound::Proxy(_) => panic!("direct outbound should register as stream"),
+            .expect("dispatch view should contain direct outbound");
+        let err = match route_outbound.connect(&test_context("direct")).await {
+            Ok(_) => panic!("dispatch view should observe shutdown"),
+            Err(err) => err,
         };
         assert_eq!(err.kind(), ErrorKind::Shutdown);
     }
 
     #[tokio::test]
-    async fn closing_registry_trojan_outbound_is_visible_to_routing_view() {
+    async fn closing_registry_trojan_outbound_is_visible_to_dispatch_view() {
         let config = ProxyConfig {
             log: LogConfig {
                 level: "info".into(),
@@ -169,8 +148,8 @@ mod tests {
         let built =
             build_outbounds(&config, &RuntimeServices::default()).expect("outbounds should build");
         let registry_outbound = built
-            .registry
-            .first()
+            .iter()
+            .next()
             .expect("registry should contain trojan outbound");
         registry_outbound
             .close()
@@ -178,17 +157,11 @@ mod tests {
             .expect("registry trojan outbound should close");
 
         let route_outbound = built
-            .routing
             .get("proxy")
-            .expect("routing view should contain trojan outbound");
-        let err = match route_outbound {
-            RuntimeOutbound::Proxy(outbound) => {
-                match outbound.connect_proxy_stream(&test_context("proxy")).await {
-                    Ok(_) => panic!("routing view should observe shutdown"),
-                    Err(err) => err,
-                }
-            }
-            RuntimeOutbound::Stream(_) => panic!("trojan outbound should register as proxy"),
+            .expect("dispatch view should contain trojan outbound");
+        let err = match route_outbound.connect(&test_context("proxy")).await {
+            Ok(_) => panic!("dispatch view should observe shutdown"),
+            Err(err) => err,
         };
         assert_eq!(err.kind(), ErrorKind::Shutdown);
     }

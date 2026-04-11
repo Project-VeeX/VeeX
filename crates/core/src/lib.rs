@@ -12,7 +12,7 @@ pub mod sniff;
 pub mod traits;
 pub mod types;
 
-pub use dispatcher::{RuntimeOutbound, SimpleDispatcher};
+pub use dispatcher::{InboundSink, OutboundConnector, OutboundRegistry, SimpleDispatcher};
 pub use error::{ErrorKind, ProxyError, Result};
 pub use listen::{format_listen_addr, parse_listen_addr};
 pub use logging::{sanitize_field, Logger};
