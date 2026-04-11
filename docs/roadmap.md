@@ -6,7 +6,7 @@
 
 ## 1. Current Position
 
-As of the current repository state (`0.5.1`), VeeX has established a narrow but usable TCP execution-plane baseline for router-oriented environments.
+As of the current repository state (`0.5.3`), VeeX has established a narrow but usable TCP execution-plane baseline for router-oriented environments.
 
 That baseline includes:
 

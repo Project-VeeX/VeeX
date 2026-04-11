@@ -78,6 +78,22 @@ At a high level:
 | transport | perform TCP connect and optional TLS handshake |
 | relay | forward bytes between inbound and outbound streams |
 
+The current runtime ownership model is intentionally simple:
+
+- protocol objects are the stable runtime owners of their own listener or dialer, protocol state, and lifecycle
+- runtime and factory construct, register, start, and close services, but do not duplicate protocol state
+- configuration input is lowered before protocol construction; runtime protocol objects keep runtime fields rather than raw input option bags
+
+The current runtime skeleton is also intentionally layered:
+
+- top-level `Inbound` and `Outbound` traits stay thin and lifecycle-oriented
+- execution-model traits separate protocol families rather than collapsing all behavior into one mega trait
+- inbound protocol objects submit normalized execution requests through a narrow sink view (`InboundSink`) rather than depending on dispatcher internals directly
+- dispatcher stays thin: route still selects an outbound tag, dispatcher resolves that tag through a single outbound registry, and the selected outbound executes through one unified dispatcher-facing connector view (`OutboundConnector`)
+- transparent destination recovery remains protocol-specific and does not get folded into `Listener`
+- normalized trojan runtime fields use upstream address, key, and TLS capability rather than a raw config bag
+- `Listener` and `Dialer` are shared infrastructure capabilities, not protocol-logic containers
+
 ## 4. Routing Model
 
 VeeX uses one ordered rule pipeline.

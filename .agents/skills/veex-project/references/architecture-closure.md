@@ -40,12 +40,32 @@ Outbound dialing keeps the default connect path simple:
 
 ## Lifecycle Direction
 
-Do not push control-plane concepts back into data-plane traits just for convenience.
+Keep top-level service traits thin, but let protocol objects remain the stable runtime owners of their own minimal lifecycle.
 
 In particular:
 
-- `Inbound`, `Outbound`, and `Dispatcher` should not be expanded into generic lifecycle containers
-- runtime-owned handles are the right place for shutdown, health, and reload style behavior
+- `Inbound` and `Outbound` may own only `meta` / `logger` / `start` / `close` style lifecycle surface
+- protocol execution behavior should stay in execution-model-specific traits such as `StreamInbound`, `TransparentInbound`, `StreamOutbound`, and `ProxyOutbound`, rather than a single mega trait
+- runtime should keep registry and start/close orchestration, but should not pull protocol state back out of protocol objects
+- listener handlers should bind during protocol construction rather than via start-time callback injection
+- route and dispatcher views must reference the same outbound objects that runtime starts and closes
+- inbound protocol objects should depend on a narrow request-submission view (`InboundSink`) rather than `Dispatcher` directly
+- dispatcher should execute selected outbounds through a narrow dispatcher-facing view (`OutboundConnector`) rather than protocol-family matching
+- `OutboundRegistry` is the sole outbound holder; do not recreate separate runtime, routing, or dispatcher copies
+- transparent destination recovery should stay in protocol-specific capability objects rather than `Listener`
+- normalized trojan runtime state should prefer upstream address + key + TLS capability over raw config bags
+- do not introduce public `struct Inbound` / `struct Outbound` base carriers just to centralize fields
+- do not add health, reload, or control-plane callback buses to the protocol traits just for convenience
+
+## Shared Capability Direction
+
+`Listener` and `Dialer` remain shared infrastructure objects rather than protocol containers.
+
+Keep these rules:
+
+- `Listener` owns bind / accept / spawn / close and does not own protocol parsing, routing, or protocol-specific state machines
+- `Dialer` owns generic connect semantics such as timeout and routing mark, and does not own handshake or protocol framing
+- runtime protocol objects should keep only the normalized runtime fields they still actively use
 
 ## Relay Direction
 
@@ -63,6 +83,8 @@ Relay termination rules (current):
 Do not generalize configuration surfaces earlier than needed.
 
 Keep config abstractions aligned with actual consumers, and do not widen them only because a future shape is imaginable.
+
+Lower parse-time config aggregates before protocol construction. Runtime protocol objects should keep normalized runtime fields, not raw `*Options` bags.
 
 ## Config Parse Direction
 
@@ -95,7 +117,7 @@ This separation is intentional. Do not collapse `preflight` and `serde` back int
 
 These are explicitly out of scope and should not be quietly introduced:
 
-- no inbound common harness abstraction
+- no protocol-agnostic mega harness that hides the real inbound execution model
 - no kernel-level bypass action semantics
 - no DNS / UDP / TUN / fake-ip work
 - no sniff destination override or generalized protocol-routing platform

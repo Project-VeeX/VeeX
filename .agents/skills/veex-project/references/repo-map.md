@@ -41,7 +41,7 @@
 - `crates/inbound-transparent`
   - Linux transparent inbound lifecycle
   - `redirect` original-destination recovery via shared Linux infrastructure
-  - TCP-only `tproxy` inbound and transparent listener / `SessionContext` construction
+  - TCP-only `tproxy` inbound plus protocol-specific transparent destination recovery
 - `crates/inbound-socks`
   - SOCKS5 CONNECT inbound
 - `crates/outbound-direct`
@@ -49,7 +49,7 @@
   - Linux `SO_MARK` path and no-loop egress behavior
 - `crates/outbound-trojan`
   - Trojan outbound
-  - wiring to TLS / transport
+  - runtime wiring for upstream address, key material, and TLS
 - `crates/transport`
   - TCP / TLS abstractions
   - transport layer used by Trojan TLS
