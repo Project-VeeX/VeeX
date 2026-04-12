@@ -4,8 +4,8 @@ use crate::{
     defaults::DEFAULT_DIRECT_OUTBOUND_TAG,
     error::ConfigError,
     schema::{
-        DirectInboundConfig, InboundConfig, OutboundConfig, ProxyConfig, RouteActionConfig,
-        RouteFinalActionConfig, RouteRuleConfig,
+        DirectInboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig, InboundConfig,
+        OutboundConfig, ProxyConfig, RouteActionConfig, RouteFinalActionConfig, RouteRuleConfig,
     },
 };
 
@@ -13,6 +13,7 @@ pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
     validate_log(config)?;
     let inbound_tags = validate_inbounds(config)?;
     let outbound_tags = validate_outbounds(config)?;
+    validate_dns(config.dns.as_ref(), &outbound_tags)?;
     validate_route(config, &outbound_tags)?;
 
     debug_assert!(
@@ -155,6 +156,16 @@ fn validate_route(
     }
 
     for (index, rule) in config.route.rules.iter().enumerate() {
+        if matches!(
+            rule.action,
+            RouteActionConfig::Final(RouteFinalActionConfig::HijackDns)
+        ) && config.dns.is_none()
+        {
+            return Err(ConfigError::semantic(
+                format!("$.route.rules[{index}].action"),
+                "route action 'hijack-dns' requires a dns section",
+            ));
+        }
         validate_route_rule(rule, index, outbound_tags)?;
     }
 
@@ -173,16 +184,131 @@ fn validate_route_rule(
         ));
     }
 
-    if let RouteActionConfig::Final(RouteFinalActionConfig::Route(target)) = &rule.action {
-        if !outbound_tags.contains(&target.outbound) {
+    match &rule.action {
+        RouteActionConfig::Final(RouteFinalActionConfig::Route(target)) => {
+            if !outbound_tags.contains(&target.outbound) {
+                return Err(ConfigError::semantic(
+                    format!("$.route.rules[{index}].outbound"),
+                    format!(
+                        "route rule points to missing outbound '{}'",
+                        target.outbound
+                    ),
+                ));
+            }
+        }
+        RouteActionConfig::Final(RouteFinalActionConfig::HijackDns) => {}
+        RouteActionConfig::Upgrade(_) => {}
+    }
+
+    Ok(())
+}
+
+fn validate_dns(
+    dns: Option<&DnsConfig>,
+    outbound_tags: &BTreeSet<String>,
+) -> Result<(), ConfigError> {
+    let Some(dns) = dns else {
+        return Ok(());
+    };
+
+    if dns.servers.is_empty() {
+        return Err(ConfigError::semantic(
+            "$.dns.servers",
+            "dns.servers must contain at least one server",
+        ));
+    }
+
+    let mut server_tags = BTreeSet::new();
+    for (index, server) in dns.servers.iter().enumerate() {
+        validate_dns_server(server, index, outbound_tags)?;
+        if !server_tags.insert(server.tag.clone()) {
             return Err(ConfigError::semantic(
-                format!("$.route.rules[{index}].outbound"),
-                format!(
-                    "route rule points to missing outbound '{}'",
-                    target.outbound
-                ),
+                "$.dns.servers",
+                format!("duplicate dns server tag '{}'", server.tag),
             ));
         }
+    }
+
+    if !server_tags.contains(&dns.final_server) {
+        return Err(ConfigError::semantic(
+            "$.dns.final",
+            format!(
+                "dns.final points to missing dns server '{}'",
+                dns.final_server
+            ),
+        ));
+    }
+
+    for (index, rule) in dns.rules.iter().enumerate() {
+        validate_dns_rule(rule, index, &server_tags)?;
+    }
+
+    Ok(())
+}
+
+fn validate_dns_server(
+    server: &DnsServerConfig,
+    index: usize,
+    outbound_tags: &BTreeSet<String>,
+) -> Result<(), ConfigError> {
+    if server.tag.trim().is_empty() {
+        return Err(ConfigError::semantic(
+            format!("$.dns.servers[{index}].tag"),
+            "dns server tag must not be empty",
+        ));
+    }
+
+    if server.server.trim().is_empty() {
+        return Err(ConfigError::semantic(
+            format!("$.dns.servers[{index}].server"),
+            "dns server address must not be empty",
+        ));
+    }
+
+    if server.server_port == 0 {
+        return Err(ConfigError::semantic(
+            format!("$.dns.servers[{index}].server_port"),
+            "dns server port must be in 1..=65535",
+        ));
+    }
+
+    if server.detour.trim().is_empty() {
+        return Err(ConfigError::semantic(
+            format!("$.dns.servers[{index}].detour"),
+            "dns server detour must not be empty",
+        ));
+    }
+
+    if !outbound_tags.contains(&server.detour) {
+        return Err(ConfigError::semantic(
+            format!("$.dns.servers[{index}].detour"),
+            format!(
+                "dns server detour points to missing outbound '{}'",
+                server.detour
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_dns_rule(
+    rule: &DnsRuleConfig,
+    index: usize,
+    server_tags: &BTreeSet<String>,
+) -> Result<(), ConfigError> {
+    if !rule.has_matcher() {
+        return Err(ConfigError::semantic(
+            format!("$.dns.rules[{index}]"),
+            "dns rule requires at least one matcher",
+        ));
+    }
+
+    if !server_tags.contains(&rule.server) {
+        return Err(ConfigError::semantic(
+            format!("$.dns.rules[{index}].server"),
+            format!("dns rule points to missing dns server '{}'", rule.server),
+        ));
     }
 
     Ok(())
@@ -191,10 +317,11 @@ fn validate_route_rule(
 #[cfg(test)]
 mod tests {
     use crate::{
-        DirectInboundConfig, DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig,
-        ProxyConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig,
-        RouteTargetConfig, RouteUpgradeActionConfig, SniffActionConfig, SocksInboundConfig,
-        TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT,
+        DirectInboundConfig, DirectOutboundConfig, DnsConfig, DnsServerConfig, DnsServerTypeConfig,
+        InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteActionConfig, RouteConfig,
+        RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig, RouteUpgradeActionConfig,
+        SniffActionConfig, SocksInboundConfig, TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT,
+        DEFAULT_SNIFF_TIMEOUT,
     };
 
     use super::validate_config;
@@ -206,6 +333,7 @@ mod tests {
                 disabled: false,
                 timestamp: false,
             },
+            dns: None,
             inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
                 tag: "socks-in".into(),
                 listen: "127.0.0.1".into(),
@@ -307,6 +435,44 @@ mod tests {
         let err = validate_config(&config).expect_err("empty override_address should fail");
         assert!(err.to_string().contains("$.inbounds[0].override_address"));
         assert!(err.to_string().contains("must not be empty"));
+    }
+
+    #[test]
+    fn rejects_hijack_dns_route_rule_when_dns_section_is_missing() {
+        let mut config = valid_config();
+        config.route.rules.push(RouteRuleConfig {
+            domain: vec![],
+            domain_suffix: vec![],
+            ip_cidr: vec![],
+            ip_is_private: false,
+            ip_is_loopback: false,
+            ip_is_link_local: false,
+            port: vec![],
+            inbound: vec!["dns-in".into()],
+            action: RouteActionConfig::Final(RouteFinalActionConfig::HijackDns),
+        });
+
+        let err = validate_config(&config).expect_err("missing dns section should fail");
+        assert!(err.to_string().contains("$.route.rules[0].action"));
+        assert!(err.to_string().contains("requires a dns section"));
+    }
+
+    #[test]
+    fn accepts_dns_section_with_udp_server_detour() {
+        let mut config = valid_config();
+        config.dns = Some(DnsConfig {
+            final_server: "local".into(),
+            servers: vec![DnsServerConfig {
+                tag: "local".into(),
+                kind: DnsServerTypeConfig::Udp,
+                server: "223.5.5.5".into(),
+                server_port: 53,
+                detour: "direct".into(),
+            }],
+            rules: vec![],
+        });
+
+        validate_config(&config).expect("minimal dns section should validate");
     }
 
     #[test]

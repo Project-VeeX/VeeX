@@ -42,13 +42,17 @@ Current supported configuration surface:
 - route fields:
   - `final`
   - `rules`
+- dns fields:
+  - `final`
+  - `servers`
+  - `rules`
 
 Current UDP execution boundary:
 
 - only `direct` inbound accepts `network: "udp"`
 - only `direct` outbound supports packet execution
 - UDP association ownership lives in the packet dispatcher rather than in protocol-private inbound code
-- later DNS or detour work must reuse this path rather than bypass it with ad-hoc sockets
+- internal DNS UDP upstream queries also reuse outbound packet capability rather than bypassing it with ad-hoc sockets
 
 ## `route.rules` Semantics
 
@@ -65,13 +69,38 @@ Current UDP execution boundary:
 
 Current rule execution contract:
 
-- `outbound` is the only supported action
+- `outbound` and `action="hijack-dns"` are the supported final actions
+- `action="sniff"` is the supported upgrade action
 - rules are evaluated in declaration order
 - first match wins
 - within one rule, all populated matcher fields must match
 - `route.final` is lowered into the router's default final action
 - the runtime does not auto-insert recursion-prevention direct rules; operators must configure private/local or upstream-server direct exceptions explicitly in `route.rules`
 - rules that depend on sniffed domains must appear after the `action="sniff"` rule that enriches routing context
+- `action="hijack-dns"` hands the first UDP packet to the internal DNS executor instead of creating a forward association
+
+## `dns` Semantics
+
+The current accepted DNS subset is intentionally narrow:
+
+- `dns.final` — required default DNS server tag
+- `dns.servers[*]`:
+  - `tag`
+  - `type`
+  - `server`
+  - `server_port`
+  - `detour`
+- `dns.rules[*]`:
+  - `domain`
+  - `server`
+  - optional `action="route"`
+
+Current DNS runtime boundary:
+
+- only UDP upstream servers are executed
+- non-UDP server types may remain present in config, but selecting them is a runtime unsupported path
+- DNS server selection belongs to the DNS subsystem, not to `route.rules`
+- DNS queries use short-lived upstream packet sessions rather than client-facing packet associations
 
 ## Removed Compatibility Field
 
@@ -87,7 +116,6 @@ Migration direction:
 
 Known tolerated-but-unimplemented fields (accepted in config but have no effect):
 
-- `dns` — DNS server or resolver configuration
 - `domain_resolver` — domain resolution strategy
 - `log.output` — log output destination (e.g. file path, syslog); VeeX currently logs to stdout/stderr only
 
@@ -100,6 +128,7 @@ Known fields remain strictly typed. An unsupported type on a known field is stil
 The repository compatibility fixture is:
 
 - `examples/direct-trojan.json`
+- `examples/direct-udp-dns.json`
 - `examples/direct-udp-echo.json`
 - `examples/tproxy-compat.json`
 

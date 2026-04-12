@@ -1,13 +1,15 @@
 use std::{net::IpAddr, str::FromStr};
 
 use veex_config::{
-    InboundConfig, OutboundConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig,
-    RouteRuleConfig, RouteUpgradeActionConfig, TrojanTlsConfig,
+    DnsConfig, DnsRuleConfig, DnsServerTypeConfig, InboundConfig, OutboundConfig,
+    RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig,
+    RouteUpgradeActionConfig, TrojanTlsConfig,
 };
 use veex_core::{
     Destination, Dial, Host, InboundMeta, Listen, Network, OutboundMeta, RouteAction,
     RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, SniffAction,
 };
+use veex_dns::{DnsRule, DnsRuntimeConfig, DnsServer, DnsServerTransport};
 use veex_transport::TlsClientOptions;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -129,6 +131,14 @@ pub(crate) fn lower_route(route: &RouteConfig) -> LoweredRoute {
     }
 }
 
+pub(crate) fn lower_dns(dns: &DnsConfig) -> DnsRuntimeConfig {
+    DnsRuntimeConfig {
+        final_server_tag: dns.final_server.clone(),
+        servers: dns.servers.iter().map(lower_dns_server).collect(),
+        rules: dns.rules.iter().map(lower_dns_rule).collect(),
+    }
+}
+
 fn lower_route_rule(rule: &RouteRuleConfig) -> RouteRule {
     RouteRule {
         domain: rule.domain.clone(),
@@ -153,6 +163,28 @@ fn lower_route_action(action: &RouteActionConfig) -> RouteAction {
         RouteActionConfig::Final(RouteFinalActionConfig::Route(target)) => RouteAction::Final(
             RouteFinalAction::Route(RouteTarget::new(target.outbound.clone())),
         ),
+        RouteActionConfig::Final(RouteFinalActionConfig::HijackDns) => {
+            RouteAction::Final(RouteFinalAction::HijackDns)
+        }
+    }
+}
+
+fn lower_dns_server(server: &veex_config::DnsServerConfig) -> DnsServer {
+    DnsServer {
+        tag: server.tag.clone(),
+        transport: match &server.kind {
+            DnsServerTypeConfig::Udp => DnsServerTransport::Udp,
+            DnsServerTypeConfig::Unsupported(kind) => DnsServerTransport::Unsupported(kind.clone()),
+        },
+        destination: Destination::new(parse_host(&server.server), server.server_port),
+        detour: server.detour.clone(),
+    }
+}
+
+fn lower_dns_rule(rule: &DnsRuleConfig) -> DnsRule {
+    DnsRule {
+        domain: rule.domain.clone(),
+        server_tag: rule.server.clone(),
     }
 }
 

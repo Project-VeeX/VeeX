@@ -3,6 +3,7 @@ members = [
     "crates/cli",
     "crates/config",
     "crates/core",
+    "crates/dns",
     "crates/infra-linux",
     "crates/inbound-direct",
     "crates/inbound-transparent",

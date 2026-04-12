@@ -20,10 +20,10 @@ use tokio::{
 use tokio_rustls::TlsAcceptor;
 use veex_cli::runtime::{run_with_shutdown, RuntimeError};
 use veex_config::{
-    DirectInboundConfig, DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig,
-    ProxyConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig,
-    RouteTargetConfig, SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
-    DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+    DirectInboundConfig, DirectOutboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig,
+    DnsServerTypeConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteActionConfig,
+    RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig, SocksInboundConfig,
+    TrojanOutboundConfig, TrojanTlsConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
 };
 use veex_core::{Destination, ErrorKind, Host};
 use veex_outbound_trojan::build_trojan_request;
@@ -62,6 +62,7 @@ async fn runtime_supports_socks_to_direct_round_trip() {
             disabled: false,
             timestamp: false,
         },
+        dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
             listen: "127.0.0.1".into(),
@@ -131,6 +132,7 @@ async fn runtime_supports_direct_udp_to_direct_udp_round_trip() {
             disabled: false,
             timestamp: false,
         },
+        dns: None,
         inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
             tag: "direct-udp-in".into(),
             listen: "127.0.0.1".into(),
@@ -204,6 +206,138 @@ async fn runtime_supports_direct_udp_to_direct_udp_round_trip() {
 }
 
 #[tokio::test]
+async fn runtime_supports_udp_dns_hijack_to_udp_upstream_round_trip() {
+    let upstream_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("udp dns upstream should bind");
+    let upstream_addr = upstream_socket
+        .local_addr()
+        .expect("udp dns upstream addr should exist");
+    let upstream_task = tokio::spawn(async move {
+        let mut buf = [0u8; 1024];
+        let (size, peer) = upstream_socket
+            .recv_from(&mut buf)
+            .await
+            .expect("udp dns upstream should receive query");
+        let response = build_dns_noerror_response(&buf[..size]);
+        upstream_socket
+            .send_to(&response, peer)
+            .await
+            .expect("udp dns upstream should send response");
+        buf[..size].to_vec()
+    });
+
+    let inbound_addr = reserve_udp_port().await;
+    let config = ProxyConfig {
+        log: LogConfig {
+            level: "debug".into(),
+            disabled: false,
+            timestamp: false,
+        },
+        dns: Some(DnsConfig {
+            final_server: "direct-dns".into(),
+            servers: vec![DnsServerConfig {
+                tag: "direct-dns".into(),
+                kind: DnsServerTypeConfig::Udp,
+                server: "127.0.0.1".into(),
+                server_port: upstream_addr.port(),
+                detour: "direct".into(),
+            }],
+            rules: vec![DnsRuleConfig {
+                domain: vec!["trojan.example.com".into()],
+                server: "direct-dns".into(),
+            }],
+        }),
+        inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
+            tag: "dns-in".into(),
+            listen: "127.0.0.1".into(),
+            listen_port: inbound_addr.port(),
+            network: Some("udp".into()),
+            override_address: None,
+            override_port: None,
+        })],
+        outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
+            tag: "direct".into(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            routing_mark: None,
+        })],
+        route: RouteConfig {
+            final_outbound: "direct".into(),
+            rules: vec![RouteRuleConfig {
+                domain: vec![],
+                domain_suffix: vec![],
+                ip_cidr: vec![],
+                ip_is_private: false,
+                ip_is_loopback: false,
+                ip_is_link_local: false,
+                port: vec![],
+                inbound: vec!["dns-in".into()],
+                action: RouteActionConfig::Final(RouteFinalActionConfig::HijackDns),
+            }],
+        },
+    };
+    let (_guard, trace_buffer) = install_test_subscriber();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runtime_task = tokio::spawn(async move {
+        run_with_shutdown(&config, async move {
+            shutdown_rx
+                .await
+                .map_err(|err| format!("shutdown channel failed: {err}"))?;
+            Ok(())
+        })
+        .await
+    });
+
+    let query = build_dns_query("trojan.example.com");
+    let response = run_dns_udp_client_round_trip(inbound_addr, query.clone())
+        .await
+        .expect("udp dns hijack round-trip should succeed");
+
+    let _ = shutdown_tx.send(());
+    runtime_task
+        .await
+        .expect("runtime task should join")
+        .expect("runtime should stop cleanly");
+
+    let upstream_query = upstream_task
+        .await
+        .expect("udp dns upstream task should join");
+    assert_eq!(upstream_query, query);
+    assert_eq!(response, build_dns_noerror_response(&query));
+
+    let events = captured_events(&trace_buffer);
+    assert_has_event(
+        &events,
+        "packet_hijack_dns",
+        &[("inbound", "dns-in"), ("level", "INFO")],
+    );
+    assert_has_event(
+        &events,
+        "dns_query_start",
+        &[
+            ("inbound", "dns-in"),
+            ("server", "direct-dns"),
+            ("level", "INFO"),
+        ],
+    );
+    assert_has_event(
+        &events,
+        "dns_query_success",
+        &[
+            ("inbound", "dns-in"),
+            ("server", "direct-dns"),
+            ("level", "INFO"),
+        ],
+    );
+    assert_has_event(
+        &events,
+        "packet_hijack_dns_complete",
+        &[("inbound", "dns-in"), ("level", "INFO")],
+    );
+}
+
+#[tokio::test]
 async fn runtime_supports_socks_to_trojan_round_trip() {
     let destination = Destination::new(Host::Ip(Ipv4Addr::new(93, 184, 216, 34).into()), 443);
     let trojan_server = spawn_trojan_server("localhost", destination.clone()).await;
@@ -214,6 +348,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
             disabled: false,
             timestamp: false,
         },
+        dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
             listen: "127.0.0.1".into(),
@@ -367,6 +502,7 @@ async fn runtime_supports_socks_domain_route_rule_to_trojan() {
             disabled: false,
             timestamp: false,
         },
+        dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
             listen: "127.0.0.1".into(),
@@ -461,6 +597,7 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
             disabled: false,
             timestamp: false,
         },
+        dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
             listen: "127.0.0.1".into(),
@@ -581,6 +718,7 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
             disabled: false,
             timestamp: false,
         },
+        dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
             listen: "127.0.0.1".into(),
@@ -690,6 +828,7 @@ async fn runtime_starts_with_redirect_inbound() {
             disabled: false,
             timestamp: false,
         },
+        dns: None,
         inbounds: vec![InboundConfig::Redirect(
             veex_config::RedirectInboundConfig {
                 tag: "redirect-in".into(),
@@ -753,6 +892,7 @@ async fn runtime_reports_listener_bind_failure_with_io_error_kind() {
             disabled: false,
             timestamp: false,
         },
+        dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
             listen: "127.0.0.1".into(),
@@ -827,6 +967,7 @@ async fn runtime_emits_session_start_and_finish_events() {
             disabled: false,
             timestamp: false,
         },
+        dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
             listen: "127.0.0.1".into(),
@@ -946,6 +1087,7 @@ async fn invalid_socks_request_emits_handshake_failed_event() {
             disabled: false,
             timestamp: false,
         },
+        dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
             listen: "127.0.0.1".into(),
@@ -1264,6 +1406,55 @@ async fn run_direct_udp_client_round_trip(inbound_addr: SocketAddr) -> Result<()
     Err(format!(
         "udp inbound did not become ready on {inbound_addr}"
     ))
+}
+
+async fn run_dns_udp_client_round_trip(
+    inbound_addr: SocketAddr,
+    query: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let client = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .map_err(|err| format!("failed to bind dns udp client: {err}"))?;
+    let mut response = [0u8; 1024];
+
+    for _ in 0..100 {
+        client
+            .send_to(&query, inbound_addr)
+            .await
+            .map_err(|err| format!("failed to send dns query: {err}"))?;
+        match tokio::time::timeout(Duration::from_millis(50), client.recv_from(&mut response)).await
+        {
+            Ok(Ok((size, _peer))) => return Ok(response[..size].to_vec()),
+            Ok(Err(err)) => return Err(format!("failed to receive dns response: {err}")),
+            Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+        }
+    }
+
+    Err(format!(
+        "dns udp inbound did not become ready on {inbound_addr}"
+    ))
+}
+
+fn build_dns_query(domain: &str) -> Vec<u8> {
+    let mut query = vec![
+        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    for label in domain.split('.') {
+        query.push(label.len() as u8);
+        query.extend_from_slice(label.as_bytes());
+    }
+    query.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x01]);
+    query
+}
+
+fn build_dns_noerror_response(query: &[u8]) -> Vec<u8> {
+    let mut response = Vec::with_capacity(query.len());
+    response.extend_from_slice(&query[..2]);
+    response.extend_from_slice(&[0x81, 0x80]);
+    response.extend_from_slice(&query[4..6]);
+    response.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    response.extend_from_slice(&query[12..]);
+    response
 }
 
 async fn reserve_udp_port() -> SocketAddr {

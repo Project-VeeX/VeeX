@@ -14,10 +14,31 @@ use crate::{
 /// The result of a routing decision for a session.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RouteDecision {
-    /// Tag of the outbound selected to handle this session.
-    pub outbound_tag: String,
+    /// Final action selected to handle this session.
+    pub final_action: RouteFinalAction,
     /// Reason for the routing decision.
     pub reason: RouteReason,
+}
+
+impl RouteDecision {
+    pub fn route(outbound_tag: impl Into<String>, reason: RouteReason) -> Self {
+        Self {
+            final_action: RouteFinalAction::Route(RouteTarget::new(outbound_tag)),
+            reason,
+        }
+    }
+
+    pub fn route_target(&self) -> Option<&RouteTarget> {
+        match &self.final_action {
+            RouteFinalAction::Route(target) => Some(target),
+            RouteFinalAction::HijackDns => None,
+        }
+    }
+
+    pub fn outbound_tag(&self) -> Option<&str> {
+        self.route_target()
+            .map(|target| target.outbound_tag.as_str())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,6 +60,7 @@ pub struct SniffAction {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RouteFinalAction {
     Route(RouteTarget),
+    HijackDns,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -479,7 +501,7 @@ impl Router {
                     }
                     RouteAction::Final(action) => {
                         let decision = self.final_action_decision(action, RouteReason::Rule);
-                        log_route_final_selected(ctx, rule, input.domain, &decision.outbound_tag);
+                        log_route_final_selected(ctx, rule, input.domain, &decision.final_action);
                         return RouteExecution { stream, decision };
                     }
                 }
@@ -491,7 +513,7 @@ impl Router {
         }
 
         let decision = self.default_final_decision();
-        log_route_default_final_selected(ctx, route_context.domain(), &decision.outbound_tag);
+        log_route_default_final_selected(ctx, route_context.domain(), &decision.final_action);
         RouteExecution { stream, decision }
     }
 
@@ -500,9 +522,8 @@ impl Router {
         action: &RouteFinalAction,
         reason: RouteReason,
     ) -> RouteDecision {
-        let RouteFinalAction::Route(target) = action;
         RouteDecision {
-            outbound_tag: target.outbound_tag.clone(),
+            final_action: action.clone(),
             reason,
         }
     }
@@ -516,7 +537,16 @@ impl RouteAction {
     fn kind(&self) -> &'static str {
         match self {
             Self::Upgrade(RouteUpgradeAction::Sniff(_)) => "sniff",
-            Self::Final(RouteFinalAction::Route(_)) => "route",
+            Self::Final(action) => action.kind(),
+        }
+    }
+}
+
+impl RouteFinalAction {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Route(_) => "route",
+            Self::HijackDns => "hijack-dns",
         }
     }
 }
@@ -643,38 +673,66 @@ fn log_route_final_selected(
     ctx: &SessionContext,
     rule: &CompiledRouteRule,
     domain_before: Option<&str>,
-    outbound_tag: &str,
+    action: &RouteFinalAction,
 ) {
     let matcher_summary = sanitize_field(rule.matcher_summary.as_str()).into_owned();
     let domain_before = sanitize_optional_domain(domain_before);
-    let outbound = sanitize_field(outbound_tag).into_owned();
-    debug!(
-        event = "route_final_selected",
-        session_id = ctx.meta.id,
-        rule_index = rule.rule_index as u64,
-        action_kind = rule.action_kind(),
-        matcher_summary = %matcher_summary,
-        domain_before = %domain_before,
-        outbound = %outbound,
-        "route final action selected"
-    );
+    match action {
+        RouteFinalAction::Route(target) => {
+            let outbound = sanitize_field(&target.outbound_tag).into_owned();
+            debug!(
+                event = "route_final_selected",
+                session_id = ctx.meta.id,
+                rule_index = rule.rule_index as u64,
+                action_kind = rule.action_kind(),
+                matcher_summary = %matcher_summary,
+                domain_before = %domain_before,
+                outbound = %outbound,
+                "route final action selected"
+            );
+        }
+        RouteFinalAction::HijackDns => {
+            debug!(
+                event = "route_final_selected",
+                session_id = ctx.meta.id,
+                rule_index = rule.rule_index as u64,
+                action_kind = rule.action_kind(),
+                matcher_summary = %matcher_summary,
+                domain_before = %domain_before,
+                "route final action selected"
+            );
+        }
+    }
 }
 
 fn log_route_default_final_selected(
     ctx: &SessionContext,
     domain_before: Option<&str>,
-    outbound_tag: &str,
+    action: &RouteFinalAction,
 ) {
     let domain_before = sanitize_optional_domain(domain_before);
-    let outbound = sanitize_field(outbound_tag).into_owned();
-    debug!(
-        event = "route_default_final_selected",
-        session_id = ctx.meta.id,
-        action_kind = "route",
-        domain_before = %domain_before,
-        outbound = %outbound,
-        "route default final action selected"
-    );
+    match action {
+        RouteFinalAction::Route(target) => {
+            let outbound = sanitize_field(&target.outbound_tag).into_owned();
+            debug!(
+                event = "route_default_final_selected",
+                session_id = ctx.meta.id,
+                action_kind = action.kind(),
+                domain_before = %domain_before,
+                outbound = %outbound,
+                "route default final action selected"
+            );
+        }
+        RouteFinalAction::HijackDns => {
+            debug!(
+                event = "route_default_final_selected",
+                session_id = ctx.meta.id,
+                action_kind = action.kind(),
+                domain_before = %domain_before,
+                "route default final action selected"
+            );
+        }
+    }
 }
 
 fn log_sniff_start(ctx: &SessionContext, timeout: Duration) {
@@ -810,7 +868,7 @@ mod tests {
     use crate::types::{Destination, Network, SessionContext, SessionMeta};
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
-    use super::{RouteInput, RouteReason, RouteRule, Router};
+    use super::{RouteAction, RouteFinalAction, RouteInput, RouteReason, RouteRule, Router};
 
     fn build_ctx(destination: Destination) -> SessionContext {
         SessionContext::new(
@@ -917,7 +975,7 @@ mod tests {
         let ctx = build_ctx(Destination::from_domain("example.com", 443));
 
         let decision = router.select(&ctx);
-        assert_eq!(decision.outbound_tag, "proxy");
+        assert_eq!(decision.outbound_tag(), Some("proxy"));
         assert_eq!(decision.reason, RouteReason::Final);
     }
 
@@ -930,7 +988,7 @@ mod tests {
         ));
 
         let decision = router.select(&ctx);
-        assert_eq!(decision.outbound_tag, "proxy");
+        assert_eq!(decision.outbound_tag(), Some("proxy"));
         assert_eq!(decision.reason, RouteReason::Final);
     }
 
@@ -943,7 +1001,7 @@ mod tests {
         let ctx = build_ctx(Destination::from_domain("Example.COM", 443));
 
         let decision = router.select(&ctx);
-        assert_eq!(decision.outbound_tag, "proxy");
+        assert_eq!(decision.outbound_tag(), Some("proxy"));
         assert_eq!(decision.reason, RouteReason::Rule);
     }
 
@@ -965,9 +1023,9 @@ mod tests {
             Some("www.google.com"),
         ));
 
-        assert_eq!(apex_decision.outbound_tag, "proxy");
+        assert_eq!(apex_decision.outbound_tag(), Some("proxy"));
         assert_eq!(apex_decision.reason, RouteReason::Rule);
-        assert_eq!(subdomain_decision.outbound_tag, "proxy");
+        assert_eq!(subdomain_decision.outbound_tag(), Some("proxy"));
         assert_eq!(subdomain_decision.reason, RouteReason::Rule);
     }
 
@@ -980,7 +1038,7 @@ mod tests {
         let destination = Destination::from_ip("198.51.100.10".parse().unwrap(), 443);
 
         let decision = router.select_input(RouteInput::new(&destination, Some("test"), None));
-        assert_eq!(decision.outbound_tag, "proxy");
+        assert_eq!(decision.outbound_tag(), Some("proxy"));
         assert_eq!(decision.reason, RouteReason::Rule);
     }
 
@@ -1008,20 +1066,20 @@ mod tests {
         assert_eq!(
             router
                 .select_input(RouteInput::new(&loopback, Some("test"), None))
-                .outbound_tag,
-            "loopback-direct"
+                .outbound_tag(),
+            Some("loopback-direct")
         );
         assert_eq!(
             router
                 .select_input(RouteInput::new(&private, Some("test"), None))
-                .outbound_tag,
-            "private-direct"
+                .outbound_tag(),
+            Some("private-direct")
         );
         assert_eq!(
             router
                 .select_input(RouteInput::new(&link_local, Some("test"), None))
-                .outbound_tag,
-            "link-local-direct"
+                .outbound_tag(),
+            Some("link-local-direct")
         );
     }
 
@@ -1051,9 +1109,9 @@ mod tests {
             None,
         ));
 
-        assert_eq!(port_match.outbound_tag, "dns");
+        assert_eq!(port_match.outbound_tag(), Some("dns"));
         assert_eq!(port_match.reason, RouteReason::Rule);
-        assert_eq!(inbound_match.outbound_tag, "socks-out");
+        assert_eq!(inbound_match.outbound_tag(), Some("socks-out"));
         assert_eq!(inbound_match.reason, RouteReason::Rule);
     }
 
@@ -1078,9 +1136,9 @@ mod tests {
             Some("www.google.com"),
         ));
 
-        assert_eq!(matching_decision.outbound_tag, "proxy");
+        assert_eq!(matching_decision.outbound_tag(), Some("proxy"));
         assert_eq!(matching_decision.reason, RouteReason::Rule);
-        assert_eq!(mismatched_decision.outbound_tag, "final");
+        assert_eq!(mismatched_decision.outbound_tag(), Some("final"));
         assert_eq!(mismatched_decision.reason, RouteReason::Final);
     }
 
@@ -1099,8 +1157,24 @@ mod tests {
         let destination = Destination::from_ip("198.51.100.10".parse().unwrap(), 443);
 
         let decision = router.select_input(RouteInput::new(&destination, Some("test"), None));
-        assert_eq!(decision.outbound_tag, "first");
+        assert_eq!(decision.outbound_tag(), Some("first"));
         assert_eq!(decision.reason, RouteReason::Rule);
+    }
+
+    #[test]
+    fn can_return_hijack_dns_as_a_final_action() {
+        let router = Router::with_default_outbound("final").with_rule(RouteRule {
+            inbound: vec!["dns-in".into()],
+            action: RouteAction::Final(RouteFinalAction::HijackDns),
+            ..RouteRule::new("unused")
+        });
+        let destination = Destination::from_ip("127.0.0.1".parse().unwrap(), 53);
+
+        let decision = router.select_input(RouteInput::new(&destination, Some("dns-in"), None));
+
+        assert!(matches!(decision.final_action, RouteFinalAction::HijackDns));
+        assert_eq!(decision.reason, RouteReason::Rule);
+        assert_eq!(decision.outbound_tag(), None);
     }
 
     #[test]
@@ -1118,7 +1192,7 @@ mod tests {
         let destination = Destination::from_ip("198.51.100.10".parse().unwrap(), 443);
 
         let decision = router.select_input(RouteInput::new(&destination, Some("test"), None));
-        assert_eq!(decision.outbound_tag, "fallback-rule");
+        assert_eq!(decision.outbound_tag(), Some("fallback-rule"));
         assert_eq!(decision.reason, RouteReason::Rule);
     }
 
@@ -1137,9 +1211,9 @@ mod tests {
             Some("www.google.com"),
         ));
 
-        assert_eq!(first.outbound_tag, "final");
+        assert_eq!(first.outbound_tag(), Some("final"));
         assert_eq!(first.reason, RouteReason::Final);
-        assert_eq!(second.outbound_tag, "proxy");
+        assert_eq!(second.outbound_tag(), Some("proxy"));
         assert_eq!(second.reason, RouteReason::Rule);
     }
 
@@ -1179,7 +1253,7 @@ mod tests {
             )
             .await;
 
-        assert_eq!(execution.decision.outbound_tag, "proxy");
+        assert_eq!(execution.decision.outbound_tag(), Some("proxy"));
         assert_eq!(execution.decision.reason, RouteReason::Rule);
 
         let mut replay = execution.stream;
@@ -1230,7 +1304,7 @@ mod tests {
             )
             .await;
 
-        assert_eq!(execution.decision.outbound_tag, "late");
+        assert_eq!(execution.decision.outbound_tag(), Some("late"));
         assert_eq!(execution.decision.reason, RouteReason::Rule);
     }
 
@@ -1273,7 +1347,7 @@ mod tests {
             )
             .await;
 
-        assert_eq!(execution.decision.outbound_tag, "direct");
+        assert_eq!(execution.decision.outbound_tag(), Some("direct"));
         assert_eq!(execution.decision.reason, RouteReason::Rule);
     }
 
@@ -1297,7 +1371,7 @@ mod tests {
         );
 
         let execution = router.execute(Box::new(PendingStream), &mut ctx).await;
-        assert_eq!(execution.decision.outbound_tag, "final");
+        assert_eq!(execution.decision.outbound_tag(), Some("final"));
         assert_eq!(execution.decision.reason, RouteReason::Final);
     }
 
@@ -1327,7 +1401,7 @@ mod tests {
         );
 
         let execution = router.execute(Box::new(PendingStream), &mut ctx).await;
-        assert_eq!(execution.decision.outbound_tag, "late");
+        assert_eq!(execution.decision.outbound_tag(), Some("late"));
         assert_eq!(execution.decision.reason, RouteReason::Rule);
     }
 
@@ -1365,7 +1439,7 @@ mod tests {
                 &mut ctx,
             )
             .await;
-        assert_eq!(execution.decision.outbound_tag, "late");
+        assert_eq!(execution.decision.outbound_tag(), Some("late"));
 
         let events = captured_events(&events);
         assert_has_event(
@@ -1407,7 +1481,7 @@ mod tests {
         );
 
         let execution = router.execute(Box::new(PendingStream), &mut ctx).await;
-        assert_eq!(execution.decision.outbound_tag, "late");
+        assert_eq!(execution.decision.outbound_tag(), Some("late"));
 
         let events = captured_events(&events);
         assert_has_event(
@@ -1487,7 +1561,7 @@ mod tests {
                 &mut ctx,
             )
             .await;
-        assert_eq!(execution.decision.outbound_tag, "final");
+        assert_eq!(execution.decision.outbound_tag(), Some("final"));
         assert_eq!(execution.decision.reason, RouteReason::Final);
 
         let events = captured_events(&events);

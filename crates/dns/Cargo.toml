@@ -1,0 +1,13 @@
+[package]
+name = "veex-dns"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tracing.workspace = true
+veex-core = { path = "../core" }
+
+[dev-dependencies]
+veex-test-tracing = { path = "../test-tracing" }

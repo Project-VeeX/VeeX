@@ -1,6 +1,7 @@
 //! Core runtime abstractions shared by all protocol and integration crates.
 
 pub mod dispatcher;
+pub mod dns;
 pub mod error;
 pub mod listen;
 pub mod logging;
@@ -16,6 +17,7 @@ pub mod traits;
 pub mod types;
 
 pub use dispatcher::{Dispatcher, InboundSink, OutboundConnector, OutboundRegistry};
+pub use dns::DnsExecutorHandle;
 pub use error::{ErrorKind, ProxyError, Result};
 pub use listen::{format_listen_addr, parse_listen_addr};
 pub use logging::{sanitize_field, Logger};

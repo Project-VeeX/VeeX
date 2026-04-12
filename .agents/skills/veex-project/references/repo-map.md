@@ -6,6 +6,7 @@
   - `crates/cli`
   - `crates/config`
   - `crates/core`
+  - `crates/dns`
   - `crates/infra-linux`
   - `crates/inbound-direct`
   - `crates/inbound-transparent`
@@ -35,6 +36,9 @@
   - error model and `ErrorKind`
   - `Router`, `Dispatcher`, `PacketDispatcher`, and `relay`
   - platform-agnostic core contracts
+- `crates/dns`
+  - DNS executor, DNS router, and DNS wire parsing
+  - short-lived UDP upstream query execution via outbound packet capability
 - `crates/infra-linux`
   - Linux transparent-socket capabilities
   - original-destination and transparent helper functions
@@ -88,6 +92,7 @@
   - `references/validation-contract.md`
 - UDP packet execution / association behavior:
   - `crates/core`
+  - `crates/dns`
   - `crates/inbound-direct`
   - `crates/outbound-direct`
   - `crates/cli`

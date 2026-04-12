@@ -9,13 +9,15 @@ use crate::{
     },
     error::{display_path, ConfigError},
     input::{
-        InputConfig, InputInbound, InputInboundType, InputLogConfig, InputOutbound,
-        InputOutboundType, InputRouteConfig, InputRouteRule, InputTrojanTlsConfig,
+        InputConfig, InputDnsConfig, InputDnsRule, InputDnsServer, InputInbound, InputInboundType,
+        InputLogConfig, InputOutbound, InputOutboundType, InputRouteConfig, InputRouteRule,
+        InputTrojanTlsConfig,
     },
     preflight::parse_json,
     schema::{
-        DirectInboundConfig, DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig,
-        ProxyConfig, RedirectInboundConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig,
+        DirectInboundConfig, DirectOutboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig,
+        DnsServerTypeConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
+        RedirectInboundConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig,
         RouteRuleConfig, RouteTargetConfig, RouteUpgradeActionConfig, SniffActionConfig,
         SocksInboundConfig, TProxyInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
     },
@@ -159,6 +161,7 @@ fn map_serde_error(err: serde_json::Error, path: Option<String>) -> ConfigError 
 fn input_config_into_proxy_config(input_config: InputConfig) -> Result<ProxyConfig, ConfigError> {
     Ok(ProxyConfig {
         log: input_log_into_config(input_config.log),
+        dns: input_config.dns.map(input_dns_into_config).transpose()?,
         inbounds: input_config
             .inbounds
             .into_iter()
@@ -264,6 +267,86 @@ fn input_trojan_tls_into_config(input_config: InputTrojanTlsConfig) -> TrojanTls
     }
 }
 
+fn input_dns_into_config(input_config: InputDnsConfig) -> Result<DnsConfig, ConfigError> {
+    Ok(DnsConfig {
+        final_server: required_nested_string(input_config.final_server, "$.dns.final")?,
+        servers: input_config
+            .servers
+            .into_iter()
+            .enumerate()
+            .map(|(index, server)| input_dns_server_into_config(server, index))
+            .collect::<Result<Vec<_>, _>>()?,
+        rules: input_config
+            .rules
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+            .map(|(index, rule)| input_dns_rule_into_config(rule, index))
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
+
+fn input_dns_server_into_config(
+    input_server: InputDnsServer,
+    index: usize,
+) -> Result<DnsServerConfig, ConfigError> {
+    Ok(DnsServerConfig {
+        tag: input_server.tag,
+        kind: parse_dns_server_type(input_server.kind),
+        server: required_nested_string(
+            input_server.server,
+            format!("$.dns.servers[{index}].server"),
+        )?,
+        server_port: required_nested_port(
+            input_server.server_port,
+            format!("$.dns.servers[{index}].server_port"),
+        )?,
+        detour: required_nested_string(
+            input_server.detour,
+            format!("$.dns.servers[{index}].detour"),
+        )?,
+    })
+}
+
+fn input_dns_rule_into_config(
+    input_rule: InputDnsRule,
+    index: usize,
+) -> Result<DnsRuleConfig, ConfigError> {
+    if let Some(action) = &input_rule.action {
+        match action.as_deref() {
+            Some("route") => {}
+            Some(other) => {
+                return Err(ConfigError::semantic(
+                    format!("$.dns.rules[{index}].action"),
+                    format!("unsupported dns rule action '{other}'"),
+                ));
+            }
+            None => {
+                return Err(ConfigError::validation(
+                    format!("$.dns.rules[{index}].action"),
+                    "expected string",
+                ));
+            }
+        }
+    }
+
+    Ok(DnsRuleConfig {
+        domain: normalize_domain_matchers(
+            input_rule.domain,
+            format!("$.dns.rules[{index}].domain"),
+            DomainMatcherKind::Exact,
+        )?,
+        server: required_nested_string(input_rule.server, format!("$.dns.rules[{index}].server"))?,
+    })
+}
+
+fn parse_dns_server_type(value: String) -> DnsServerTypeConfig {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "udp" => DnsServerTypeConfig::Udp,
+        other => DnsServerTypeConfig::Unsupported(other.to_string()),
+    }
+}
+
 fn input_route_into_config(input_config: InputRouteConfig) -> Result<RouteConfig, ConfigError> {
     Ok(RouteConfig {
         final_outbound: input_config.final_outbound,
@@ -335,6 +418,7 @@ fn input_route_rule_action_into_config(
                         timeout: input_rule.timeout.unwrap_or(DEFAULT_SNIFF_TIMEOUT),
                     },
                 ))),
+                "hijack-dns" => Ok(RouteActionConfig::Final(RouteFinalActionConfig::HijackDns)),
                 other => Err(ConfigError::semantic(
                     format!("$.route.rules[{index}].action"),
                     format!("unsupported route action '{other}'"),
@@ -423,6 +507,24 @@ fn classify_ignored_paths(
 fn protocol_extra_paths(input_config: &InputConfig) -> Vec<String> {
     let mut paths = Vec::new();
 
+    if let Some(dns) = &input_config.dns {
+        for field in dns.extra.keys() {
+            paths.push(format!("$.dns.{field}"));
+        }
+
+        for (index, server) in dns.servers.iter().enumerate() {
+            for field in server.extra.keys() {
+                paths.push(format!("$.dns.servers[{index}].{field}"));
+            }
+        }
+
+        for (index, rule) in dns.rules.iter().flatten().enumerate() {
+            for field in rule.extra.keys() {
+                paths.push(format!("$.dns.rules[{index}].{field}"));
+            }
+        }
+    }
+
     for (index, inbound) in input_config.inbounds.iter().enumerate() {
         for field in inbound.extra.keys() {
             paths.push(format!("$.inbounds[{index}].{field}"));
@@ -465,13 +567,17 @@ fn classify_ignored_path(input_config: &InputConfig, path: &str) -> Option<Ignor
         return classify_route_rule_ignored(path);
     }
 
+    if let Some(field) = path.strip_prefix("$.dns.") {
+        return classify_dns_ignored(field);
+    }
+
     match path {
         _ if path == "$.route.bypass" || path.starts_with("$.route.bypass[") => {
             Some(IgnoredDisposition::Error(
                 "route.bypass has been removed; use route.rules with outbound='direct' instead",
             ))
         }
-        "$.dns" | "$.domain_resolver" => Some(IgnoredDisposition::Warn(
+        "$.domain_resolver" => Some(IgnoredDisposition::Warn(
             "field is accepted for compatibility but ignored by the current config surface",
         )),
         "$.log.output" => Some(IgnoredDisposition::Ignore(
@@ -508,6 +614,41 @@ fn classify_direct_inbound_ignored(field: &str) -> Option<IgnoredDisposition> {
                 "field is accepted for compatibility but ignored by the current direct inbound",
             )
         }
+        _ => return None,
+    })
+}
+
+fn classify_dns_ignored(field: &str) -> Option<IgnoredDisposition> {
+    if let Some((_, nested)) = indexed_field(field, "servers[") {
+        return Some(match first_segment(nested) {
+            "address" | "domain_resolver" | "address_resolver" => IgnoredDisposition::Warn(
+                "field is accepted for compatibility but does not affect the current dns server runtime",
+            ),
+            "path" | "tls" | "headers" | "client_subnet" => IgnoredDisposition::Ignore(
+                "field is accepted for future dns upstream support but ignored by the current udp-only dns runtime",
+            ),
+            _ => return None,
+        });
+    }
+
+    if let Some((_, nested)) = indexed_field(field, "rules[") {
+        return Some(match first_segment(nested) {
+            "disable_cache" | "strategy" => IgnoredDisposition::Ignore(
+                "field is accepted for compatibility but ignored by the current dns rule runtime",
+            ),
+            _ => return None,
+        });
+    }
+
+    Some(match first_segment(field) {
+        "disable_cache" | "reverse_mapping" | "disable_expire" | "independent_cache" => {
+            IgnoredDisposition::Ignore(
+                "field is accepted for compatibility but ignored by the current dns subsystem",
+            )
+        }
+        "strategy" | "client_subnet" | "cache_capacity" => IgnoredDisposition::Warn(
+            "field is accepted for compatibility but does not affect the current dns subsystem",
+        ),
         _ => return None,
     })
 }
@@ -1006,6 +1147,66 @@ mod tests {
     }
 
     #[test]
+    fn parses_hijack_dns_action_with_string_inbound_matcher_and_dns_config() {
+        let input = r#"
+        {
+          "dns": {
+            "final": "direct-dns",
+            "servers": [
+              {
+                "tag": "direct-dns",
+                "type": "udp",
+                "server": "223.5.5.5",
+                "server_port": 53,
+                "detour": "direct"
+              }
+            ],
+            "rules": [
+              {
+                "domain": "trojan.example.com",
+                "server": "direct-dns",
+                "action": "route"
+              }
+            ]
+          },
+          "inbounds": [
+            {
+              "type": "direct",
+              "tag": "dns-in",
+              "listen": "127.0.0.1",
+              "listen_port": 15353,
+              "network": "udp"
+            }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct",
+            "rules": [
+              {
+                "inbound": "dns-in",
+                "action": "hijack-dns"
+              }
+            ]
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("dns hijack config should parse");
+
+        assert_eq!(config.route.rules[0].inbound, vec!["dns-in".to_string()]);
+        assert!(matches!(
+            config.route.rules[0].action,
+            RouteActionConfig::Final(RouteFinalActionConfig::HijackDns)
+        ));
+        let dns = config.dns.expect("dns config should be present");
+        assert_eq!(dns.final_server, "direct-dns");
+        assert_eq!(dns.rules[0].domain, vec!["trojan.example.com".to_string()]);
+        assert_eq!(dns.rules[0].server, "direct-dns");
+    }
+
+    #[test]
     fn parses_sniff_route_rule_and_defaults_timeout() {
         let input = r#"
         {
@@ -1110,7 +1311,19 @@ mod tests {
         let input = r#"
         {
           "log": { "level": "debug", "timestamp": true, "output": "stdout", "noise": true },
-          "dns": { "servers": ["223.5.5.5"] },
+          "dns": {
+            "final": "local",
+            "strategy": "prefer_ipv4",
+            "servers": [
+              {
+                "tag": "local",
+                "type": "udp",
+                "server": "223.5.5.5",
+                "server_port": 53,
+                "detour": "direct"
+              }
+            ]
+          },
           "experimental": { "enabled": true },
           "inbounds": [
             {
@@ -1150,7 +1363,7 @@ mod tests {
             .collect();
 
         assert!(report.config.log.timestamp);
-        assert!(warning_paths.contains(&"$.dns"));
+        assert!(warning_paths.contains(&"$.dns.strategy"));
         assert!(warning_paths.contains(&"$.inbounds[0].sniff"));
         assert!(warning_paths.contains(&"$.inbounds[0].users"));
         assert!(!warning_paths.contains(&"$.outbounds[0].connect_timeout"));
@@ -1291,7 +1504,18 @@ mod tests {
     fn top_level_unknown_fields_still_parse_successfully() {
         let input = r#"
         {
-          "dns": { "servers": ["223.5.5.5"] },
+          "dns": {
+            "final": "local",
+            "servers": [
+              {
+                "tag": "local",
+                "type": "udp",
+                "server": "223.5.5.5",
+                "server_port": 53,
+                "detour": "direct"
+              }
+            ]
+          },
           "extra_top_level": { "anything": true },
           "inbounds": [
             { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
@@ -1310,7 +1534,19 @@ mod tests {
     fn parse_config_with_diagnostics_exposes_warnings_without_changing_default_parse() {
         let input = r#"
         {
-          "dns": { "servers": ["223.5.5.5"] },
+          "dns": {
+            "final": "local",
+            "strategy": "prefer_ipv4",
+            "servers": [
+              {
+                "tag": "local",
+                "type": "udp",
+                "server": "223.5.5.5",
+                "server_port": 53,
+                "detour": "direct"
+              }
+            ]
+          },
           "inbounds": [
             { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080, "sniff": true }
           ],
@@ -1330,7 +1566,7 @@ mod tests {
             .collect();
 
         assert_eq!(config.route.final_outbound, "direct");
-        assert!(warning_paths.contains(&"$.dns"));
+        assert!(warning_paths.contains(&"$.dns.strategy"));
         assert!(warning_paths.contains(&"$.inbounds[0].sniff"));
         parse_config(input).expect("default parse should remain silent and succeed");
     }
@@ -2103,7 +2339,7 @@ mod tests {
             report.config.route.rules[5].domain_suffix,
             vec!["lan".to_string()]
         );
-        assert!(warning_paths.contains(&"$.dns"));
+        assert!(warning_paths.contains(&"$.dns.strategy"));
         assert!(warning_paths.contains(&"$.outbounds[1].domain_resolver"));
         assert!(!warning_paths.contains(&"$.log.timestamp"));
         parse_config(input).expect("compat example should remain loadable");

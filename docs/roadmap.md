@@ -6,7 +6,7 @@
 
 ## 1. Current Position
 
-As of the current repository state (`0.5.3`), VeeX has established a narrow but usable TCP execution-plane baseline for router-oriented environments, plus a first-stage UDP packet foundation for `direct-in -> direct-out`.
+As of the current repository state (`0.5.3`), VeeX has established a narrow but usable TCP execution-plane baseline for router-oriented environments, plus a first-stage UDP packet foundation and the first DNS-subsystem slice built on that foundation.
 
 That baseline includes:
 
@@ -16,6 +16,8 @@ That baseline includes:
 - bounded `action="sniff"` context enrichment
 - sequential multi-address connect fallback
 - dispatcher-owned UDP association mapping for `direct` inbound to `direct` outbound
+- `hijack-dns` final-action handoff into a minimal DNS executor
+- UDP DNS upstream queries routed through detour-aware outbound packet capability
 - structured observability and stable error classification
 
 The project priority remains consolidation and validation of this execution plane rather than expansion into a broader network platform.
@@ -99,7 +101,7 @@ The current roadmap remains focused on tightening the existing surface:
 
 The following are not part of the current roadmap:
 
-- built-in DNS or FakeDNS
+- FakeDNS
 - DoH or DoT
 - generalized UDP proxying beyond the current `direct-in -> direct-out` packet foundation
 - TUN
@@ -120,7 +122,7 @@ Under those conditions, future discussion may include:
 
 - a richer but still explicit route matching or action surface
 - stronger sniff-assisted routing within the current model
-- incremental capabilities that still fit the current execution-plane role, including DNS built on top of the packet foundation
+- incremental capabilities that still fit the current execution-plane role, including wider DNS support built on top of the packet foundation
 
 ## 6. Summary
 

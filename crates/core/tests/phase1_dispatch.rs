@@ -19,5 +19,5 @@ fn router_can_route_exact_domain_to_direct() {
     );
 
     let decision = router.select(&ctx);
-    assert_eq!(decision.outbound_tag, "direct");
+    assert_eq!(decision.outbound_tag(), Some("direct"));
 }

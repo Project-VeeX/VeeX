@@ -49,13 +49,12 @@ fn run_lifecycle_smoke_test(signal: &str, verbose: bool, timestamp: bool) {
         "veex-smoke-run",
         &format!(
             r#"{{
-  "dns": {{}},
   "log": {{ "level": "info", "disabled": false, "timestamp": {} }},
   "inbounds": [
     {{ "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": {} }}
   ],
   "outbounds": [
-    {{ "type": "direct", "tag": "direct" }}
+    {{ "type": "direct", "tag": "direct", "bind_interface": "wan" }}
   ],
   "route": {{ "final": "direct" }}
 }}"#,
@@ -101,7 +100,7 @@ fn run_lifecycle_smoke_test(signal: &str, verbose: bool, timestamp: bool) {
         assert_event_line_has_timestamp(&combined, "process_start");
     }
     if verbose {
-        assert!(stderr.contains("config warning at $.dns"));
+        assert!(stderr.contains("config warning at $.outbounds[0].bind_interface"));
     } else {
         assert!(!stderr.contains("config warning at"));
     }
@@ -219,6 +218,32 @@ fn check_accepts_direct_udp_echo_example() {
 }
 
 #[test]
+fn check_accepts_direct_udp_dns_example() {
+    let config_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/direct-udp-dns.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_veex"))
+        .args([
+            "check",
+            "-c",
+            config_path.to_str().expect("config path should be utf-8"),
+        ])
+        .output()
+        .expect("veex check should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("config check passed"));
+    assert!(stdout.contains("final=direct"));
+    assert!(!stderr.contains("config warning at"));
+}
+
+#[test]
 fn check_accepts_tproxy_compat_example_and_prints_warnings_with_verbose() {
     let config_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/tproxy-compat.json");
@@ -242,7 +267,7 @@ fn check_accepts_tproxy_compat_example_and_prints_warnings_with_verbose() {
     );
     assert!(stdout.contains("config check passed"));
     assert!(stdout.contains("final=proxy"));
-    assert!(stderr.contains("config warning at $.dns"));
+    assert!(stderr.contains("config warning at $.dns.strategy"));
     assert!(stderr.contains("config warning at $.outbounds[1].domain_resolver"));
     assert!(!stderr.contains("config warning at $.route.rules"));
 }

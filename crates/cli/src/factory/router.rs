@@ -31,6 +31,7 @@ mod tests {
                 disabled: false,
                 timestamp: false,
             },
+            dns: None,
             inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
                 tag: "socks-in".into(),
                 listen: "127.0.0.1".into(),
@@ -99,7 +100,7 @@ mod tests {
         let router = build_router(&build_config());
 
         let ruled = router.select(&build_ctx(Host::Domain("www.google.com".into())));
-        assert_eq!(ruled.outbound_tag, "direct");
+        assert_eq!(ruled.outbound_tag(), Some("direct"));
         assert_eq!(ruled.reason, RouteReason::Rule);
     }
 

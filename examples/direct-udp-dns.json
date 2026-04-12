@@ -1,0 +1,52 @@
+{
+  "log": {
+    "level": "info",
+    "disabled": false,
+    "timestamp": true
+  },
+  "dns": {
+    "final": "direct-dns",
+    "servers": [
+      {
+        "tag": "direct-dns",
+        "type": "udp",
+        "server": "223.5.5.5",
+        "server_port": 53,
+        "detour": "direct"
+      }
+    ],
+    "rules": [
+      {
+        "domain": [
+          "trojan.example.com"
+        ],
+        "server": "direct-dns",
+        "action": "route"
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "type": "direct",
+      "tag": "dns-in",
+      "listen": "127.0.0.1",
+      "listen_port": 15353,
+      "network": "udp"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "final": "direct",
+    "rules": [
+      {
+        "inbound": "dns-in",
+        "action": "hijack-dns"
+      }
+    ]
+  }
+}

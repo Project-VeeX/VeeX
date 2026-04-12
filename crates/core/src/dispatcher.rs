@@ -8,7 +8,7 @@ use crate::{
     logging::sanitize_field,
     packet::PacketSessionHandle,
     relay::{relay_bidirectional_with_trace, RelayTraceContext},
-    router::Router,
+    router::{RouteFinalAction, Router},
     traits::{BoxFuture, Outbound},
     types::{BoxedAsyncStream, RouteReason, SessionContext},
 };
@@ -107,14 +107,19 @@ impl Dispatcher {
             let mut ctx = ctx;
             let execution = self.router.execute(inbound_stream, &mut ctx).await;
             let decision = execution.decision;
-            ctx.set_route(decision.outbound_tag.clone(), decision.reason);
+            let outbound_tag = match &decision.final_action {
+                RouteFinalAction::Route(target) => {
+                    ctx.set_route(target.outbound_tag.clone(), decision.reason);
+                    target.outbound_tag.clone()
+                }
+                RouteFinalAction::HijackDns => {
+                    return Err(ProxyError::protocol(
+                        "stream dispatcher does not support final action 'hijack-dns'",
+                    ));
+                }
+            };
 
             let route_reason = ctx.route.reason.unwrap_or(RouteReason::Final);
-            let outbound_tag = ctx
-                .route
-                .selected_outbound
-                .clone()
-                .unwrap_or_else(|| decision.outbound_tag.clone());
             let trace = DispatchTraceContext::new(&ctx, outbound_tag.as_str(), route_reason);
             let inbound_stream = execution.stream;
 

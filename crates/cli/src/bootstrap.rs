@@ -6,7 +6,9 @@ use veex_core::{
     Dispatcher, Inbound, InboundSink, OutboundRegistry, PacketDispatcher, PacketSink, ProxyError,
 };
 
-use crate::factory::{build_inbounds, build_outbounds, build_router, RuntimeServices};
+use crate::factory::{
+    build_dns_executor, build_inbounds, build_outbounds, build_router, RuntimeServices,
+};
 
 pub struct RuntimeState {
     pub inbounds: Vec<Arc<dyn Inbound>>,
@@ -36,10 +38,15 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
     let outbounds = build_outbounds(config, &services).map_err(BootstrapError::OutboundBuild)?;
     ensure_required_outbounds_built(config, outbounds.as_ref())?;
     let router = build_router(config);
+    let dns_executor = build_dns_executor(config, Arc::clone(&outbounds))
+        .map_err(BootstrapError::OutboundBuild)?;
     let stream_sink: Arc<dyn InboundSink> =
         Arc::new(Dispatcher::new(router.clone(), Arc::clone(&outbounds)));
-    let packet_sink: Arc<dyn PacketSink> =
-        Arc::new(PacketDispatcher::new(router, Arc::clone(&outbounds)));
+    let packet_sink: Arc<dyn PacketSink> = Arc::new(PacketDispatcher::with_dns_executor(
+        router,
+        Arc::clone(&outbounds),
+        dns_executor,
+    ));
     let inbounds =
         build_inbounds(config, stream_sink, packet_sink).map_err(BootstrapError::InboundBuild)?;
 

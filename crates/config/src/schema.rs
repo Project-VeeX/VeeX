@@ -5,6 +5,7 @@ use ipnet::IpNet;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProxyConfig {
     pub log: LogConfig,
+    pub dns: Option<DnsConfig>,
     pub inbounds: Vec<InboundConfig>,
     pub outbounds: Vec<OutboundConfig>,
     pub route: RouteConfig,
@@ -115,6 +116,34 @@ pub struct RouteConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DnsConfig {
+    pub final_server: String,
+    pub servers: Vec<DnsServerConfig>,
+    pub rules: Vec<DnsRuleConfig>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DnsServerConfig {
+    pub tag: String,
+    pub kind: DnsServerTypeConfig,
+    pub server: String,
+    pub server_port: u16,
+    pub detour: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DnsServerTypeConfig {
+    Udp,
+    Unsupported(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DnsRuleConfig {
+    pub domain: Vec<String>,
+    pub server: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RouteRuleConfig {
     pub domain: Vec<String>,
     pub domain_suffix: Vec<String>,
@@ -146,6 +175,7 @@ pub struct SniffActionConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RouteFinalActionConfig {
     Route(RouteTargetConfig),
+    HijackDns,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -199,5 +229,11 @@ impl RouteRuleConfig {
             || self.ip_is_link_local
             || !self.port.is_empty()
             || !self.inbound.is_empty()
+    }
+}
+
+impl DnsRuleConfig {
+    pub fn has_matcher(&self) -> bool {
+        !self.domain.is_empty()
     }
 }

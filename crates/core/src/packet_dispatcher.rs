@@ -12,12 +12,13 @@ use tracing::{debug, info, warn};
 
 use crate::{
     dispatcher::OutboundRegistry,
+    dns::DnsExecutorHandle,
     error::ProxyError,
     logging::sanitize_field,
     packet::{
         PacketAssociationKey, PacketFrame, PacketMetadata, PacketSessionHandle, PacketWriter,
     },
-    router::Router,
+    router::{RouteFinalAction, Router},
     traits::BoxFuture,
     types::{Network, RouteReason, SessionContext, SessionMeta},
 };
@@ -39,6 +40,7 @@ pub trait PacketSink: Send + Sync {
 pub struct PacketDispatcher {
     router: Router,
     outbounds: Arc<OutboundRegistry>,
+    dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
     associations: Arc<Mutex<HashMap<PacketAssociationKey, Arc<PacketAssociation>>>>,
     next_association_id: AtomicU64,
     idle_timeout: Duration,
@@ -77,7 +79,25 @@ enum PacketAssociationCloseReason {
 
 impl PacketDispatcher {
     pub fn new(router: Router, outbounds: Arc<OutboundRegistry>) -> Self {
-        Self::with_idle_timeout(router, outbounds, DEFAULT_PACKET_IDLE_TIMEOUT)
+        Self::with_dns_executor_and_idle_timeout(
+            router,
+            outbounds,
+            None,
+            DEFAULT_PACKET_IDLE_TIMEOUT,
+        )
+    }
+
+    pub fn with_dns_executor(
+        router: Router,
+        outbounds: Arc<OutboundRegistry>,
+        dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
+    ) -> Self {
+        Self::with_dns_executor_and_idle_timeout(
+            router,
+            outbounds,
+            dns_executor,
+            DEFAULT_PACKET_IDLE_TIMEOUT,
+        )
     }
 
     pub fn with_idle_timeout(
@@ -85,9 +105,19 @@ impl PacketDispatcher {
         outbounds: Arc<OutboundRegistry>,
         idle_timeout: Duration,
     ) -> Self {
+        Self::with_dns_executor_and_idle_timeout(router, outbounds, None, idle_timeout)
+    }
+
+    pub fn with_dns_executor_and_idle_timeout(
+        router: Router,
+        outbounds: Arc<OutboundRegistry>,
+        dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
+        idle_timeout: Duration,
+    ) -> Self {
         Self {
             router,
             outbounds,
+            dns_executor,
             associations: Arc::new(Mutex::new(HashMap::new())),
             next_association_id: AtomicU64::new(1),
             idle_timeout,
@@ -120,32 +150,23 @@ impl PacketDispatcher {
 
     async fn create_association(
         &self,
+        mut ctx: SessionContext,
         metadata: &PacketMetadata,
         writer: Arc<dyn PacketWriter>,
+        outbound_tag: String,
+        route_reason: RouteReason,
     ) -> crate::Result<Arc<PacketAssociation>> {
-        let association_id = self.next_association_id();
-        let mut ctx = SessionContext::new(
-            SessionMeta {
-                id: association_id,
-                network: metadata.network,
-                inbound_tag: metadata.inbound_tag.clone(),
-                peer: metadata.peer,
-                destination: metadata.destination.clone(),
-                start: Instant::now(),
-            },
-            Vec::new(),
-        );
-        let decision = self.router.select(&ctx);
-        ctx.set_route(decision.outbound_tag.clone(), decision.reason);
-        let outbound = self.outbounds.get(&decision.outbound_tag).ok_or_else(|| {
-            ProxyError::config(format!("missing outbound tag: {}", decision.outbound_tag))
-        })?;
+        ctx.set_route(outbound_tag.clone(), route_reason);
+        let outbound = self
+            .outbounds
+            .get(&outbound_tag)
+            .ok_or_else(|| ProxyError::config(format!("missing outbound tag: {outbound_tag}")))?;
         let session = outbound.connect_packet(&ctx).await?;
         let association = Arc::new(PacketAssociation {
-            id: association_id,
+            id: ctx.meta.id,
             key: metadata.association_key(),
-            outbound_tag: decision.outbound_tag.clone(),
-            route_reason: decision.reason,
+            outbound_tag,
+            route_reason,
             session,
             writer,
             last_activity: Mutex::new(Instant::now()),
@@ -156,6 +177,70 @@ impl PacketDispatcher {
 
         log_packet_association_create(&PacketAssociationTrace::from_association(&association));
         Ok(association)
+    }
+
+    async fn hijack_dns(
+        &self,
+        packet: PacketFrame,
+        writer: Arc<dyn PacketWriter>,
+        route_reason: RouteReason,
+    ) -> crate::Result<()> {
+        let executor = self.dns_executor.as_ref().ok_or_else(|| {
+            ProxyError::config("route selected 'hijack-dns' but dns executor is not configured")
+        })?;
+        let inbound = sanitize_field(&packet.metadata.inbound_tag).into_owned();
+        let peer = sanitize_field(&packet.metadata.peer.to_string()).into_owned();
+        let destination = sanitize_field(&packet.metadata.destination.to_string()).into_owned();
+        info!(
+            event = "packet_hijack_dns",
+            inbound = %inbound,
+            peer = %peer,
+            destination = %destination,
+            route_reason = %route_reason.as_str(),
+            "packet handed off to dns executor"
+        );
+
+        let peer_addr = packet.metadata.peer;
+        let response = match executor.execute_query(packet).await {
+            Ok(response) => response,
+            Err(err) => {
+                warn!(
+                    event = "packet_hijack_dns_failed",
+                    inbound = %inbound,
+                    peer = %peer,
+                    destination = %destination,
+                    route_reason = %route_reason.as_str(),
+                    error_kind = ?err.kind(),
+                    error = %err,
+                    "dns executor failed"
+                );
+                return Err(err);
+            }
+        };
+
+        if let Err(err) = writer.send_to(peer_addr, response).await {
+            warn!(
+                event = "packet_hijack_dns_write_failed",
+                inbound = %inbound,
+                peer = %peer,
+                destination = %destination,
+                route_reason = %route_reason.as_str(),
+                error_kind = ?err.kind(),
+                error = %err,
+                "dns response write-back failed"
+            );
+            return Err(err);
+        }
+
+        info!(
+            event = "packet_hijack_dns_complete",
+            inbound = %inbound,
+            peer = %peer,
+            destination = %destination,
+            route_reason = %route_reason.as_str(),
+            "dns response written back to client"
+        );
+        Ok(())
     }
 
     fn spawn_reverse_loop(&self, association: Arc<PacketAssociation>) {
@@ -198,25 +283,54 @@ impl PacketDispatcher {
         // Route selection is intentionally a first-packet-only decision.
         // Once an association exists, later packets must reuse the bound outbound session
         // and must never re-enter the router.
-        let association = match self.association(&packet.metadata.association_key()) {
+        let association_key = packet.metadata.association_key();
+        let association = match self.association(&association_key) {
             Some(existing) => {
                 log_packet_association_hit(&PacketAssociationTrace::from_association(&existing));
                 existing
             }
-            None => match self
-                .insert_association(self.create_association(&packet.metadata, writer).await?)
-            {
-                Ok(created) => {
-                    self.spawn_reverse_loop(Arc::clone(&created));
-                    created
+            None => {
+                let session_id = self.next_association_id();
+                let ctx = SessionContext::new(
+                    SessionMeta {
+                        id: session_id,
+                        network: packet.metadata.network,
+                        inbound_tag: packet.metadata.inbound_tag.clone(),
+                        peer: packet.metadata.peer,
+                        destination: packet.metadata.destination.clone(),
+                        start: Instant::now(),
+                    },
+                    Vec::new(),
+                );
+                let decision = self.router.select(&ctx);
+
+                match &decision.final_action {
+                    RouteFinalAction::Route(target) => match self.insert_association(
+                        self.create_association(
+                            ctx,
+                            &packet.metadata,
+                            writer,
+                            target.outbound_tag.clone(),
+                            decision.reason,
+                        )
+                        .await?,
+                    ) {
+                        Ok(created) => {
+                            self.spawn_reverse_loop(Arc::clone(&created));
+                            created
+                        }
+                        Err(existing) => {
+                            log_packet_association_hit(&PacketAssociationTrace::from_association(
+                                &existing,
+                            ));
+                            existing
+                        }
+                    },
+                    RouteFinalAction::HijackDns => {
+                        return self.hijack_dns(packet, writer, decision.reason).await;
+                    }
                 }
-                Err(existing) => {
-                    log_packet_association_hit(&PacketAssociationTrace::from_association(
-                        &existing,
-                    ));
-                    existing
-                }
-            },
+            }
         };
 
         if let Err(err) = association.send(packet.payload).await {
@@ -460,8 +574,10 @@ mod tests {
 
     use crate::{
         dispatcher::{OutboundConnector, OutboundRegistry},
+        dns::DnsExecutorHandle,
         logging::Logger,
         packet::{PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle},
+        router::{RouteAction, RouteFinalAction, RouteRule},
         service::OutboundMeta,
         traits::Outbound,
         types::{Destination, Host, Network},
@@ -559,6 +675,25 @@ mod tests {
             self.connect_count.fetch_add(1, Ordering::Relaxed);
             let session = Arc::clone(&self.session);
             Box::pin(async move { Ok(session) })
+        }
+    }
+
+    struct TestDnsExecutor {
+        responses: Arc<Mutex<Vec<Vec<u8>>>>,
+        query_count: AtomicUsize,
+    }
+
+    impl DnsExecutorHandle for TestDnsExecutor {
+        fn execute_query(&self, _packet: PacketFrame) -> crate::traits::BoxFuture<'_, Vec<u8>> {
+            self.query_count.fetch_add(1, Ordering::Relaxed);
+            let responses = Arc::clone(&self.responses);
+            Box::pin(async move {
+                let mut responses = responses.lock().expect("responses mutex should lock");
+                if responses.is_empty() {
+                    return Err(ProxyError::protocol("missing dns test response"));
+                }
+                Ok(responses.remove(0))
+            })
         }
     }
 
@@ -693,6 +828,72 @@ mod tests {
             &events,
             "packet_association_close",
             &[("close_reason", "idle"), ("level", "INFO")],
+        );
+    }
+
+    #[tokio::test]
+    async fn packet_dispatcher_hands_hijack_dns_to_executor_without_association() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let dispatcher = PacketDispatcher::with_dns_executor(
+            crate::Router::with_default_outbound("direct").with_rule(RouteRule {
+                inbound: vec!["dns-in".into()],
+                action: RouteAction::Final(RouteFinalAction::HijackDns),
+                ..RouteRule::new("unused")
+            }),
+            Arc::new(OutboundRegistry::default()),
+            Some(Arc::new(TestDnsExecutor {
+                responses: Arc::new(Mutex::new(vec![b"dns-response".to_vec()])),
+                query_count: AtomicUsize::new(0),
+            }) as Arc<dyn DnsExecutorHandle>),
+        );
+        let writer_sent = Arc::new(Mutex::new(Vec::new()));
+        let writer: Arc<dyn PacketWriter> = Arc::new(RecordingWriter {
+            sent: Arc::clone(&writer_sent),
+        });
+
+        dispatcher
+            .submit_packet(
+                PacketFrame::new(
+                    PacketMetadata::new(
+                        "dns-in",
+                        SocketAddr::from(([127, 0, 0, 1], 53053)),
+                        Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
+                        Network::Udp,
+                    ),
+                    b"dns-query".to_vec(),
+                ),
+                writer,
+            )
+            .await
+            .expect("dns hijack should succeed");
+
+        assert_eq!(
+            writer_sent
+                .lock()
+                .expect("writer mutex should lock")
+                .as_slice(),
+            &[(
+                SocketAddr::from(([127, 0, 0, 1], 53053)),
+                b"dns-response".to_vec()
+            )]
+        );
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "packet_hijack_dns",
+            &[("inbound", "dns-in"), ("level", "INFO")],
+        );
+        assert_has_event(
+            &events,
+            "packet_hijack_dns_complete",
+            &[("inbound", "dns-in"), ("level", "INFO")],
+        );
+        assert!(
+            !events.iter().any(|event| {
+                event.fields.get("event").map(String::as_str) == Some("packet_association_create")
+            }),
+            "dns hijack should not create a forward association: {events:?}"
         );
     }
 

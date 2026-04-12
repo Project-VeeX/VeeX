@@ -132,7 +132,7 @@ This model has two public consequences:
 - final actions terminate routing and select the outbound path
 
 `route.final` remains the default decision when no rule returns a final result.
-In the current accepted configuration subset, `outbound` selection is the only supported final routing action, and `action="sniff"` is the only supported upgrade action.
+In the current accepted configuration subset, final routing actions are `outbound` selection and `action="hijack-dns"`, while `action="sniff"` remains the only supported upgrade action.
 
 Private, loopback, and link-local direct handling belongs in ordinary `route.rules`, not in a hidden bypass subsystem.
 
@@ -191,14 +191,15 @@ The current public capability surface includes:
 
 - inbound: `direct` for TCP and minimal UDP, `socks`, `redirect`, `tproxy` for TCP
 - outbound: `direct` for TCP stream and UDP packet session, `trojan` for TCP stream
-- routing: ordered `route.rules`, `route.final`, and `action="sniff"` upgrades
+- routing: ordered `route.rules`, `route.final`, `action="sniff"` upgrades, and `action="hijack-dns"` final handoff
 - connect behavior: sequential multi-address fallback
 - runtime: foreground daemon-style execution with config checking
 - packet execution: dispatcher-owned UDP association mapping for `direct-in -> direct-out`
+- dns: minimal internal executor for `dns-in -> hijack-dns -> UDP upstream via detour outbound`
 
 The current public non-goals include:
 
-- built-in DNS or FakeDNS
+- built-in FakeDNS, cache, or DoH/DoT upstreams
 - generalized UDP proxying beyond the current `direct-in -> direct-out` foundation
 - TUN
 - kernel-level bypass semantics
@@ -214,7 +215,7 @@ This repository owns the execution core, configuration surface, examples, and co
 
 ## 10. Summary
 
-VeeX is a focused execution core built around one routing pipeline, bounded context enrichment, explicit policy, and observable stage boundaries, with a deliberately small UDP packet foundation.
+VeeX is a focused execution core built around one routing pipeline, bounded context enrichment, explicit policy, and observable stage boundaries, with a deliberately small UDP packet foundation and a minimal DNS hijack slice built on top of that foundation.
 
 In one sentence:
 

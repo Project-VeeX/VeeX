@@ -119,6 +119,7 @@ mod tests {
                 disabled: false,
                 timestamp: false,
             },
+            dns: None,
             inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
                 tag: "direct-in".into(),
                 listen: "127.0.0.1".into(),
@@ -160,6 +161,7 @@ mod tests {
                 disabled: false,
                 timestamp: false,
             },
+            dns: None,
             inbounds: vec![InboundConfig::TProxy(TProxyInboundConfig {
                 tag: "tproxy-in".into(),
                 listen: "0.0.0.0".into(),

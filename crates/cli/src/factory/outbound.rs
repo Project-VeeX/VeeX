@@ -92,6 +92,7 @@ mod tests {
                 disabled: false,
                 timestamp: false,
             },
+            dns: None,
             inbounds: Vec::new(),
             outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
@@ -132,6 +133,7 @@ mod tests {
                 disabled: false,
                 timestamp: false,
             },
+            dns: None,
             inbounds: Vec::new(),
             outbounds: vec![OutboundConfig::Trojan(TrojanOutboundConfig {
                 tag: "proxy".into(),

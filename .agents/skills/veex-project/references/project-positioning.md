@@ -10,7 +10,7 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
   - `veex run -c <config>`
   - `veex check -c <config>`
   - `veex version`
-- The real target is to replace the TCP data-plane slice sing-box commonly provides in OpenWrt router topologies, not its DNS stack, policy platform, or full protocol surface.
+- The real target is to replace the stream-first execution slice sing-box commonly provides in OpenWrt router topologies, while only taking on a minimal DNS hijack slice that still fits that execution-plane role.
 - The typical target path is:
   - `DIRECT / SOCKS / REDIRECT / TPROXY -> veex -> direct | trojan`
 - The current scope now includes a minimal UDP packet foundation for `direct-in -> direct-out`, primarily as groundwork for later DNS/detour work rather than as a broad UDP platform.
@@ -30,13 +30,18 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
   - `final`
   - minimal `route.rules` subset with ordered upgrade/final semantics
   - bounded `action="sniff"` context enrichment
+  - `action="hijack-dns"` final handoff
+- DNS:
+  - internal DNS executor for UDP queries
+  - `dns.rules` and `dns.final` server selection
+  - UDP upstream via detour-aware outbound packet capability
 - Config compatibility:
   - a minimal sing-box-compatible JSON subset
   - `direct.routing_mark` is supported
 
 ## Explicit Non-Goals
 
-- built-in DNS server
+- full built-in DNS platform
 - DoH / DoT client
 - fake-ip
 - generalized UDP proxying beyond the current `direct-in -> direct-out` foundation
@@ -48,9 +53,9 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
 
 ## DNS Boundary
 
-- The project conclusion is that DNS can stay decoupled from VeeX.
-- Router deployments can continue to use external DNS split/steering components.
-- Do not let DNS requirements pull VeeX into a larger platform shape.
+- Minimal DNS hijack and UDP upstream execution are now in scope because they reuse the packet foundation and detour model.
+- DNS still must not pull VeeX into a larger platform shape: no FakeDNS, no cache-first resolver platform, and no general-purpose DNS policy engine in the current scope.
+- Router deployments can still choose to keep DNS outside VeeX when that better fits the deployment.
 
 ## Repository Boundary
 
@@ -70,6 +75,6 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
 ## Scope Notes
 
 - the primary scope question is whether a request still serves the current execution-plane goal
-- work that pushes VeeX toward a DNS platform, a generic routing engine, or downstream packaging belongs outside the current project scope or later roadmap
+- work that pushes VeeX beyond this minimal DNS execution slice toward a DNS platform, a generic routing engine, or downstream packaging belongs outside the current project scope or later roadmap
 - `README.md` and `docs/architecture.md` are the stable public entrypoints for project framing
 - `docs/roadmap.md` carries phase, milestone, and roadmap direction
