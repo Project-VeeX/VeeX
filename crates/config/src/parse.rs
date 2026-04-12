@@ -9,15 +9,15 @@ use crate::{
     },
     error::{display_path, ConfigError},
     input::{
-        InputConfig, InputDnsConfig, InputDnsRule, InputDnsServer, InputInbound, InputInboundType,
-        InputLogConfig, InputOutbound, InputOutboundType, InputRouteConfig, InputRouteRule,
-        InputTrojanTlsConfig,
+        InputConfig, InputDnsConfig, InputDnsRule, InputDnsServer, InputDomainResolverValue,
+        InputInbound, InputInboundType, InputLogConfig, InputOutbound, InputOutboundType,
+        InputRouteConfig, InputRouteRule, InputTrojanTlsConfig,
     },
     preflight::parse_json,
     schema::{
         DirectInboundConfig, DirectOutboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig,
-        DnsServerTypeConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
-        RedirectInboundConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig,
+        DnsServerTypeConfig, DomainResolverConfig, InboundConfig, LogConfig, OutboundConfig,
+        ProxyConfig, RedirectInboundConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig,
         RouteRuleConfig, RouteTargetConfig, RouteUpgradeActionConfig, SniffActionConfig,
         SocksInboundConfig, TProxyInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
     },
@@ -232,6 +232,10 @@ fn input_outbound_into_config(
                 .connect_timeout
                 .unwrap_or(DEFAULT_CONNECT_TIMEOUT),
             routing_mark: input_config.routing_mark,
+            domain_resolver: optional_domain_resolver(
+                input_config.domain_resolver,
+                format!("$.outbounds[{index}].domain_resolver"),
+            )?,
         })),
         InputOutboundType::Trojan => Ok(OutboundConfig::Trojan(TrojanOutboundConfig {
             tag: input_config.tag,
@@ -250,6 +254,10 @@ fn input_outbound_into_config(
             connect_timeout: input_config
                 .connect_timeout
                 .unwrap_or(DEFAULT_CONNECT_TIMEOUT),
+            domain_resolver: optional_domain_resolver(
+                input_config.domain_resolver,
+                format!("$.outbounds[{index}].domain_resolver"),
+            )?,
             tls: input_trojan_tls_into_config(input_trojan_tls_or_default(
                 input_config.tls,
                 format!("$.outbounds[{index}].tls"),
@@ -323,6 +331,10 @@ fn input_dns_server_into_config(
         detour: required_nested_string(
             input_server.detour,
             format!("$.dns.servers[{index}].detour"),
+        )?,
+        domain_resolver: optional_domain_resolver(
+            input_server.domain_resolver,
+            format!("$.dns.servers[{index}].domain_resolver"),
         )?,
         tls: input_trojan_tls_into_config(input_trojan_tls_or_default(
             input_server.tls,
@@ -537,6 +549,28 @@ fn optional_string_map(
     }
 }
 
+fn optional_domain_resolver(
+    value: Option<InputDomainResolverValue>,
+    path: impl Into<String>,
+) -> Result<Option<DomainResolverConfig>, ConfigError> {
+    let path = path.into();
+    match value {
+        Some(InputDomainResolverValue::Tag(server)) => {
+            if server.trim().is_empty() {
+                return Err(ConfigError::semantic(
+                    path,
+                    "domain_resolver server must not be empty",
+                ));
+            }
+            Ok(Some(DomainResolverConfig { server }))
+        }
+        Some(InputDomainResolverValue::Structured(config)) => Ok(Some(DomainResolverConfig {
+            server: required_nested_string(config.server, format!("{path}.server"))?,
+        })),
+        None => Ok(None),
+    }
+}
+
 fn input_trojan_tls_or_default(
     value: Option<Option<InputTrojanTlsConfig>>,
     path: impl Into<String>,
@@ -589,6 +623,11 @@ fn protocol_extra_paths(input_config: &InputConfig) -> Vec<String> {
             for field in server.extra.keys() {
                 paths.push(format!("$.dns.servers[{index}].{field}"));
             }
+            if let Some(InputDomainResolverValue::Structured(resolver)) = &server.domain_resolver {
+                for field in resolver.extra.keys() {
+                    paths.push(format!("$.dns.servers[{index}].domain_resolver.{field}"));
+                }
+            }
         }
 
         for (index, rule) in dns.rules.iter().flatten().enumerate() {
@@ -607,6 +646,11 @@ fn protocol_extra_paths(input_config: &InputConfig) -> Vec<String> {
     for (index, outbound) in input_config.outbounds.iter().enumerate() {
         for field in outbound.extra.keys() {
             paths.push(format!("$.outbounds[{index}].{field}"));
+        }
+        if let Some(InputDomainResolverValue::Structured(resolver)) = &outbound.domain_resolver {
+            for field in resolver.extra.keys() {
+                paths.push(format!("$.outbounds[{index}].domain_resolver.{field}"));
+            }
         }
     }
 
@@ -755,7 +799,7 @@ fn classify_tproxy_ignored(field: &str) -> Option<IgnoredDisposition> {
 
 fn classify_direct_ignored(field: &str) -> Option<IgnoredDisposition> {
     Some(match first_segment(field) {
-        "bind_interface" | "domain_strategy" | "ipv4_only" | "ipv6_only" => {
+        "bind_interface" | "domain_strategy" | "domain_resolver" | "ipv4_only" | "ipv6_only" => {
             IgnoredDisposition::Warn(
                 "field is accepted for compatibility but does not affect the current direct outbound",
             )
@@ -1026,8 +1070,8 @@ mod tests {
     use crate::{
         DirectInboundConfig, DirectOutboundConfig, DnsServerTypeConfig, InboundConfig,
         OutboundConfig, RouteActionConfig, RouteFinalActionConfig, RouteUpgradeActionConfig,
-        SniffActionConfig, TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT,
-        DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+        SniffActionConfig, TProxyInboundConfig, TrojanOutboundConfig, DEFAULT_CONNECT_TIMEOUT,
+        DEFAULT_SNIFF_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
     };
 
     use super::{
@@ -1562,8 +1606,15 @@ mod tests {
         assert!(warning_paths.contains(&"$.inbounds[0].sniff"));
         assert!(warning_paths.contains(&"$.inbounds[0].users"));
         assert!(!warning_paths.contains(&"$.outbounds[0].connect_timeout"));
-        assert!(warning_paths.contains(&"$.outbounds[1].domain_resolver"));
+        assert!(!warning_paths.contains(&"$.outbounds[1].domain_resolver"));
         assert!(warning_paths.contains(&"$.outbounds[1].transport"));
+        assert!(matches!(
+            &report.config.outbounds[1],
+            OutboundConfig::Trojan(TrojanOutboundConfig {
+                domain_resolver: Some(resolver),
+                ..
+            }) if resolver.server == "local"
+        ));
         assert!(report.config.route.rules.is_empty());
         assert!(report
             .diagnostics
@@ -1590,6 +1641,48 @@ mod tests {
             .ignored
             .iter()
             .all(|ignored| ignored.path != "$.log.noise"));
+    }
+
+    #[test]
+    fn parses_structured_domain_resolver_and_warns_on_extra_fields() {
+        let input = r#"
+        {
+          "dns": {
+            "final": "bootstrap",
+            "servers": [
+              {
+                "tag": "bootstrap",
+                "type": "udp",
+                "server": "223.5.5.5",
+                "server_port": 53,
+                "detour": "direct"
+              }
+            ]
+          },
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct", "domain_resolver": { "server": "bootstrap", "strategy": "prefer_ipv6" } }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let report =
+            parse_config_report_unvalidated(input).expect("structured resolver should parse");
+        assert!(matches!(
+            &report.config.outbounds[0],
+            OutboundConfig::Direct(DirectOutboundConfig {
+                domain_resolver: Some(resolver),
+                ..
+            }) if resolver.server == "bootstrap"
+        ));
+        assert!(report
+            .diagnostics
+            .warnings
+            .iter()
+            .any(|warning| warning.path == "$.outbounds[0].domain_resolver.strategy"));
     }
 
     #[test]
@@ -1892,6 +1985,7 @@ mod tests {
                 tag: "direct".into(),
                 connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: Some(1),
+                domain_resolver: None,
             })]
         );
     }
@@ -2535,7 +2629,7 @@ mod tests {
             vec!["lan".to_string()]
         );
         assert!(warning_paths.contains(&"$.dns.strategy"));
-        assert!(warning_paths.contains(&"$.outbounds[1].domain_resolver"));
+        assert!(!warning_paths.contains(&"$.outbounds[1].domain_resolver"));
         assert!(!warning_paths.contains(&"$.log.timestamp"));
         parse_config(input).expect("compat example should remain loadable");
     }

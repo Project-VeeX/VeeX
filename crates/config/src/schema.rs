@@ -84,6 +84,7 @@ pub struct TrojanOutboundConfig {
     pub server: String,
     pub server_port: u16,
     pub password: String,
+    pub domain_resolver: Option<DomainResolverConfig>,
     /// Per-address TCP connect timeout applied by transport dialing.
     pub connect_timeout: Duration,
     pub tls: TrojanTlsConfig,
@@ -107,6 +108,7 @@ pub struct DirectOutboundConfig {
     /// Per-address TCP connect timeout applied by transport dialing.
     pub connect_timeout: Duration,
     pub routing_mark: Option<u32>,
+    pub domain_resolver: Option<DomainResolverConfig>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -131,7 +133,13 @@ pub struct DnsServerConfig {
     pub path: Option<String>,
     pub headers: BTreeMap<String, String>,
     pub detour: String,
+    pub domain_resolver: Option<DomainResolverConfig>,
     pub tls: TrojanTlsConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DomainResolverConfig {
+    pub server: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

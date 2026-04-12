@@ -13,7 +13,7 @@ use tokio::{
     time::timeout,
 };
 use tracing::{debug, info, warn};
-use veex_core::{sanitize_field, Host, ProxyError, Result};
+use veex_core::{sanitize_field, Host, ProxyError, ResolveContext, Result};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConnectTraceContext {
@@ -26,7 +26,14 @@ pub type TcpAttemptFuture = Pin<Box<dyn Future<Output = io::Result<TcpStream>> +
 pub type TcpAttemptConnector = dyn Fn(SocketAddr) -> TcpAttemptFuture + Send + Sync;
 pub type HostResolveFuture =
     Pin<Box<dyn Future<Output = Result<Vec<SocketAddr>>> + Send + 'static>>;
-pub type HostResolver = dyn Fn(Host, u16) -> HostResolveFuture + Send + Sync;
+pub type HostResolver = dyn Fn(HostResolveRequest) -> HostResolveFuture + Send + Sync;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostResolveRequest {
+    pub host: Host,
+    pub port: u16,
+    pub context: ResolveContext,
+}
 
 #[derive(Clone, Default)]
 pub struct TcpConnectOptions {
@@ -53,10 +60,16 @@ pub async fn connect_host(host: &Host, port: u16, options: TcpConnectOptions) ->
 pub async fn connect_host_with_resolver(
     host: &Host,
     port: u16,
+    context: ResolveContext,
     resolver: &HostResolver,
     options: TcpConnectOptions,
 ) -> Result<TcpStream> {
-    let addresses = resolver(host.clone(), port).await?;
+    let addresses = resolver(HostResolveRequest {
+        host: host.clone(),
+        port,
+        context,
+    })
+    .await?;
     connect_resolved_addresses(&host.to_string(), port, addresses, options).await
 }
 

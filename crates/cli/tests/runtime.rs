@@ -22,11 +22,13 @@ use tokio_rustls::TlsAcceptor;
 use veex_cli::runtime::{run_with_shutdown, RuntimeError};
 use veex_config::{
     DirectInboundConfig, DirectOutboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig,
-    DnsServerTypeConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteActionConfig,
-    RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig, SocksInboundConfig,
-    TrojanOutboundConfig, TrojanTlsConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+    DnsServerTypeConfig, DomainResolverConfig, InboundConfig, LogConfig, OutboundConfig,
+    ProxyConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig,
+    RouteTargetConfig, SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
+    DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
 };
 use veex_core::{read_dns_tcp_message, write_dns_tcp_message, Destination, ErrorKind, Host};
+use veex_dns::parse_query_domain;
 use veex_outbound_trojan::build_trojan_request;
 use veex_test_tracing::{
     assert_event_has_fields, assert_has_event, captured_events, install_test_subscriber,
@@ -116,6 +118,7 @@ async fn runtime_supports_socks_to_direct_round_trip() {
             tag: "direct".into(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
+            domain_resolver: None,
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -189,6 +192,7 @@ async fn runtime_supports_direct_udp_to_direct_udp_round_trip() {
             tag: "direct".into(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
+            domain_resolver: None,
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -290,6 +294,163 @@ async fn runtime_supports_tcp_dns_hijack_to_https_upstream_round_trip() {
 }
 
 #[tokio::test]
+async fn runtime_uses_explicit_domain_resolver_for_trojan_server_dial() {
+    let destination = Destination::new(Host::Ip(Ipv4Addr::new(93, 184, 216, 34).into()), 443);
+    let trojan_server = spawn_trojan_server("localhost", destination.clone()).await;
+    let (bootstrap_addr, bootstrap_task) =
+        spawn_dns_answer_server(Ipv4Addr::LOCALHOST, trojan_server.addr.ip()).await;
+    let (misroute_addr, misroute_task) =
+        spawn_dns_answer_server(Ipv4Addr::LOCALHOST, Ipv4Addr::new(127, 0, 0, 2).into()).await;
+    let socks_addr = reserve_local_port().await;
+    let config = ProxyConfig {
+        log: LogConfig {
+            level: "debug".into(),
+            disabled: false,
+            timestamp: false,
+        },
+        dns: Some(DnsConfig {
+            final_server: "remote-dns".into(),
+            servers: vec![
+                DnsServerConfig {
+                    tag: "direct-dns".into(),
+                    kind: DnsServerTypeConfig::Udp,
+                    server: "127.0.0.1".into(),
+                    server_port: bootstrap_addr.port(),
+                    path: None,
+                    headers: BTreeMap::new(),
+                    detour: "direct".into(),
+                    domain_resolver: None,
+                    tls: dns_server_tls_config(DnsUpstreamTransport::Udp),
+                },
+                DnsServerConfig {
+                    tag: "remote-dns".into(),
+                    kind: DnsServerTypeConfig::Udp,
+                    server: "127.0.0.1".into(),
+                    server_port: misroute_addr.port(),
+                    path: None,
+                    headers: BTreeMap::new(),
+                    detour: "direct".into(),
+                    domain_resolver: None,
+                    tls: dns_server_tls_config(DnsUpstreamTransport::Udp),
+                },
+            ],
+            rules: vec![DnsRuleConfig {
+                domain: vec!["trojan-bootstrap.test".into()],
+                server: "remote-dns".into(),
+            }],
+        }),
+        inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
+            tag: "socks-in".into(),
+            listen: "127.0.0.1".into(),
+            listen_port: socks_addr.port(),
+        })],
+        outbounds: vec![
+            OutboundConfig::Direct(DirectOutboundConfig {
+                tag: "direct".into(),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+                routing_mark: None,
+                domain_resolver: None,
+            }),
+            OutboundConfig::Trojan(TrojanOutboundConfig {
+                tag: "proxy".into(),
+                server: "trojan-bootstrap.test".into(),
+                server_port: trojan_server.addr.port(),
+                password: "secret".into(),
+                domain_resolver: Some(DomainResolverConfig {
+                    server: "direct-dns".into(),
+                }),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+                tls: TrojanTlsConfig {
+                    enabled: true,
+                    server_name: Some("localhost".into()),
+                    disable_sni: false,
+                    insecure: true,
+                    certificate_path: None,
+                    ca_path: None,
+                    handshake_timeout: DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+                },
+            }),
+        ],
+        route: RouteConfig {
+            final_outbound: "proxy".into(),
+            rules: vec![],
+        },
+    };
+    let (_guard, trace_buffer) = install_test_subscriber();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runtime_task = tokio::spawn(async move {
+        run_with_shutdown(&config, async move {
+            shutdown_rx
+                .await
+                .map_err(|err| format!("shutdown channel failed: {err}"))?;
+            Ok(())
+        })
+        .await
+    });
+
+    wait_for_listener(socks_addr).await;
+    run_socks_client_round_trip(
+        socks_addr,
+        SocketAddr::from((Ipv4Addr::new(93, 184, 216, 34), 443)),
+    )
+    .await
+    .expect("trojan round-trip with explicit domain_resolver should succeed");
+
+    let _ = shutdown_tx.send(());
+    runtime_task
+        .await
+        .expect("runtime task should join")
+        .expect("runtime should stop cleanly");
+
+    let observation = bootstrap_task
+        .await
+        .expect("bootstrap dns task should join");
+    assert_eq!(
+        parse_dns_query_name(&observation.query),
+        "trojan-bootstrap.test"
+    );
+    misroute_task.abort();
+    let received = trojan_server
+        .handle
+        .await
+        .expect("trojan server task should join");
+    assert_eq!(received.payload, b"ping");
+
+    let events = captured_events(&trace_buffer);
+    assert_has_event(
+        &events,
+        "domain_resolve_start",
+        &[
+            ("domain", "trojan-bootstrap.test"),
+            ("explicit_server", "direct-dns"),
+            ("route_reason", "explicit_resolver"),
+            ("level", "INFO"),
+        ],
+    );
+    assert_has_event(
+        &events,
+        "domain_resolve_success",
+        &[
+            ("domain", "trojan-bootstrap.test"),
+            ("server", "direct-dns"),
+            ("level", "INFO"),
+        ],
+    );
+    let _ = fs::remove_file(trojan_server.certificate_path);
+}
+
+#[tokio::test]
+async fn runtime_supports_tls_dns_upstream_self_resolution_via_domain_resolver() {
+    assert_dns_upstream_self_resolution_round_trip(DnsUpstreamTransport::Tls).await;
+}
+
+#[tokio::test]
+async fn runtime_supports_https_dns_upstream_self_resolution_via_domain_resolver() {
+    assert_dns_upstream_self_resolution_round_trip(DnsUpstreamTransport::Https).await;
+}
+
+#[tokio::test]
 async fn runtime_supports_socks_to_trojan_round_trip() {
     let destination = Destination::new(Host::Ip(Ipv4Addr::new(93, 184, 216, 34).into()), 443);
     let trojan_server = spawn_trojan_server("localhost", destination.clone()).await;
@@ -311,12 +472,14 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
                 tag: "direct".into(),
                 connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: None,
+                domain_resolver: None,
             }),
             OutboundConfig::Trojan(TrojanOutboundConfig {
                 tag: "proxy".into(),
                 server: "127.0.0.1".into(),
                 server_port: trojan_server.addr.port(),
                 password: "secret".into(),
+                domain_resolver: None,
                 connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 tls: TrojanTlsConfig {
                     enabled: true,
@@ -465,12 +628,14 @@ async fn runtime_supports_socks_domain_route_rule_to_trojan() {
                 tag: "direct".into(),
                 connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: None,
+                domain_resolver: None,
             }),
             OutboundConfig::Trojan(TrojanOutboundConfig {
                 tag: "proxy".into(),
                 server: "127.0.0.1".into(),
                 server_port: trojan_server.addr.port(),
                 password: "secret".into(),
+                domain_resolver: None,
                 connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 tls: TrojanTlsConfig {
                     enabled: true,
@@ -560,12 +725,14 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
                 tag: "direct".into(),
                 connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: None,
+                domain_resolver: None,
             }),
             OutboundConfig::Trojan(TrojanOutboundConfig {
                 tag: "proxy".into(),
                 server: "127.0.0.1".into(),
                 server_port: trojan_server.addr.port(),
                 password: "wrong-secret".into(),
+                domain_resolver: None,
                 connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 tls: TrojanTlsConfig {
                     enabled: true,
@@ -680,6 +847,7 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
             tag: "direct".into(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
+            domain_resolver: None,
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -792,6 +960,7 @@ async fn runtime_starts_with_redirect_inbound() {
             tag: "direct".into(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
+            domain_resolver: None,
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -854,6 +1023,7 @@ async fn runtime_reports_listener_bind_failure_with_io_error_kind() {
             tag: "direct".into(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
+            domain_resolver: None,
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -929,6 +1099,7 @@ async fn runtime_emits_session_start_and_finish_events() {
             tag: "direct".into(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
+            domain_resolver: None,
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -1049,6 +1220,7 @@ async fn invalid_socks_request_emits_handshake_failed_event() {
             tag: "direct".into(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
+            domain_resolver: None,
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -1386,6 +1558,7 @@ async fn assert_dns_hijack_round_trip(
                 path: dns_server_path(upstream),
                 headers: dns_server_headers(upstream),
                 detour: "direct".into(),
+                domain_resolver: None,
                 tls: dns_server_tls_config(upstream),
             }],
             rules: vec![DnsRuleConfig {
@@ -1405,6 +1578,7 @@ async fn assert_dns_hijack_round_trip(
             tag: "direct".into(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             routing_mark: None,
+            domain_resolver: None,
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -1568,6 +1742,137 @@ async fn assert_dns_hijack_round_trip(
             &[("server", "direct-dns"), ("level", "INFO")],
         );
     }
+}
+
+async fn assert_dns_upstream_self_resolution_round_trip(upstream: DnsUpstreamTransport) {
+    let query = build_dns_query("trojan.example.com");
+    let inbound_addr = reserve_udp_port().await;
+    let (upstream_addr, upstream_task) = spawn_dns_upstream_server(upstream).await;
+    let (bootstrap_addr, bootstrap_task) =
+        spawn_dns_answer_server(Ipv4Addr::LOCALHOST, upstream_addr.ip()).await;
+    let config = ProxyConfig {
+        log: LogConfig {
+            level: "debug".into(),
+            disabled: false,
+            timestamp: false,
+        },
+        dns: Some(DnsConfig {
+            final_server: "direct-dns".into(),
+            servers: vec![
+                DnsServerConfig {
+                    tag: "direct-dns".into(),
+                    kind: upstream.as_kind(),
+                    server: "bootstrap-upstream.test".into(),
+                    server_port: upstream_addr.port(),
+                    path: dns_server_path(upstream),
+                    headers: dns_server_headers(upstream),
+                    detour: "direct".into(),
+                    domain_resolver: Some(DomainResolverConfig {
+                        server: "bootstrap".into(),
+                    }),
+                    tls: dns_server_tls_config(upstream),
+                },
+                DnsServerConfig {
+                    tag: "bootstrap".into(),
+                    kind: DnsServerTypeConfig::Udp,
+                    server: "127.0.0.1".into(),
+                    server_port: bootstrap_addr.port(),
+                    path: None,
+                    headers: BTreeMap::new(),
+                    detour: "direct".into(),
+                    domain_resolver: None,
+                    tls: dns_server_tls_config(DnsUpstreamTransport::Udp),
+                },
+            ],
+            rules: vec![DnsRuleConfig {
+                domain: vec!["trojan.example.com".into()],
+                server: "direct-dns".into(),
+            }],
+        }),
+        inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
+            tag: "dns-in".into(),
+            listen: "127.0.0.1".into(),
+            listen_port: inbound_addr.port(),
+            network: Some("udp".into()),
+            override_address: None,
+            override_port: None,
+        })],
+        outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
+            tag: "direct".into(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            routing_mark: None,
+            domain_resolver: None,
+        })],
+        route: RouteConfig {
+            final_outbound: "direct".into(),
+            rules: vec![RouteRuleConfig {
+                domain: vec![],
+                domain_suffix: vec![],
+                ip_cidr: vec![],
+                ip_is_private: false,
+                ip_is_loopback: false,
+                ip_is_link_local: false,
+                port: vec![],
+                inbound: vec!["dns-in".into()],
+                action: RouteActionConfig::Final(RouteFinalActionConfig::HijackDns),
+            }],
+        },
+    };
+    let (_guard, trace_buffer) = install_test_subscriber();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runtime_task = tokio::spawn(async move {
+        run_with_shutdown(&config, async move {
+            shutdown_rx
+                .await
+                .map_err(|err| format!("shutdown channel failed: {err}"))?;
+            Ok(())
+        })
+        .await
+    });
+
+    let response = run_dns_udp_client_round_trip(inbound_addr, query.clone())
+        .await
+        .expect("dns self-resolution round-trip should succeed");
+
+    let _ = shutdown_tx.send(());
+    runtime_task
+        .await
+        .expect("runtime task should join")
+        .expect("runtime should stop cleanly");
+
+    let upstream_observation = upstream_task.await.expect("dns upstream task should join");
+    let bootstrap_observation = bootstrap_task
+        .await
+        .expect("bootstrap dns task should join");
+    assert_eq!(
+        parse_dns_query_name(&bootstrap_observation.query),
+        "bootstrap-upstream.test"
+    );
+    assert_eq!(upstream_observation.query, query);
+    assert_eq!(response, build_dns_noerror_response(&query));
+
+    let events = captured_events(&trace_buffer);
+    assert_has_event(
+        &events,
+        "domain_resolve_start",
+        &[
+            ("domain", "bootstrap-upstream.test"),
+            ("caller_dns_server", "direct-dns"),
+            ("explicit_server", "bootstrap"),
+            ("route_reason", "explicit_resolver"),
+            ("level", "INFO"),
+        ],
+    );
+    assert_has_event(
+        &events,
+        "domain_resolve_success",
+        &[
+            ("domain", "bootstrap-upstream.test"),
+            ("server", "bootstrap"),
+            ("level", "INFO"),
+        ],
+    );
 }
 
 struct DnsUpstreamObservation {
@@ -1738,6 +2043,70 @@ fn build_dns_noerror_response(query: &[u8]) -> Vec<u8> {
     response.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
     response.extend_from_slice(&query[12..]);
     response
+}
+
+fn build_dns_a_response(query: &[u8], ip: std::net::IpAddr) -> Vec<u8> {
+    let query_name_len = query.len().saturating_sub(12);
+    let mut response = Vec::with_capacity(query.len() + 32);
+    response.extend_from_slice(&query[..2]);
+    response.extend_from_slice(&[0x81, 0x80]);
+    response.extend_from_slice(&query[4..6]);
+    response.extend_from_slice(&1u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&query[12..12 + query_name_len]);
+    response.extend_from_slice(&[0xc0, 0x0c]);
+    match ip {
+        std::net::IpAddr::V4(ip) => {
+            response.extend_from_slice(&1u16.to_be_bytes());
+            response.extend_from_slice(&1u16.to_be_bytes());
+            response.extend_from_slice(&60u32.to_be_bytes());
+            response.extend_from_slice(&4u16.to_be_bytes());
+            response.extend_from_slice(&ip.octets());
+        }
+        std::net::IpAddr::V6(ip) => {
+            response.extend_from_slice(&28u16.to_be_bytes());
+            response.extend_from_slice(&1u16.to_be_bytes());
+            response.extend_from_slice(&60u32.to_be_bytes());
+            response.extend_from_slice(&16u16.to_be_bytes());
+            response.extend_from_slice(&ip.octets());
+        }
+    }
+    response
+}
+
+fn parse_dns_query_name(query: &[u8]) -> String {
+    parse_query_domain(query).expect("dns query name should parse")
+}
+
+async fn spawn_dns_answer_server(
+    bind_ip: Ipv4Addr,
+    answer_ip: std::net::IpAddr,
+) -> (SocketAddr, tokio::task::JoinHandle<DnsUpstreamObservation>) {
+    let socket = UdpSocket::bind((bind_ip, 0))
+        .await
+        .expect("bootstrap dns socket should bind");
+    let addr = socket
+        .local_addr()
+        .expect("bootstrap dns socket addr should exist");
+    let task = tokio::spawn(async move {
+        let mut buf = [0u8; 1024];
+        let (size, peer) = socket
+            .recv_from(&mut buf)
+            .await
+            .expect("bootstrap dns server should receive query");
+        let response = build_dns_a_response(&buf[..size], answer_ip);
+        socket
+            .send_to(&response, peer)
+            .await
+            .expect("bootstrap dns server should send response");
+        DnsUpstreamObservation {
+            query: buf[..size].to_vec(),
+            path: None,
+            headers: BTreeMap::new(),
+        }
+    });
+    (addr, task)
 }
 
 async fn spawn_dns_tls_upstream(

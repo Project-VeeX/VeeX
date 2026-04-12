@@ -116,7 +116,24 @@ pub struct InputOutbound {
     #[serde(default)]
     pub password: Option<Option<String>>,
     #[serde(default)]
+    pub domain_resolver: Option<InputDomainResolverValue>,
+    #[serde(default)]
     pub tls: Option<Option<InputTrojanTlsConfig>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum InputDomainResolverValue {
+    Tag(String),
+    Structured(InputDomainResolverObject),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InputDomainResolverObject {
+    #[serde(default)]
+    pub server: Option<Option<String>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -222,6 +239,8 @@ pub struct InputDnsServer {
     pub headers: Option<Option<BTreeMap<String, String>>>,
     #[serde(default)]
     pub detour: Option<Option<String>>,
+    #[serde(default)]
+    pub domain_resolver: Option<InputDomainResolverValue>,
     #[serde(default)]
     pub tls: Option<Option<InputTrojanTlsConfig>>,
     #[serde(flatten)]

@@ -109,6 +109,10 @@ pub(crate) fn lower_outbound(outbound: &OutboundConfig) -> LoweredOutbound {
             dial: Dial {
                 timeout: Some(config.connect_timeout),
                 routing_mark: config.routing_mark,
+                domain_resolver: config
+                    .domain_resolver
+                    .as_ref()
+                    .map(|resolver| resolver.server.clone()),
             },
         }),
         OutboundConfig::Trojan(config) => LoweredOutbound::Trojan(LoweredTrojanOutbound {
@@ -116,6 +120,10 @@ pub(crate) fn lower_outbound(outbound: &OutboundConfig) -> LoweredOutbound {
             dial: Dial {
                 timeout: Some(config.connect_timeout),
                 routing_mark: None,
+                domain_resolver: config
+                    .domain_resolver
+                    .as_ref()
+                    .map(|resolver| resolver.server.clone()),
             },
             upstream_addr: Destination::new(parse_host(&config.server), config.server_port),
             key: config.password.clone(),
@@ -190,6 +198,10 @@ fn lower_dns_server(server: &veex_config::DnsServerConfig) -> DnsServer {
         },
         destination: Destination::new(parse_host(&server.server), server.server_port),
         detour: server.detour.clone(),
+        domain_resolver: server
+            .domain_resolver
+            .as_ref()
+            .map(|resolver| resolver.server.clone()),
     }
 }
 

@@ -36,7 +36,7 @@ pub fn build_outbounds(
             LoweredOutbound::Trojan(trojan) => {
                 let logger =
                     veex_core::Logger::new(trojan.meta.tag.clone(), trojan.meta.r#type.clone());
-                let dialer = build_trojan_dialer(trojan.dial);
+                let dialer = build_trojan_dialer(trojan.dial, Arc::clone(&services.host_resolver));
                 let instance: Arc<dyn OutboundConnector> = Arc::new(TrojanOutbound::new(
                     trojan.meta,
                     logger,
@@ -98,6 +98,7 @@ mod tests {
                 tag: "direct".into(),
                 connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: None,
+                domain_resolver: None,
             })],
             route: RouteConfig {
                 final_outbound: "direct".into(),
@@ -140,6 +141,7 @@ mod tests {
                 server: "127.0.0.1".into(),
                 server_port: 443,
                 password: "secret".into(),
+                domain_resolver: None,
                 connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 tls: TrojanTlsConfig {
                     enabled: true,

@@ -14,7 +14,8 @@ pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
     validate_log(config)?;
     let inbound_tags = validate_inbounds(config)?;
     let outbound_tags = validate_outbounds(config)?;
-    validate_dns(config.dns.as_ref(), &outbound_tags)?;
+    let dns_server_tags = validate_dns(config.dns.as_ref(), &outbound_tags)?;
+    validate_domain_resolvers(config, dns_server_tags.as_ref())?;
     validate_route(config, &outbound_tags)?;
 
     debug_assert!(
@@ -207,9 +208,9 @@ fn validate_route_rule(
 fn validate_dns(
     dns: Option<&DnsConfig>,
     outbound_tags: &BTreeSet<String>,
-) -> Result<(), ConfigError> {
+) -> Result<Option<BTreeSet<String>>, ConfigError> {
     let Some(dns) = dns else {
-        return Ok(());
+        return Ok(None);
     };
 
     if dns.servers.is_empty() {
@@ -244,7 +245,7 @@ fn validate_dns(
         validate_dns_rule(rule, index, &server_tags)?;
     }
 
-    Ok(())
+    Ok(Some(server_tags))
 }
 
 fn validate_dns_server(
@@ -348,6 +349,68 @@ fn validate_dns_server(
     Ok(())
 }
 
+fn validate_domain_resolvers(
+    config: &ProxyConfig,
+    dns_server_tags: Option<&BTreeSet<String>>,
+) -> Result<(), ConfigError> {
+    for (index, outbound) in config.outbounds.iter().enumerate() {
+        let domain_resolver = match outbound {
+            OutboundConfig::Direct(config) => config.domain_resolver.as_ref(),
+            OutboundConfig::Trojan(config) => config.domain_resolver.as_ref(),
+        };
+
+        if let Some(resolver) = domain_resolver {
+            validate_domain_resolver_reference(
+                dns_server_tags,
+                &resolver.server,
+                format!("$.outbounds[{index}].domain_resolver.server"),
+            )?;
+        }
+    }
+
+    if let Some(dns) = config.dns.as_ref() {
+        for (index, server) in dns.servers.iter().enumerate() {
+            if let Some(resolver) = server.domain_resolver.as_ref() {
+                validate_domain_resolver_reference(
+                    dns_server_tags,
+                    &resolver.server,
+                    format!("$.dns.servers[{index}].domain_resolver.server"),
+                )?;
+                if resolver.server == server.tag {
+                    return Err(ConfigError::semantic(
+                        format!("$.dns.servers[{index}].domain_resolver.server"),
+                        "dns server domain_resolver must not point to itself",
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_domain_resolver_reference(
+    dns_server_tags: Option<&BTreeSet<String>>,
+    server_tag: &str,
+    path: String,
+) -> Result<(), ConfigError> {
+    let Some(dns_server_tags) = dns_server_tags else {
+        return Err(ConfigError::semantic(
+            path,
+            "domain_resolver requires a dns section",
+        ));
+    };
+
+    if !dns_server_tags.contains(server_tag) {
+        return Err(ConfigError::semantic(
+            path,
+            format!("domain_resolver points to missing dns server '{server_tag}'"),
+        ));
+    }
+
+    Ok(())
+}
+
 fn contains_http_newline(value: &str) -> bool {
     value.contains('\r') || value.contains('\n')
 }
@@ -403,6 +466,7 @@ mod tests {
                 tag: "direct".into(),
                 connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: None,
+                domain_resolver: None,
             })],
             route: RouteConfig {
                 final_outbound: "direct".into(),
@@ -530,6 +594,7 @@ mod tests {
                 path: None,
                 headers: Default::default(),
                 detour: "direct".into(),
+                domain_resolver: None,
                 tls: crate::TrojanTlsConfig {
                     enabled: true,
                     server_name: None,
@@ -559,6 +624,7 @@ mod tests {
                 path: None,
                 headers: Default::default(),
                 detour: "direct".into(),
+                domain_resolver: None,
                 tls: crate::TrojanTlsConfig {
                     enabled: true,
                     server_name: None,
@@ -588,6 +654,7 @@ mod tests {
                 path: None,
                 headers: Default::default(),
                 detour: "direct".into(),
+                domain_resolver: None,
                 tls: crate::TrojanTlsConfig {
                     enabled: true,
                     server_name: Some("dns.example.com".into()),
@@ -620,6 +687,7 @@ mod tests {
                     String::from("true"),
                 )]),
                 detour: "direct".into(),
+                domain_resolver: None,
                 tls: crate::TrojanTlsConfig {
                     enabled: true,
                     server_name: Some("dns.example.com".into()),
@@ -634,6 +702,82 @@ mod tests {
         });
 
         validate_config(&config).expect("https dns section should validate");
+    }
+
+    #[test]
+    fn rejects_outbound_domain_resolver_without_dns_section() {
+        let mut config = valid_config();
+        config.outbounds = vec![
+            OutboundConfig::Direct(DirectOutboundConfig {
+                tag: "direct".into(),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+                routing_mark: None,
+                domain_resolver: None,
+            }),
+            OutboundConfig::Trojan(crate::TrojanOutboundConfig {
+                tag: "proxy".into(),
+                server: "trojan.example.com".into(),
+                server_port: 443,
+                password: "secret".into(),
+                domain_resolver: Some(crate::DomainResolverConfig {
+                    server: "bootstrap".into(),
+                }),
+                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+                tls: crate::TrojanTlsConfig {
+                    enabled: true,
+                    server_name: Some("trojan.example.com".into()),
+                    disable_sni: false,
+                    insecure: false,
+                    certificate_path: None,
+                    ca_path: None,
+                    handshake_timeout: crate::DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+                },
+            }),
+        ];
+        config.route.final_outbound = "proxy".into();
+
+        let err = validate_config(&config).expect_err("domain_resolver without dns should fail");
+        assert!(err
+            .to_string()
+            .contains("$.outbounds[1].domain_resolver.server"));
+        assert!(err.to_string().contains("requires a dns section"));
+    }
+
+    #[test]
+    fn rejects_dns_server_domain_resolver_self_reference() {
+        let mut config = valid_config();
+        config.dns = Some(DnsConfig {
+            final_server: "dot".into(),
+            servers: vec![DnsServerConfig {
+                tag: "dot".into(),
+                kind: DnsServerTypeConfig::Tls,
+                server: "dns.example.com".into(),
+                server_port: 853,
+                path: None,
+                headers: Default::default(),
+                detour: "direct".into(),
+                domain_resolver: Some(crate::DomainResolverConfig {
+                    server: "dot".into(),
+                }),
+                tls: crate::TrojanTlsConfig {
+                    enabled: true,
+                    server_name: Some("dns.example.com".into()),
+                    disable_sni: false,
+                    insecure: false,
+                    certificate_path: None,
+                    ca_path: None,
+                    handshake_timeout: crate::DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+                },
+            }],
+            rules: vec![],
+        });
+
+        let err =
+            validate_config(&config).expect_err("dns server self resolver reference should fail");
+        assert!(err
+            .to_string()
+            .contains("$.dns.servers[0].domain_resolver.server"));
+        assert!(err.to_string().contains("must not point to itself"));
     }
 
     #[test]

@@ -116,6 +116,8 @@ impl ProxyOutbound for TrojanOutbound {
         let tcp_trace = DialContext {
             session_id: ctx.meta.id,
             outbound_tag: self.meta.tag.clone(),
+            domain_resolver_override: ctx.state.domain_resolver_override.clone(),
+            resolve_context: ctx.state.resolve_context.clone(),
         };
         let tls_trace = ConnectTraceContext {
             session_id: ctx.meta.id,
@@ -181,7 +183,7 @@ mod tests {
     use veex_test_tracing::{
         assert_has_event, captured_events, install_test_subscriber, CapturedEvent,
     };
-    use veex_transport::{connect_resolved_addresses, TlsClientOptions};
+    use veex_transport::{HostResolveRequest, TlsClientOptions};
 
     use super::TrojanOutbound;
     use crate::dialer::build_dialer_with_connector;
@@ -204,18 +206,12 @@ mod tests {
             Dial {
                 timeout: Some(Duration::from_secs(1)),
                 routing_mark: None,
+                domain_resolver: None,
             },
-            Arc::new(move |_host, port, options| {
-                Box::pin(async move {
-                    connect_resolved_addresses(
-                        "fallback.test",
-                        port,
-                        vec![bad_addr, good_addr],
-                        options,
-                    )
-                    .await
-                })
+            Arc::new(move |_request: HostResolveRequest| {
+                Box::pin(async move { Ok(vec![bad_addr, good_addr]) })
             }),
+            crate::dialer::system_tcp_connector(),
         );
         let outbound = TrojanOutbound::new(
             OutboundMeta::new("proxy", "trojan"),
@@ -313,13 +309,12 @@ mod tests {
             Dial {
                 timeout: Some(Duration::from_millis(200)),
                 routing_mark: None,
+                domain_resolver: None,
             },
-            Arc::new(move |_host, port, options| {
-                Box::pin(async move {
-                    connect_resolved_addresses("fallback.test", port, vec![first, second], options)
-                        .await
-                })
+            Arc::new(move |_request: HostResolveRequest| {
+                Box::pin(async move { Ok(vec![first, second]) })
             }),
+            crate::dialer::system_tcp_connector(),
         );
         let outbound = TrojanOutbound::new(
             OutboundMeta::new("proxy", "trojan"),

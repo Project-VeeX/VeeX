@@ -17,7 +17,9 @@ use veex_core::{
     Destination, Dial, Host, Logger, Network, OutboundMeta, ProxyOutbound, SessionContext,
     SessionMeta,
 };
-use veex_outbound_trojan::{build_dialer, build_trojan_request, TrojanOutbound};
+use veex_outbound_trojan::{
+    build_dialer, build_trojan_request, system_host_resolver, TrojanOutbound,
+};
 use veex_transport::TlsClientOptions;
 
 #[tokio::test]
@@ -26,10 +28,14 @@ async fn trojan_outbound_connects_and_writes_request() {
     let outbound = TrojanOutbound::new(
         OutboundMeta::new("proxy", "trojan"),
         Logger::new("proxy", "trojan"),
-        build_dialer(Dial {
-            timeout: Some(std::time::Duration::from_secs(1)),
-            routing_mark: None,
-        }),
+        build_dialer(
+            Dial {
+                timeout: Some(std::time::Duration::from_secs(1)),
+                routing_mark: None,
+                domain_resolver: None,
+            },
+            system_host_resolver(),
+        ),
         Destination::new(
             Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
             server.addr.port(),

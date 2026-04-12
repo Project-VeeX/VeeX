@@ -132,6 +132,7 @@ mod tests {
                 tag: "direct".into(),
                 connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: None,
+                domain_resolver: None,
             })],
             route: RouteConfig {
                 final_outbound: "direct".into(),
@@ -172,6 +173,7 @@ mod tests {
                 tag: "direct".into(),
                 connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                 routing_mark: None,
+                domain_resolver: None,
             })],
             route: RouteConfig {
                 final_outbound: "direct".into(),

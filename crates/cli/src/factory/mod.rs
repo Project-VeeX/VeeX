@@ -5,7 +5,7 @@ mod outbound;
 mod router;
 mod services;
 
-pub use dns::build_dns_executor;
+pub use dns::build_dns_services;
 pub use inbound::build_inbounds;
 pub(crate) use lowering::{
     lower_dns, lower_inbound, lower_outbound, lower_route, LoweredInbound, LoweredOutbound,

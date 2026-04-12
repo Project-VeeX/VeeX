@@ -5,7 +5,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::{
     packet::PacketFrame,
     traits::BoxFuture,
-    types::{Destination, Network},
+    types::{Destination, Host, Network},
     ProxyError, Result,
 };
 
@@ -64,6 +64,86 @@ impl DnsResponse {
 /// responsible for client-facing write-back.
 pub trait DnsExecutorHandle: Send + Sync {
     fn execute_query(&self, request: DnsRequest) -> BoxFuture<'_, DnsResponse>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolvePurpose {
+    ClientQuery,
+    OutboundDial,
+    DnsUpstreamDial,
+}
+
+impl ResolvePurpose {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ClientQuery => "client_query",
+            Self::OutboundDial => "outbound_dial",
+            Self::DnsUpstreamDial => "dns_upstream_dial",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolveContext {
+    pub purpose: ResolvePurpose,
+    pub caller_outbound_tag: Option<String>,
+    pub caller_dns_server_tag: Option<String>,
+    pub explicit_server_tag: Option<String>,
+    pub recursion_depth: u8,
+}
+
+impl ResolveContext {
+    pub fn client_query() -> Self {
+        Self {
+            purpose: ResolvePurpose::ClientQuery,
+            caller_outbound_tag: None,
+            caller_dns_server_tag: None,
+            explicit_server_tag: None,
+            recursion_depth: 0,
+        }
+    }
+
+    pub fn outbound_dial(
+        caller_outbound_tag: impl Into<String>,
+        explicit_server_tag: Option<String>,
+    ) -> Self {
+        Self {
+            purpose: ResolvePurpose::OutboundDial,
+            caller_outbound_tag: Some(caller_outbound_tag.into()),
+            caller_dns_server_tag: None,
+            explicit_server_tag,
+            recursion_depth: 0,
+        }
+    }
+
+    pub fn with_depth(mut self, recursion_depth: u8) -> Self {
+        self.recursion_depth = recursion_depth;
+        self
+    }
+
+    pub fn for_dns_upstream_dial(
+        &self,
+        caller_outbound_tag: impl Into<String>,
+        caller_dns_server_tag: impl Into<String>,
+        explicit_server_tag: Option<String>,
+    ) -> Self {
+        Self {
+            purpose: ResolvePurpose::DnsUpstreamDial,
+            caller_outbound_tag: Some(caller_outbound_tag.into()),
+            caller_dns_server_tag: Some(caller_dns_server_tag.into()),
+            explicit_server_tag,
+            recursion_depth: self.recursion_depth.saturating_add(1),
+        }
+    }
+}
+
+pub trait DomainResolverHandle: Send + Sync {
+    fn resolve_host(
+        &self,
+        host: Host,
+        port: u16,
+        context: ResolveContext,
+    ) -> BoxFuture<'_, Vec<SocketAddr>>;
 }
 
 pub async fn read_dns_tcp_message<R>(reader: &mut R) -> Result<Option<Vec<u8>>>

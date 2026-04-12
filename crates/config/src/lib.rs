@@ -21,9 +21,10 @@ pub use parse::{
 pub use preflight::JsonValue;
 pub use schema::{
     DirectInboundConfig, DirectOutboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig,
-    DnsServerTypeConfig, InboundConfig, InboundType, LogConfig, OutboundConfig, OutboundType,
-    ProxyConfig, RedirectInboundConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig,
-    RouteRuleConfig, RouteTargetConfig, RouteUpgradeActionConfig, SniffActionConfig,
-    SocksInboundConfig, TProxyInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
+    DnsServerTypeConfig, DomainResolverConfig, InboundConfig, InboundType, LogConfig,
+    OutboundConfig, OutboundType, ProxyConfig, RedirectInboundConfig, RouteActionConfig,
+    RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig,
+    RouteUpgradeActionConfig, SniffActionConfig, SocksInboundConfig, TProxyInboundConfig,
+    TrojanOutboundConfig, TrojanTlsConfig,
 };
 pub use validate::validate_config;

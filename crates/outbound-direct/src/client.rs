@@ -102,6 +102,8 @@ impl StreamOutbound for DirectOutbound {
         let trace = DialContext {
             session_id: ctx.meta.id,
             outbound_tag: self.meta.tag.clone(),
+            domain_resolver_override: ctx.state.domain_resolver_override.clone(),
+            resolve_context: ctx.state.resolve_context.clone(),
         };
         let closed = self.is_closed();
 
@@ -129,6 +131,8 @@ impl OutboundConnector for DirectOutbound {
         let trace = DialContext {
             session_id: ctx.meta.id,
             outbound_tag: self.meta.tag.clone(),
+            domain_resolver_override: ctx.state.domain_resolver_override.clone(),
+            resolve_context: ctx.state.resolve_context.clone(),
         };
         let closed = self.is_closed();
 
@@ -171,6 +175,7 @@ mod tests {
             Dial {
                 timeout: Some(Duration::from_secs(1)),
                 routing_mark: None,
+                domain_resolver: None,
             },
             Arc::new(|_host, _port, _dial, _ctx| {
                 Box::pin(async { Err(veex_core::ProxyError::Shutdown) })
@@ -184,6 +189,7 @@ mod tests {
             Dial {
                 timeout: Some(Duration::from_secs(1)),
                 routing_mark: None,
+                domain_resolver: None,
             },
             Arc::new(|_host, _port, _dial, _ctx| {
                 Box::pin(async { Err(veex_core::ProxyError::Shutdown) })
@@ -220,6 +226,7 @@ mod tests {
             Dial {
                 timeout: Some(Duration::from_secs(1)),
                 routing_mark: Some(9),
+                domain_resolver: None,
             },
             system_host_resolver(),
             connector,
@@ -299,6 +306,7 @@ mod tests {
             Dial {
                 timeout: Some(Duration::from_secs(1)),
                 routing_mark: Some(255),
+                domain_resolver: None,
             },
             system_host_resolver(),
             connector,
@@ -361,6 +369,7 @@ mod tests {
             Dial {
                 timeout: Some(Duration::from_millis(50)),
                 routing_mark: Some(7),
+                domain_resolver: None,
             },
             system_host_resolver(),
             connector,

@@ -14,6 +14,7 @@ use tokio::{
 };
 
 use crate::{
+    dns::ResolveContext,
     error::{ProxyError, Result},
     packet::PacketSessionHandle,
     types::{Host, Listen},
@@ -53,12 +54,15 @@ impl OutboundMeta {
 pub struct Dial {
     pub timeout: Option<Duration>,
     pub routing_mark: Option<u32>,
+    pub domain_resolver: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DialContext {
     pub session_id: u64,
     pub outbound_tag: String,
+    pub domain_resolver_override: Option<String>,
+    pub resolve_context: Option<ResolveContext>,
 }
 
 type ListenerBindFuture = Pin<Box<dyn Future<Output = Result<TcpListener>> + Send + 'static>>;

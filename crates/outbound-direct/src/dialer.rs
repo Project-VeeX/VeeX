@@ -8,11 +8,11 @@ use tokio::{
 use tracing::{debug, info, warn};
 use veex_core::{
     sanitize_field, Dial, DialContext, Dialer, Host, PacketDialer, PacketSession,
-    PacketSessionHandle, ProxyError, Result,
+    PacketSessionHandle, ProxyError, ResolveContext, Result,
 };
 use veex_transport::{
-    connect_host_with_resolver, resolve_host, ConnectTraceContext, HostResolver,
-    TcpAttemptConnector, TcpConnectOptions,
+    connect_host_with_resolver, resolve_host, ConnectTraceContext, HostResolveRequest,
+    HostResolver, TcpAttemptConnector, TcpConnectOptions,
 };
 
 use crate::error::{
@@ -27,7 +27,7 @@ pub type MarkedUdpConnectorFuture =
 pub type MarkedUdpConnector = dyn Fn(SocketAddr, u32) -> MarkedUdpConnectorFuture + Send + Sync;
 
 pub fn system_host_resolver() -> Arc<HostResolver> {
-    Arc::new(|host, port| Box::pin(async move { resolve_host(&host, port).await }))
+    Arc::new(|request| Box::pin(async move { resolve_host(&request.host, request.port).await }))
 }
 
 pub fn build_dialer(dial: Dial, resolver: Arc<HostResolver>) -> Result<Dialer> {
@@ -99,6 +99,7 @@ async fn connect_destination(
     ctx: DialContext,
     marked_connector: &Arc<MarkedConnector>,
 ) -> Result<TcpStream> {
+    let resolve_context = build_resolve_context(&dial, &ctx);
     let connector = dial.routing_mark.map(|routing_mark| {
         let marked_connector = Arc::clone(marked_connector);
         Arc::new(move |address| marked_connector(address, routing_mark)) as Arc<TcpAttemptConnector>
@@ -107,6 +108,7 @@ async fn connect_destination(
     connect_host_with_resolver(
         host,
         port,
+        resolve_context,
         resolver,
         TcpConnectOptions {
             timeout: dial.timeout,
@@ -130,7 +132,12 @@ async fn connect_packet_destination(
     marked_connector: &Arc<MarkedUdpConnector>,
 ) -> Result<PacketSessionHandle> {
     let host_field = sanitize_field(&host.to_string()).into_owned();
-    let addresses = resolver(host.clone(), port).await?;
+    let addresses = resolver(HostResolveRequest {
+        host: host.clone(),
+        port,
+        context: build_resolve_context(&dial, &ctx),
+    })
+    .await?;
     let attempt_count = addresses.len();
     let mut last_error = None;
 
@@ -178,6 +185,27 @@ async fn connect_packet_destination(
             "no reachable udp address for {host_field}:{port} after {attempt_count} attempts"
         ))
     }))
+}
+
+fn build_resolve_context(dial: &Dial, ctx: &DialContext) -> ResolveContext {
+    let explicit_server_tag = ctx
+        .domain_resolver_override
+        .clone()
+        .or_else(|| dial.domain_resolver.clone());
+
+    match &ctx.resolve_context {
+        Some(existing) => {
+            let mut context = existing.clone();
+            if context.caller_outbound_tag.is_none() {
+                context.caller_outbound_tag = Some(ctx.outbound_tag.clone());
+            }
+            if explicit_server_tag.is_some() {
+                context.explicit_server_tag = explicit_server_tag;
+            }
+            context
+        }
+        None => ResolveContext::outbound_dial(ctx.outbound_tag.clone(), explicit_server_tag),
+    }
 }
 
 async fn connect_udp_socket(

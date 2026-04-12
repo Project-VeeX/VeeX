@@ -42,12 +42,14 @@ mod tests {
                     tag: "direct".into(),
                     connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                     routing_mark: None,
+                    domain_resolver: None,
                 }),
                 OutboundConfig::Trojan(TrojanOutboundConfig {
                     tag: "proxy".into(),
                     server: "trojan.example.com".into(),
                     server_port: 443,
                     password: "secret".into(),
+                    domain_resolver: None,
                     connect_timeout: DEFAULT_CONNECT_TIMEOUT,
                     tls: TrojanTlsConfig {
                         enabled: true,

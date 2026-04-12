@@ -7,7 +7,7 @@ use veex_core::{
 };
 
 use crate::factory::{
-    build_dns_executor, build_inbounds, build_outbounds, build_router, RuntimeServices,
+    build_dns_services, build_inbounds, build_outbounds, build_router, RuntimeServices,
 };
 
 pub struct RuntimeState {
@@ -38,8 +38,14 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
     let outbounds = build_outbounds(config, &services).map_err(BootstrapError::OutboundBuild)?;
     ensure_required_outbounds_built(config, outbounds.as_ref())?;
     let router = build_router(config);
-    let dns_executor = build_dns_executor(config, Arc::clone(&outbounds))
+    let dns_services = build_dns_services(config, Arc::clone(&outbounds))
         .map_err(BootstrapError::OutboundBuild)?;
+    if let Some(services_handle) = dns_services.as_ref() {
+        services
+            .install_domain_resolver(Arc::clone(&services_handle.resolver))
+            .map_err(BootstrapError::OutboundBuild)?;
+    }
+    let dns_executor = dns_services.map(|services| services.executor);
     let stream_sink: Arc<dyn InboundSink> = Arc::new(Dispatcher::with_dns_executor(
         router.clone(),
         Arc::clone(&outbounds),
