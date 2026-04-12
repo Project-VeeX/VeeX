@@ -134,6 +134,7 @@ pub struct DnsServerConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DnsServerTypeConfig {
     Udp,
+    Tcp,
     Unsupported(String),
 }
 

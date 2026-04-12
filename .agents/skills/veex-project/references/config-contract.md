@@ -52,7 +52,7 @@ Current UDP execution boundary:
 - only `direct` inbound accepts `network: "udp"`
 - only `direct` outbound supports packet execution
 - UDP association ownership lives in the packet dispatcher rather than in protocol-private inbound code
-- internal DNS UDP upstream queries also reuse outbound packet capability rather than bypassing it with ad-hoc sockets
+- internal DNS upstream queries also reuse outbound packet or stream capability rather than bypassing it with ad-hoc sockets
 
 ## `route.rules` Semantics
 
@@ -77,7 +77,7 @@ Current rule execution contract:
 - `route.final` is lowered into the router's default final action
 - the runtime does not auto-insert recursion-prevention direct rules; operators must configure private/local or upstream-server direct exceptions explicitly in `route.rules`
 - rules that depend on sniffed domains must appear after the `action="sniff"` rule that enriches routing context
-- `action="hijack-dns"` hands the first UDP packet to the internal DNS executor instead of creating a forward association
+- `action="hijack-dns"` hands the matching DNS ingress flow to the internal DNS executor instead of creating a forward association or entering relay
 
 ## `dns` Semantics
 
@@ -97,10 +97,10 @@ The current accepted DNS subset is intentionally narrow:
 
 Current DNS runtime boundary:
 
-- only UDP upstream servers are executed
-- non-UDP server types may remain present in config, but selecting them is a runtime unsupported path
+- UDP and TCP upstream servers are executed
+- non-UDP/non-TCP server types may remain present in config, but selecting them is a runtime unsupported path
 - DNS server selection belongs to the DNS subsystem, not to `route.rules`
-- DNS queries use short-lived upstream packet sessions rather than client-facing packet associations
+- DNS queries use short-lived upstream stream or packet sessions rather than client-facing associations or relay
 
 ## Removed Compatibility Field
 

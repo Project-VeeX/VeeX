@@ -253,7 +253,7 @@ mod tests {
                 Arc::new(|addr| {
                     let listener = std::net::TcpListener::bind(addr)?;
                     listener.set_nonblocking(true)?;
-                    Ok(TcpListener::from_std(listener)?)
+                    TcpListener::from_std(listener).map_err(Into::into)
                 }),
             ),
             fixed_resolver(resolved),
@@ -312,7 +312,7 @@ mod tests {
                 Arc::new(|addr| {
                     let listener = std::net::TcpListener::bind(addr)?;
                     listener.set_nonblocking(true)?;
-                    Ok(TcpListener::from_std(listener)?)
+                    TcpListener::from_std(listener).map_err(Into::into)
                 }),
             ),
             fixed_resolver(Destination::from_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), 443)),

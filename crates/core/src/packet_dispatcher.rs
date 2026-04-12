@@ -12,7 +12,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     dispatcher::OutboundRegistry,
-    dns::DnsExecutorHandle,
+    dns::{DnsExecutorHandle, DnsRequest},
     error::ProxyError,
     logging::sanitize_field,
     packet::{
@@ -201,7 +201,10 @@ impl PacketDispatcher {
         );
 
         let peer_addr = packet.metadata.peer;
-        let response = match executor.execute_query(packet).await {
+        let response = match executor
+            .execute_query(DnsRequest::from_packet(packet))
+            .await
+        {
             Ok(response) => response,
             Err(err) => {
                 warn!(
@@ -218,7 +221,7 @@ impl PacketDispatcher {
             }
         };
 
-        if let Err(err) = writer.send_to(peer_addr, response).await {
+        if let Err(err) = writer.send_to(peer_addr, response.raw_message).await {
             warn!(
                 event = "packet_hijack_dns_write_failed",
                 inbound = %inbound,
@@ -574,7 +577,7 @@ mod tests {
 
     use crate::{
         dispatcher::{OutboundConnector, OutboundRegistry},
-        dns::DnsExecutorHandle,
+        dns::{DnsExecutorHandle, DnsRequest, DnsResponse},
         logging::Logger,
         packet::{PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle},
         router::{RouteAction, RouteFinalAction, RouteRule},
@@ -585,6 +588,8 @@ mod tests {
     };
 
     use super::{PacketDispatcher, PacketSink, PacketWriter};
+
+    type RecordedPacketWrites = Arc<Mutex<Vec<(SocketAddr, Vec<u8>)>>>;
 
     struct TestPacketSession {
         sent: Arc<Mutex<Vec<Vec<u8>>>>,
@@ -613,7 +618,7 @@ mod tests {
     }
 
     struct RecordingWriter {
-        sent: Arc<Mutex<Vec<(SocketAddr, Vec<u8>)>>>,
+        sent: RecordedPacketWrites,
     }
 
     impl PacketWriter for RecordingWriter {
@@ -684,7 +689,7 @@ mod tests {
     }
 
     impl DnsExecutorHandle for TestDnsExecutor {
-        fn execute_query(&self, _packet: PacketFrame) -> crate::traits::BoxFuture<'_, Vec<u8>> {
+        fn execute_query(&self, _request: DnsRequest) -> crate::traits::BoxFuture<'_, DnsResponse> {
             self.query_count.fetch_add(1, Ordering::Relaxed);
             let responses = Arc::clone(&self.responses);
             Box::pin(async move {
@@ -692,7 +697,7 @@ mod tests {
                 if responses.is_empty() {
                     return Err(ProxyError::protocol("missing dns test response"));
                 }
-                Ok(responses.remove(0))
+                Ok(DnsResponse::new(responses.remove(0)))
             })
         }
     }

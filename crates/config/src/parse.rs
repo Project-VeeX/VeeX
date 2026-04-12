@@ -343,6 +343,7 @@ fn input_dns_rule_into_config(
 fn parse_dns_server_type(value: String) -> DnsServerTypeConfig {
     match value.trim().to_ascii_lowercase().as_str() {
         "udp" => DnsServerTypeConfig::Udp,
+        "tcp" => DnsServerTypeConfig::Tcp,
         other => DnsServerTypeConfig::Unsupported(other.to_string()),
     }
 }
@@ -625,7 +626,7 @@ fn classify_dns_ignored(field: &str) -> Option<IgnoredDisposition> {
                 "field is accepted for compatibility but does not affect the current dns server runtime",
             ),
             "path" | "tls" | "headers" | "client_subnet" => IgnoredDisposition::Ignore(
-                "field is accepted for future dns upstream support but ignored by the current udp-only dns runtime",
+                "field is accepted for future dns upstream support but ignored by the current udp/tcp dns runtime",
             ),
             _ => return None,
         });
@@ -951,9 +952,9 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
-        DirectInboundConfig, DirectOutboundConfig, InboundConfig, OutboundConfig,
-        RouteActionConfig, RouteFinalActionConfig, RouteUpgradeActionConfig, SniffActionConfig,
-        TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT,
+        DirectInboundConfig, DirectOutboundConfig, DnsServerTypeConfig, InboundConfig,
+        OutboundConfig, RouteActionConfig, RouteFinalActionConfig, RouteUpgradeActionConfig,
+        SniffActionConfig, TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT,
         DEFAULT_TLS_HANDSHAKE_TIMEOUT,
     };
 
@@ -1204,6 +1205,39 @@ mod tests {
         assert_eq!(dns.final_server, "direct-dns");
         assert_eq!(dns.rules[0].domain, vec!["trojan.example.com".to_string()]);
         assert_eq!(dns.rules[0].server, "direct-dns");
+    }
+
+    #[test]
+    fn parses_dns_tcp_server_type() {
+        let input = r#"
+        {
+          "dns": {
+            "final": "tcp-dns",
+            "servers": [
+              {
+                "tag": "tcp-dns",
+                "type": "tcp",
+                "server": "223.5.5.5",
+                "server_port": 53,
+                "detour": "direct"
+              }
+            ]
+          },
+          "inbounds": [
+            { "type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": 15353, "network": "udp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct"
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("dns tcp config should parse");
+        let dns = config.dns.expect("dns config should exist");
+        assert!(matches!(dns.servers[0].kind, DnsServerTypeConfig::Tcp));
     }
 
     #[test]

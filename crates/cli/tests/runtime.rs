@@ -25,11 +25,48 @@ use veex_config::{
     RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig, SocksInboundConfig,
     TrojanOutboundConfig, TrojanTlsConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
 };
-use veex_core::{Destination, ErrorKind, Host};
+use veex_core::{read_dns_tcp_message, write_dns_tcp_message, Destination, ErrorKind, Host};
 use veex_outbound_trojan::build_trojan_request;
 use veex_test_tracing::{
     assert_event_has_fields, assert_has_event, captured_events, install_test_subscriber,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DnsIngressTransport {
+    Udp,
+    Tcp,
+}
+
+impl DnsIngressTransport {
+    fn as_network(self) -> &'static str {
+        match self {
+            Self::Udp => "udp",
+            Self::Tcp => "tcp",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DnsUpstreamTransport {
+    Udp,
+    Tcp,
+}
+
+impl DnsUpstreamTransport {
+    fn as_kind(self) -> DnsServerTypeConfig {
+        match self {
+            Self::Udp => DnsServerTypeConfig::Udp,
+            Self::Tcp => DnsServerTypeConfig::Tcp,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Udp => "udp",
+            Self::Tcp => "tcp",
+        }
+    }
+}
 
 #[tokio::test]
 async fn runtime_supports_socks_to_direct_round_trip() {
@@ -207,134 +244,22 @@ async fn runtime_supports_direct_udp_to_direct_udp_round_trip() {
 
 #[tokio::test]
 async fn runtime_supports_udp_dns_hijack_to_udp_upstream_round_trip() {
-    let upstream_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-        .await
-        .expect("udp dns upstream should bind");
-    let upstream_addr = upstream_socket
-        .local_addr()
-        .expect("udp dns upstream addr should exist");
-    let upstream_task = tokio::spawn(async move {
-        let mut buf = [0u8; 1024];
-        let (size, peer) = upstream_socket
-            .recv_from(&mut buf)
-            .await
-            .expect("udp dns upstream should receive query");
-        let response = build_dns_noerror_response(&buf[..size]);
-        upstream_socket
-            .send_to(&response, peer)
-            .await
-            .expect("udp dns upstream should send response");
-        buf[..size].to_vec()
-    });
+    assert_dns_hijack_round_trip(DnsIngressTransport::Udp, DnsUpstreamTransport::Udp).await;
+}
 
-    let inbound_addr = reserve_udp_port().await;
-    let config = ProxyConfig {
-        log: LogConfig {
-            level: "debug".into(),
-            disabled: false,
-            timestamp: false,
-        },
-        dns: Some(DnsConfig {
-            final_server: "direct-dns".into(),
-            servers: vec![DnsServerConfig {
-                tag: "direct-dns".into(),
-                kind: DnsServerTypeConfig::Udp,
-                server: "127.0.0.1".into(),
-                server_port: upstream_addr.port(),
-                detour: "direct".into(),
-            }],
-            rules: vec![DnsRuleConfig {
-                domain: vec!["trojan.example.com".into()],
-                server: "direct-dns".into(),
-            }],
-        }),
-        inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
-            tag: "dns-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: inbound_addr.port(),
-            network: Some("udp".into()),
-            override_address: None,
-            override_port: None,
-        })],
-        outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
-            tag: "direct".into(),
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            routing_mark: None,
-        })],
-        route: RouteConfig {
-            final_outbound: "direct".into(),
-            rules: vec![RouteRuleConfig {
-                domain: vec![],
-                domain_suffix: vec![],
-                ip_cidr: vec![],
-                ip_is_private: false,
-                ip_is_loopback: false,
-                ip_is_link_local: false,
-                port: vec![],
-                inbound: vec!["dns-in".into()],
-                action: RouteActionConfig::Final(RouteFinalActionConfig::HijackDns),
-            }],
-        },
-    };
-    let (_guard, trace_buffer) = install_test_subscriber();
+#[tokio::test]
+async fn runtime_supports_udp_dns_hijack_to_tcp_upstream_round_trip() {
+    assert_dns_hijack_round_trip(DnsIngressTransport::Udp, DnsUpstreamTransport::Tcp).await;
+}
 
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let runtime_task = tokio::spawn(async move {
-        run_with_shutdown(&config, async move {
-            shutdown_rx
-                .await
-                .map_err(|err| format!("shutdown channel failed: {err}"))?;
-            Ok(())
-        })
-        .await
-    });
+#[tokio::test]
+async fn runtime_supports_tcp_dns_hijack_to_udp_upstream_round_trip() {
+    assert_dns_hijack_round_trip(DnsIngressTransport::Tcp, DnsUpstreamTransport::Udp).await;
+}
 
-    let query = build_dns_query("trojan.example.com");
-    let response = run_dns_udp_client_round_trip(inbound_addr, query.clone())
-        .await
-        .expect("udp dns hijack round-trip should succeed");
-
-    let _ = shutdown_tx.send(());
-    runtime_task
-        .await
-        .expect("runtime task should join")
-        .expect("runtime should stop cleanly");
-
-    let upstream_query = upstream_task
-        .await
-        .expect("udp dns upstream task should join");
-    assert_eq!(upstream_query, query);
-    assert_eq!(response, build_dns_noerror_response(&query));
-
-    let events = captured_events(&trace_buffer);
-    assert_has_event(
-        &events,
-        "packet_hijack_dns",
-        &[("inbound", "dns-in"), ("level", "INFO")],
-    );
-    assert_has_event(
-        &events,
-        "dns_query_start",
-        &[
-            ("inbound", "dns-in"),
-            ("server", "direct-dns"),
-            ("level", "INFO"),
-        ],
-    );
-    assert_has_event(
-        &events,
-        "dns_query_success",
-        &[
-            ("inbound", "dns-in"),
-            ("server", "direct-dns"),
-            ("level", "INFO"),
-        ],
-    );
-    assert_has_event(
-        &events,
-        "packet_hijack_dns_complete",
-        &[("inbound", "dns-in"), ("level", "INFO")],
-    );
+#[tokio::test]
+async fn runtime_supports_tcp_dns_hijack_to_tcp_upstream_round_trip() {
+    assert_dns_hijack_round_trip(DnsIngressTransport::Tcp, DnsUpstreamTransport::Tcp).await;
 }
 
 #[tokio::test]
@@ -1408,6 +1333,206 @@ async fn run_direct_udp_client_round_trip(inbound_addr: SocketAddr) -> Result<()
     ))
 }
 
+async fn assert_dns_hijack_round_trip(
+    ingress: DnsIngressTransport,
+    upstream: DnsUpstreamTransport,
+) {
+    let query = build_dns_query("trojan.example.com");
+    let inbound_addr = match ingress {
+        DnsIngressTransport::Udp => reserve_udp_port().await,
+        DnsIngressTransport::Tcp => reserve_local_port().await,
+    };
+    let (upstream_addr, upstream_task) = match upstream {
+        DnsUpstreamTransport::Udp => {
+            let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("udp dns upstream should bind");
+            let addr = socket
+                .local_addr()
+                .expect("udp dns upstream addr should exist");
+            let task = tokio::spawn(async move {
+                let mut buf = [0u8; 1024];
+                let (size, peer) = socket
+                    .recv_from(&mut buf)
+                    .await
+                    .expect("udp dns upstream should receive query");
+                let response = build_dns_noerror_response(&buf[..size]);
+                socket
+                    .send_to(&response, peer)
+                    .await
+                    .expect("udp dns upstream should send response");
+                buf[..size].to_vec()
+            });
+            (addr, task)
+        }
+        DnsUpstreamTransport::Tcp => {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("tcp dns upstream should bind");
+            let addr = listener
+                .local_addr()
+                .expect("tcp dns upstream addr should exist");
+            let task = tokio::spawn(async move {
+                let (mut stream, _) = listener
+                    .accept()
+                    .await
+                    .expect("tcp dns upstream should accept");
+                let query = read_dns_tcp_message(&mut stream)
+                    .await
+                    .expect("tcp dns upstream should read frame")
+                    .expect("tcp dns upstream should receive a query");
+                let response = build_dns_noerror_response(&query);
+                write_dns_tcp_message(&mut stream, &response)
+                    .await
+                    .expect("tcp dns upstream should write frame");
+                query
+            });
+            (addr, task)
+        }
+    };
+    let config = ProxyConfig {
+        log: LogConfig {
+            level: "debug".into(),
+            disabled: false,
+            timestamp: false,
+        },
+        dns: Some(DnsConfig {
+            final_server: "direct-dns".into(),
+            servers: vec![DnsServerConfig {
+                tag: "direct-dns".into(),
+                kind: upstream.as_kind(),
+                server: "127.0.0.1".into(),
+                server_port: upstream_addr.port(),
+                detour: "direct".into(),
+            }],
+            rules: vec![DnsRuleConfig {
+                domain: vec!["trojan.example.com".into()],
+                server: "direct-dns".into(),
+            }],
+        }),
+        inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
+            tag: "dns-in".into(),
+            listen: "127.0.0.1".into(),
+            listen_port: inbound_addr.port(),
+            network: Some(ingress.as_network().into()),
+            override_address: None,
+            override_port: None,
+        })],
+        outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
+            tag: "direct".into(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            routing_mark: None,
+        })],
+        route: RouteConfig {
+            final_outbound: "direct".into(),
+            rules: vec![RouteRuleConfig {
+                domain: vec![],
+                domain_suffix: vec![],
+                ip_cidr: vec![],
+                ip_is_private: false,
+                ip_is_loopback: false,
+                ip_is_link_local: false,
+                port: vec![],
+                inbound: vec!["dns-in".into()],
+                action: RouteActionConfig::Final(RouteFinalActionConfig::HijackDns),
+            }],
+        },
+    };
+    let (_guard, trace_buffer) = install_test_subscriber();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runtime_task = tokio::spawn(async move {
+        run_with_shutdown(&config, async move {
+            shutdown_rx
+                .await
+                .map_err(|err| format!("shutdown channel failed: {err}"))?;
+            Ok(())
+        })
+        .await
+    });
+
+    let response = match ingress {
+        DnsIngressTransport::Udp => run_dns_udp_client_round_trip(inbound_addr, query.clone())
+            .await
+            .expect("udp dns hijack round-trip should succeed"),
+        DnsIngressTransport::Tcp => run_dns_tcp_client_round_trip(inbound_addr, query.clone())
+            .await
+            .expect("tcp dns hijack round-trip should succeed"),
+    };
+
+    let _ = shutdown_tx.send(());
+    runtime_task
+        .await
+        .expect("runtime task should join")
+        .expect("runtime should stop cleanly");
+
+    let upstream_query = upstream_task.await.expect("dns upstream task should join");
+    assert_eq!(upstream_query, query);
+    assert_eq!(response, build_dns_noerror_response(&query));
+
+    let events = captured_events(&trace_buffer);
+    assert_has_event(
+        &events,
+        "dns_query_start",
+        &[
+            ("inbound", "dns-in"),
+            ("server", "direct-dns"),
+            ("transport", upstream.as_str()),
+            ("level", "INFO"),
+        ],
+    );
+    assert_has_event(
+        &events,
+        "dns_query_success",
+        &[
+            ("inbound", "dns-in"),
+            ("server", "direct-dns"),
+            ("transport", upstream.as_str()),
+            ("level", "INFO"),
+        ],
+    );
+
+    match ingress {
+        DnsIngressTransport::Udp => {
+            assert_has_event(
+                &events,
+                "packet_hijack_dns",
+                &[("inbound", "dns-in"), ("level", "INFO")],
+            );
+            assert_has_event(
+                &events,
+                "packet_hijack_dns_complete",
+                &[("inbound", "dns-in"), ("level", "INFO")],
+            );
+            assert!(
+                !events.iter().any(|event| {
+                    event.fields.get("event").map(String::as_str)
+                        == Some("packet_association_create")
+                }),
+                "dns hijack should not create packet associations: {events:?}"
+            );
+        }
+        DnsIngressTransport::Tcp => {
+            assert_has_event(
+                &events,
+                "stream_hijack_dns",
+                &[("inbound", "dns-in"), ("level", "INFO")],
+            );
+            assert_has_event(
+                &events,
+                "stream_hijack_dns_complete",
+                &[("inbound", "dns-in"), ("level", "INFO")],
+            );
+            assert!(
+                !events.iter().any(|event| {
+                    event.fields.get("event").map(String::as_str) == Some("relay_start")
+                }),
+                "tcp dns hijack should not enter relay: {events:?}"
+            );
+        }
+    }
+}
+
 async fn run_dns_udp_client_round_trip(
     inbound_addr: SocketAddr,
     query: Vec<u8>,
@@ -1433,6 +1558,24 @@ async fn run_dns_udp_client_round_trip(
     Err(format!(
         "dns udp inbound did not become ready on {inbound_addr}"
     ))
+}
+
+async fn run_dns_tcp_client_round_trip(
+    inbound_addr: SocketAddr,
+    query: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    wait_for_listener(inbound_addr).await;
+    let mut stream = TcpStream::connect(inbound_addr)
+        .await
+        .map_err(|err| format!("failed to connect dns tcp client: {err}"))?;
+    write_dns_tcp_message(&mut stream, &query)
+        .await
+        .map_err(|err| format!("failed to write dns tcp query: {err}"))?;
+    let response = read_dns_tcp_message(&mut stream)
+        .await
+        .map_err(|err| format!("failed to read dns tcp response: {err}"))?
+        .ok_or_else(|| "dns tcp client saw EOF before response".to_string())?;
+    Ok(response)
 }
 
 fn build_dns_query(domain: &str) -> Vec<u8> {

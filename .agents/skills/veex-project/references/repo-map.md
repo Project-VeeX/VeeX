@@ -38,7 +38,7 @@
   - platform-agnostic core contracts
 - `crates/dns`
   - DNS executor, DNS router, and DNS wire parsing
-  - short-lived UDP upstream query execution via outbound packet capability
+  - short-lived UDP/TCP upstream query execution via outbound packet/stream capability
 - `crates/infra-linux`
   - Linux transparent-socket capabilities
   - original-destination and transparent helper functions

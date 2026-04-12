@@ -4,6 +4,7 @@ use tracing::{info, warn};
 use veex_observability::{emit_session_finish, SessionSummary};
 
 use crate::{
+    dns::{read_dns_tcp_message, write_dns_tcp_message, DnsExecutorHandle, DnsRequest},
     error::ProxyError,
     logging::sanitize_field,
     packet::PacketSessionHandle,
@@ -81,6 +82,7 @@ impl OutboundRegistry {
 pub struct Dispatcher {
     router: Router,
     outbounds: Arc<OutboundRegistry>,
+    dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
 }
 
 #[derive(Clone, Debug)]
@@ -95,7 +97,19 @@ struct DispatchTraceContext {
 
 impl Dispatcher {
     pub fn new(router: Router, outbounds: Arc<OutboundRegistry>) -> Self {
-        Self { router, outbounds }
+        Self::with_dns_executor(router, outbounds, None)
+    }
+
+    pub fn with_dns_executor(
+        router: Router,
+        outbounds: Arc<OutboundRegistry>,
+        dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
+    ) -> Self {
+        Self {
+            router,
+            outbounds,
+            dns_executor,
+        }
     }
 
     fn submit_impl(
@@ -113,9 +127,9 @@ impl Dispatcher {
                     target.outbound_tag.clone()
                 }
                 RouteFinalAction::HijackDns => {
-                    return Err(ProxyError::protocol(
-                        "stream dispatcher does not support final action 'hijack-dns'",
-                    ));
+                    return self
+                        .hijack_dns_stream(execution.stream, ctx, decision.reason)
+                        .await;
                 }
             };
 
@@ -197,6 +211,104 @@ impl Dispatcher {
             emit_session_finish(&summary, trace.route_reason.as_str(), result.as_ref().err());
             result
         })
+    }
+
+    async fn hijack_dns_stream(
+        &self,
+        mut inbound_stream: BoxedAsyncStream,
+        ctx: SessionContext,
+        route_reason: RouteReason,
+    ) -> crate::Result<()> {
+        let executor = self.dns_executor.as_ref().ok_or_else(|| {
+            ProxyError::config("route selected 'hijack-dns' but dns executor is not configured")
+        })?;
+        let inbound = sanitize_field(ctx.meta.inbound_tag.as_str()).into_owned();
+        let peer = sanitize_field(&ctx.meta.peer.to_string()).into_owned();
+        let destination = sanitize_field(&ctx.meta.destination.to_string()).into_owned();
+
+        info!(
+            event = "stream_hijack_dns",
+            session_id = ctx.meta.id,
+            inbound = %inbound,
+            peer = %peer,
+            destination = %destination,
+            route_reason = %route_reason.as_str(),
+            "stream handed off to dns executor"
+        );
+
+        loop {
+            let query = match read_dns_tcp_message(&mut *inbound_stream).await {
+                Ok(Some(query)) => query,
+                Ok(None) => break,
+                Err(err) => {
+                    warn!(
+                        event = "stream_hijack_dns_failed",
+                        session_id = ctx.meta.id,
+                        inbound = %inbound,
+                        peer = %peer,
+                        destination = %destination,
+                        route_reason = %route_reason.as_str(),
+                        error_kind = ?err.kind(),
+                        error = %err,
+                        "dns over tcp ingress read failed"
+                    );
+                    return Err(err);
+                }
+            };
+
+            let request = DnsRequest::new(
+                query,
+                ctx.meta.network,
+                ctx.meta.inbound_tag.clone(),
+                ctx.meta.peer,
+                ctx.meta.destination.clone(),
+            );
+            let response = match executor.execute_query(request).await {
+                Ok(response) => response,
+                Err(err) => {
+                    warn!(
+                        event = "stream_hijack_dns_failed",
+                        session_id = ctx.meta.id,
+                        inbound = %inbound,
+                        peer = %peer,
+                        destination = %destination,
+                        route_reason = %route_reason.as_str(),
+                        error_kind = ?err.kind(),
+                        error = %err,
+                        "dns executor failed for stream ingress"
+                    );
+                    return Err(err);
+                }
+            };
+
+            if let Err(err) =
+                write_dns_tcp_message(&mut *inbound_stream, &response.raw_message).await
+            {
+                warn!(
+                    event = "stream_hijack_dns_write_failed",
+                    session_id = ctx.meta.id,
+                    inbound = %inbound,
+                    peer = %peer,
+                    destination = %destination,
+                    route_reason = %route_reason.as_str(),
+                    error_kind = ?err.kind(),
+                    error = %err,
+                    "dns over tcp response write failed"
+                );
+                return Err(err);
+            }
+        }
+
+        info!(
+            event = "stream_hijack_dns_complete",
+            session_id = ctx.meta.id,
+            inbound = %inbound,
+            peer = %peer,
+            destination = %destination,
+            route_reason = %route_reason.as_str(),
+            "stream dns handoff completed"
+        );
+        Ok(())
     }
 }
 
@@ -284,8 +396,9 @@ mod tests {
     use crate::{
         dispatcher::OutboundConnector,
         traits::{Outbound, StreamOutbound},
-        BoxFuture, BoxedAsyncStream, Destination, ErrorKind, Logger, Network, OutboundMeta,
-        RouteReason, Router, SessionContext, SessionMeta, SessionRoute, SessionState,
+        BoxFuture, BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DnsResponse,
+        ErrorKind, Logger, Network, OutboundMeta, RouteAction, RouteFinalAction, RouteReason,
+        RouteRule, Router, SessionContext, SessionMeta, SessionRoute, SessionState,
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
@@ -327,16 +440,63 @@ mod tests {
 
     struct ScriptedStream {
         read_steps: VecDeque<ReadStep>,
-        written: Vec<u8>,
+        written: Arc<Mutex<Vec<u8>>>,
     }
 
     impl ScriptedStream {
         fn new(read_steps: impl IntoIterator<Item = ReadStep>) -> Self {
-            Self {
-                read_steps: read_steps.into_iter().collect(),
-                written: Vec::new(),
-            }
+            Self::with_written_capture(read_steps).0
         }
+
+        fn with_written_capture(
+            read_steps: impl IntoIterator<Item = ReadStep>,
+        ) -> (Self, Arc<Mutex<Vec<u8>>>) {
+            let written = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    read_steps: read_steps.into_iter().collect(),
+                    written: Arc::clone(&written),
+                },
+                written,
+            )
+        }
+    }
+
+    struct TestDnsExecutor {
+        requests: Arc<Mutex<Vec<DnsRequest>>>,
+        responses: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl DnsExecutorHandle for TestDnsExecutor {
+        fn execute_query(&self, request: DnsRequest) -> BoxFuture<'_, DnsResponse> {
+            let requests = Arc::clone(&self.requests);
+            let responses = Arc::clone(&self.responses);
+            Box::pin(async move {
+                requests
+                    .lock()
+                    .expect("requests lock poisoned")
+                    .push(request);
+                let response = responses.lock().expect("responses lock poisoned").remove(0);
+                Ok(DnsResponse::new(response))
+            })
+        }
+    }
+
+    fn dns_tcp_frame(payload: &[u8]) -> Vec<u8> {
+        let mut framed = Vec::with_capacity(payload.len() + 2);
+        framed.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        framed.extend_from_slice(payload);
+        framed
+    }
+
+    fn dns_tcp_read_steps(payload: &[u8]) -> [ReadStep; 4] {
+        let frame = dns_tcp_frame(payload);
+        [
+            ReadStep::Data(Box::leak(vec![frame[0]].into_boxed_slice())),
+            ReadStep::Data(Box::leak(vec![frame[1]].into_boxed_slice())),
+            ReadStep::Data(Box::leak(frame[2..].to_vec().into_boxed_slice())),
+            ReadStep::Eof,
+        ]
     }
 
     impl AsyncRead for ScriptedStream {
@@ -360,11 +520,14 @@ mod tests {
 
     impl AsyncWrite for ScriptedStream {
         fn poll_write(
-            mut self: Pin<&mut Self>,
+            self: Pin<&mut Self>,
             _cx: &mut Context<'_>,
             buf: &[u8],
         ) -> Poll<std::io::Result<usize>> {
-            self.written.extend_from_slice(buf);
+            self.written
+                .lock()
+                .expect("written lock poisoned")
+                .extend_from_slice(buf);
             Poll::Ready(Ok(buf.len()))
         }
 
@@ -593,6 +756,75 @@ mod tests {
             &events,
             "session_finish",
             &[("success", "false"), ("bytes_up", "4"), ("bytes_down", "4")],
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatcher_hands_tcp_dns_to_executor_without_relay() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let responses = Arc::new(Mutex::new(vec![b"\x12\x34dns-response".to_vec()]));
+        let dispatcher = Dispatcher::with_dns_executor(
+            Router::with_default_outbound("unused").with_rule(RouteRule {
+                inbound: vec!["dns-in".into()],
+                action: RouteAction::Final(RouteFinalAction::HijackDns),
+                ..RouteRule::new("unused")
+            }),
+            Arc::new(OutboundRegistry::default()),
+            Some(Arc::new(TestDnsExecutor {
+                requests: Arc::clone(&requests),
+                responses,
+            })),
+        );
+        let query = b"\x00\x01dns-query".to_vec();
+        let (stream, written) = ScriptedStream::with_written_capture(dns_tcp_read_steps(&query));
+        let ctx = SessionContext::new(
+            SessionMeta {
+                id: 42,
+                network: Network::Tcp,
+                inbound_tag: "dns-in".into(),
+                peer: std::net::SocketAddr::from(([127, 0, 0, 1], 53053)),
+                destination: Destination::from_ip(
+                    std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                    53,
+                ),
+                start: Instant::now(),
+            },
+            Vec::new(),
+        );
+
+        dispatcher
+            .submit(Box::new(stream), ctx)
+            .await
+            .expect("tcp dns hijack should succeed");
+
+        let captured_requests = requests.lock().expect("requests lock poisoned");
+        assert_eq!(captured_requests.len(), 1);
+        assert_eq!(captured_requests[0].protocol, Network::Tcp);
+        assert_eq!(captured_requests[0].raw_message, query);
+        drop(captured_requests);
+
+        assert_eq!(
+            written.lock().expect("written lock poisoned").as_slice(),
+            dns_tcp_frame(b"\x12\x34dns-response").as_slice()
+        );
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "stream_hijack_dns",
+            &[("inbound", "dns-in"), ("level", "INFO")],
+        );
+        assert_has_event(
+            &events,
+            "stream_hijack_dns_complete",
+            &[("inbound", "dns-in"), ("level", "INFO")],
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.fields.get("event").map(String::as_str) == Some("relay_start")),
+            "tcp dns hijack should not enter relay: {events:?}"
         );
     }
 }

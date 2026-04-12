@@ -9,12 +9,12 @@ use super::error::Result;
 
 pub fn create_direct_listener(addr: SocketAddr) -> Result<TcpListener> {
     let listener = create_std_listener(addr)?;
-    Ok(TcpListener::from_std(listener)?)
+    TcpListener::from_std(listener).map_err(Into::into)
 }
 
 pub fn create_direct_udp_socket(addr: SocketAddr) -> Result<UdpSocket> {
     let socket = create_std_udp_socket(addr)?;
-    Ok(UdpSocket::from_std(socket)?)
+    UdpSocket::from_std(socket).map_err(Into::into)
 }
 
 #[cfg(target_os = "linux")]

@@ -10,8 +10,9 @@ use std::{
 use tokio::time::timeout;
 use tracing::{info, warn};
 use veex_core::{
-    sanitize_field, BoxFuture, Destination, DnsExecutorHandle, Network, OutboundRegistry,
-    PacketFrame, ProxyError, SessionContext, SessionMeta,
+    read_dns_tcp_message, sanitize_field, write_dns_tcp_message, BoxFuture, Destination,
+    DnsExecutorHandle, DnsRequest, DnsResponse, Network, OutboundRegistry, ProxyError,
+    SessionContext, SessionMeta,
 };
 
 mod router;
@@ -40,6 +41,7 @@ pub struct DnsServer {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DnsServerTransport {
     Udp,
+    Tcp,
     Unsupported(String),
 }
 
@@ -76,24 +78,26 @@ impl DnsExecutor {
         self.next_query_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    async fn execute_query_impl(&self, packet: PacketFrame) -> veex_core::Result<Vec<u8>> {
-        let query_name = parse_query_domain(&packet.payload)?;
+    async fn execute_query_impl(&self, request: DnsRequest) -> veex_core::Result<DnsResponse> {
+        let query_name = parse_query_domain(&request.raw_message)?;
         let selection = self.router.select(&query_name);
         let server = self.servers.get(&selection.server_tag).ok_or_else(|| {
             ProxyError::config(format!("missing dns server tag: {}", selection.server_tag))
         })?;
 
-        let inbound = sanitize_field(&packet.metadata.inbound_tag).into_owned();
+        let inbound = sanitize_field(&request.inbound_tag).into_owned();
         let query_name_field = sanitize_field(&query_name).into_owned();
         let server_tag = sanitize_field(&server.tag).into_owned();
         let detour = sanitize_field(&server.detour).into_owned();
         let destination = sanitize_field(&server.destination.to_string()).into_owned();
+        let ingress_protocol = request.protocol.as_str();
         let query_id = self.next_query_id();
 
         info!(
             event = "dns_query_start",
             query_id,
             inbound = %inbound,
+            ingress_protocol = %ingress_protocol,
             query_name = %query_name_field,
             server = %server_tag,
             detour = %detour,
@@ -103,61 +107,39 @@ impl DnsExecutor {
             "dns query started"
         );
 
-        match &server.transport {
-            DnsServerTransport::Udp => {}
+        let upstream_network = match &server.transport {
+            DnsServerTransport::Udp => Network::Udp,
+            DnsServerTransport::Tcp => Network::Tcp,
+            DnsServerTransport::Unsupported(_) => request.protocol,
+        };
+        let ctx = SessionContext::new(
+            SessionMeta {
+                id: query_id,
+                network: upstream_network,
+                inbound_tag: request.inbound_tag.clone(),
+                peer: request.peer,
+                destination: server.destination.clone(),
+                start: Instant::now(),
+            },
+            Vec::new(),
+        );
+
+        let response = match &server.transport {
+            DnsServerTransport::Udp => {
+                self.execute_udp_query(&ctx, &server.detour, &request.raw_message, query_id)
+                    .await
+            }
+            DnsServerTransport::Tcp => {
+                self.execute_tcp_query(&ctx, &server.detour, &request.raw_message, query_id)
+                    .await
+            }
             DnsServerTransport::Unsupported(kind) => {
                 return Err(ProxyError::protocol(format!(
                     "dns server '{}' uses unsupported upstream type '{}'",
                     server.tag, kind
                 )));
             }
-        }
-
-        let outbound = self.outbounds.get(&server.detour).ok_or_else(|| {
-            ProxyError::config(format!(
-                "missing outbound tag for dns detour: {}",
-                server.detour
-            ))
-        })?;
-        let ctx = SessionContext::new(
-            SessionMeta {
-                id: query_id,
-                network: Network::Udp,
-                inbound_tag: packet.metadata.inbound_tag.clone(),
-                peer: packet.metadata.peer,
-                destination: server.destination.clone(),
-                start: Instant::now(),
-            },
-            Vec::new(),
-        );
-        let session = outbound.connect_packet(&ctx).await?;
-
-        if let Err(err) = session.send_packet(packet.payload).await {
-            let _ = log_close_result(query_id, session.close().await);
-            warn!(
-                event = "dns_query_failed",
-                query_id,
-                inbound = %inbound,
-                query_name = %query_name_field,
-                server = %server_tag,
-                detour = %detour,
-                destination = %destination,
-                route_reason = %selection.reason.as_str(),
-                error_kind = ?err.kind(),
-                error = %err,
-                "dns upstream send failed"
-            );
-            return Err(err);
-        }
-
-        let response = match timeout(self.query_timeout, session.recv_packet()).await {
-            Ok(result) => result,
-            Err(_) => Err(ProxyError::timeout(format!(
-                "dns upstream response timeout after {} ms",
-                self.query_timeout.as_millis()
-            ))),
         };
-        let _ = log_close_result(query_id, session.close().await);
 
         match response {
             Ok(response) => {
@@ -165,13 +147,14 @@ impl DnsExecutor {
                     event = "dns_query_success",
                     query_id,
                     inbound = %inbound,
+                    ingress_protocol = %ingress_protocol,
                     query_name = %query_name_field,
                     server = %server_tag,
                     detour = %detour,
                     destination = %destination,
                     route_reason = %selection.reason.as_str(),
                     transport = %server.transport.as_str(),
-                    response_bytes = response.len() as u64,
+                    response_bytes = response.raw_message.len() as u64,
                     "dns query succeeded"
                 );
                 Ok(response)
@@ -181,6 +164,7 @@ impl DnsExecutor {
                     event = "dns_query_failed",
                     query_id,
                     inbound = %inbound,
+                    ingress_protocol = %ingress_protocol,
                     query_name = %query_name_field,
                     server = %server_tag,
                     detour = %detour,
@@ -194,11 +178,68 @@ impl DnsExecutor {
             }
         }
     }
+
+    async fn execute_udp_query(
+        &self,
+        ctx: &SessionContext,
+        detour: &str,
+        query: &[u8],
+        query_id: u64,
+    ) -> veex_core::Result<DnsResponse> {
+        let outbound = self.outbounds.get(detour).ok_or_else(|| {
+            ProxyError::config(format!("missing outbound tag for dns detour: {detour}"))
+        })?;
+        let session = outbound.connect_packet(ctx).await?;
+
+        if let Err(err) = session.send_packet(query.to_vec()).await {
+            log_close_result(query_id, session.close().await);
+            return Err(err);
+        }
+
+        let response = match timeout(self.query_timeout, session.recv_packet()).await {
+            Ok(result) => result,
+            Err(_) => Err(ProxyError::timeout(format!(
+                "dns upstream response timeout after {} ms",
+                self.query_timeout.as_millis()
+            ))),
+        };
+        log_close_result(query_id, session.close().await);
+
+        response.map(DnsResponse::new)
+    }
+
+    async fn execute_tcp_query(
+        &self,
+        ctx: &SessionContext,
+        detour: &str,
+        query: &[u8],
+        _query_id: u64,
+    ) -> veex_core::Result<DnsResponse> {
+        let outbound = self.outbounds.get(detour).ok_or_else(|| {
+            ProxyError::config(format!("missing outbound tag for dns detour: {detour}"))
+        })?;
+        let mut stream = outbound.connect(ctx).await?;
+        write_dns_tcp_message(&mut *stream, query).await?;
+        let response = timeout(self.query_timeout, read_dns_tcp_message(&mut *stream)).await;
+        let response = match response {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(ProxyError::timeout(format!(
+                    "dns upstream response timeout after {} ms",
+                    self.query_timeout.as_millis()
+                )));
+            }
+        };
+        let response = response.ok_or_else(|| {
+            ProxyError::protocol("dns over tcp upstream closed before sending a response")
+        })?;
+        Ok(DnsResponse::new(response))
+    }
 }
 
 impl DnsExecutorHandle for DnsExecutor {
-    fn execute_query(&self, packet: PacketFrame) -> BoxFuture<'_, Vec<u8>> {
-        Box::pin(async move { self.execute_query_impl(packet).await })
+    fn execute_query(&self, request: DnsRequest) -> BoxFuture<'_, DnsResponse> {
+        Box::pin(async move { self.execute_query_impl(request).await })
     }
 }
 
@@ -206,6 +247,7 @@ impl DnsServerTransport {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Udp => "udp",
+            Self::Tcp => "tcp",
             Self::Unsupported(kind) => kind.as_str(),
         }
     }
@@ -235,8 +277,8 @@ mod tests {
 
     use tokio::sync::{mpsc, Mutex};
     use veex_core::{
-        packet::PacketSessionHandle, BoxedAsyncStream, Destination, DnsExecutorHandle, Host,
-        Logger, Network, Outbound, OutboundConnector, OutboundMeta, PacketFrame, ProxyError,
+        packet::PacketSessionHandle, BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest,
+        Host, Logger, Network, Outbound, OutboundConnector, OutboundMeta, ProxyError,
         SessionContext,
     };
 
@@ -349,22 +391,20 @@ mod tests {
         .expect("dns executor should build");
 
         let response = executor
-            .execute_query(PacketFrame::new(
-                veex_core::PacketMetadata::new(
-                    "dns-in",
-                    SocketAddr::from(([127, 0, 0, 1], 53000)),
-                    Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 5353),
-                    Network::Udp,
-                ),
+            .execute_query(DnsRequest::new(
                 vec![
                     0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06,
                     b't', b'r', b'o', b'j', b'a', b'n', 0x07, b'e', b'x', b'a', b'm', b'p', b'l',
                     b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
                 ],
+                Network::Udp,
+                "dns-in",
+                SocketAddr::from(([127, 0, 0, 1], 53000)),
+                Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 5353),
             ))
             .await
             .expect("dns query should succeed");
 
-        assert_eq!(response, vec![0x12, 0x34]);
+        assert_eq!(response.raw_message, vec![0x12, 0x34]);
     }
 }

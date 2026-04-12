@@ -234,6 +234,81 @@ impl SocksInbound {
     }
 }
 
+impl Inbound for SocksInbound {
+    fn meta(&self) -> &InboundMeta {
+        &self.meta
+    }
+
+    fn logger(&self) -> &Logger {
+        &self.logger
+    }
+
+    fn start(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.validate()?;
+            self.listener.start().await
+        })
+    }
+
+    fn close(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move { self.listener.close().await })
+    }
+}
+
+impl StreamInbound for SocksInbound {
+    fn accept_stream(&self, stream: TcpStream, peer: SocketAddr) -> BoxFuture<'_, ()> {
+        Box::pin(async move { self.handle_stream(stream, peer).await })
+    }
+}
+
+async fn read_greeting(stream: &mut TcpStream) -> std::result::Result<Vec<u8>, SocksError> {
+    let mut header = [0u8; 2];
+    stream.read_exact(&mut header).await?;
+    let mut bytes = header.to_vec();
+
+    let method_len = header[1] as usize;
+    let mut methods = vec![0u8; method_len];
+    stream.read_exact(&mut methods).await?;
+    bytes.extend_from_slice(&methods);
+    Ok(bytes)
+}
+
+async fn read_request(stream: &mut TcpStream) -> std::result::Result<Vec<u8>, SocksError> {
+    let mut header = [0u8; 4];
+    stream.read_exact(&mut header).await?;
+    let atyp = header[3];
+    let mut bytes = header.to_vec();
+
+    match atyp {
+        0x01 => {
+            let mut rest = [0u8; 6];
+            stream.read_exact(&mut rest).await?;
+            bytes.extend_from_slice(&rest);
+        }
+        0x03 => {
+            let mut len = [0u8; 1];
+            stream.read_exact(&mut len).await?;
+            bytes.extend_from_slice(&len);
+
+            let mut domain = vec![0u8; len[0] as usize + 2];
+            stream.read_exact(&mut domain).await?;
+            bytes.extend_from_slice(&domain);
+        }
+        0x04 => {
+            let mut rest = [0u8; 18];
+            stream.read_exact(&mut rest).await?;
+            bytes.extend_from_slice(&rest);
+        }
+        _ => {
+            let mut rest = [0u8; 2];
+            stream.read_exact(&mut rest).await?;
+            bytes.extend_from_slice(&rest);
+        }
+    }
+
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -334,7 +409,7 @@ mod tests {
             Box::pin(async move {
                 let listener = std::net::TcpListener::bind(addr)?;
                 listener.set_nonblocking(true)?;
-                Ok(TcpListener::from_std(listener)?)
+                TcpListener::from_std(listener).map_err(Into::into)
             })
         });
         Listener::new(listen, factory)
@@ -357,79 +432,4 @@ mod tests {
 
         panic!("client should connect within retry budget");
     }
-}
-
-impl Inbound for SocksInbound {
-    fn meta(&self) -> &InboundMeta {
-        &self.meta
-    }
-
-    fn logger(&self) -> &Logger {
-        &self.logger
-    }
-
-    fn start(&self) -> BoxFuture<'_, ()> {
-        Box::pin(async move {
-            self.validate()?;
-            self.listener.start().await
-        })
-    }
-
-    fn close(&self) -> BoxFuture<'_, ()> {
-        Box::pin(async move { self.listener.close().await })
-    }
-}
-
-impl StreamInbound for SocksInbound {
-    fn accept_stream(&self, stream: TcpStream, peer: SocketAddr) -> BoxFuture<'_, ()> {
-        Box::pin(async move { self.handle_stream(stream, peer).await })
-    }
-}
-
-async fn read_greeting(stream: &mut TcpStream) -> std::result::Result<Vec<u8>, SocksError> {
-    let mut header = [0u8; 2];
-    stream.read_exact(&mut header).await?;
-    let mut bytes = header.to_vec();
-
-    let method_len = header[1] as usize;
-    let mut methods = vec![0u8; method_len];
-    stream.read_exact(&mut methods).await?;
-    bytes.extend_from_slice(&methods);
-    Ok(bytes)
-}
-
-async fn read_request(stream: &mut TcpStream) -> std::result::Result<Vec<u8>, SocksError> {
-    let mut header = [0u8; 4];
-    stream.read_exact(&mut header).await?;
-    let atyp = header[3];
-    let mut bytes = header.to_vec();
-
-    match atyp {
-        0x01 => {
-            let mut rest = [0u8; 6];
-            stream.read_exact(&mut rest).await?;
-            bytes.extend_from_slice(&rest);
-        }
-        0x03 => {
-            let mut len = [0u8; 1];
-            stream.read_exact(&mut len).await?;
-            bytes.extend_from_slice(&len);
-
-            let mut domain = vec![0u8; len[0] as usize + 2];
-            stream.read_exact(&mut domain).await?;
-            bytes.extend_from_slice(&domain);
-        }
-        0x04 => {
-            let mut rest = [0u8; 18];
-            stream.read_exact(&mut rest).await?;
-            bytes.extend_from_slice(&rest);
-        }
-        _ => {
-            let mut rest = [0u8; 2];
-            stream.read_exact(&mut rest).await?;
-            bytes.extend_from_slice(&rest);
-        }
-    }
-
-    Ok(bytes)
 }

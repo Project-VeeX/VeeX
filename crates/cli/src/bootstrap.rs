@@ -40,8 +40,11 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
     let router = build_router(config);
     let dns_executor = build_dns_executor(config, Arc::clone(&outbounds))
         .map_err(BootstrapError::OutboundBuild)?;
-    let stream_sink: Arc<dyn InboundSink> =
-        Arc::new(Dispatcher::new(router.clone(), Arc::clone(&outbounds)));
+    let stream_sink: Arc<dyn InboundSink> = Arc::new(Dispatcher::with_dns_executor(
+        router.clone(),
+        Arc::clone(&outbounds),
+        dns_executor.clone(),
+    ));
     let packet_sink: Arc<dyn PacketSink> = Arc::new(PacketDispatcher::with_dns_executor(
         router,
         Arc::clone(&outbounds),

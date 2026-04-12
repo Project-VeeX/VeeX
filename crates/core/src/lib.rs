@@ -17,7 +17,9 @@ pub mod traits;
 pub mod types;
 
 pub use dispatcher::{Dispatcher, InboundSink, OutboundConnector, OutboundRegistry};
-pub use dns::DnsExecutorHandle;
+pub use dns::{
+    read_dns_tcp_message, write_dns_tcp_message, DnsExecutorHandle, DnsRequest, DnsResponse,
+};
 pub use error::{ErrorKind, ProxyError, Result};
 pub use listen::{format_listen_addr, parse_listen_addr};
 pub use logging::{sanitize_field, Logger};

@@ -265,7 +265,7 @@ mod tests {
                 Arc::new(|addr| {
                     let listener = std::net::TcpListener::bind(addr)?;
                     listener.set_nonblocking(true)?;
-                    Ok(TcpListener::from_std(listener)?)
+                    TcpListener::from_std(listener)
                 }),
             ),
             None,
@@ -300,7 +300,7 @@ mod tests {
                 Arc::new(|addr| {
                     let listener = std::net::TcpListener::bind(addr)?;
                     listener.set_nonblocking(true)?;
-                    Ok(TcpListener::from_std(listener)?)
+                    TcpListener::from_std(listener)
                 }),
             ),
             Some(Host::Domain("example.com".into())),
@@ -335,7 +335,7 @@ mod tests {
                 Arc::new(|addr| {
                     let listener = std::net::TcpListener::bind(addr)?;
                     listener.set_nonblocking(true)?;
-                    Ok(TcpListener::from_std(listener)?)
+                    TcpListener::from_std(listener)
                 }),
             ),
             None,
@@ -366,7 +366,7 @@ mod tests {
                 Arc::new(|addr| {
                     let listener = std::net::TcpListener::bind(addr)?;
                     listener.set_nonblocking(true)?;
-                    Ok(TcpListener::from_std(listener)?)
+                    TcpListener::from_std(listener)
                 }),
             ),
             None,

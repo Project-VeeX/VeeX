@@ -267,7 +267,7 @@ mod tests {
                 Arc::new(|addr| {
                     let listener = std::net::TcpListener::bind(addr)?;
                     listener.set_nonblocking(true)?;
-                    Ok(TcpListener::from_std(listener)?)
+                    TcpListener::from_std(listener).map_err(Into::into)
                 }),
             ),
             Network::Tcp,
@@ -298,7 +298,7 @@ mod tests {
                 Arc::new(|addr| {
                     let listener = std::net::TcpListener::bind(addr)?;
                     listener.set_nonblocking(true)?;
-                    Ok(TcpListener::from_std(listener)?)
+                    TcpListener::from_std(listener).map_err(Into::into)
                 }),
             ),
             Network::Tcp,

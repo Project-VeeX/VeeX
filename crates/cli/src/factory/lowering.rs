@@ -174,6 +174,7 @@ fn lower_dns_server(server: &veex_config::DnsServerConfig) -> DnsServer {
         tag: server.tag.clone(),
         transport: match &server.kind {
             DnsServerTypeConfig::Udp => DnsServerTransport::Udp,
+            DnsServerTypeConfig::Tcp => DnsServerTransport::Tcp,
             DnsServerTypeConfig::Unsupported(kind) => DnsServerTransport::Unsupported(kind.clone()),
         },
         destination: Destination::new(parse_host(&server.server), server.server_port),

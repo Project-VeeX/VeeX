@@ -476,6 +476,24 @@ mod tests {
     }
 
     #[test]
+    fn accepts_dns_section_with_tcp_server_detour() {
+        let mut config = valid_config();
+        config.dns = Some(DnsConfig {
+            final_server: "local".into(),
+            servers: vec![DnsServerConfig {
+                tag: "local".into(),
+                kind: DnsServerTypeConfig::Tcp,
+                server: "223.5.5.5".into(),
+                server_port: 53,
+                detour: "direct".into(),
+            }],
+            rules: vec![],
+        });
+
+        validate_config(&config).expect("tcp dns section should validate");
+    }
+
+    #[test]
     fn rejects_route_rule_without_any_matchers() {
         let mut config = valid_config();
         config.route.rules.push(RouteRuleConfig {
