@@ -20,6 +20,7 @@ pub(crate) struct LoweredSocksInbound {
 pub(crate) struct LoweredDirectInbound {
     pub(crate) meta: InboundMeta,
     pub(crate) listen: Listen,
+    pub(crate) network: Network,
     pub(crate) override_host: Option<Host>,
     pub(crate) override_port: Option<u16>,
 }
@@ -77,6 +78,7 @@ pub(crate) fn lower_inbound(inbound: &InboundConfig) -> LoweredInbound {
         InboundConfig::Direct(config) => LoweredInbound::Direct(LoweredDirectInbound {
             meta: InboundMeta::new(config.tag.clone(), "direct"),
             listen: Listen::new(config.listen.clone(), config.listen_port),
+            network: normalize_direct_network(config.network.as_deref()),
             override_host: config.override_address.as_deref().map(parse_host),
             override_port: config.override_port,
         }),
@@ -168,6 +170,13 @@ fn lower_tls_options(config: &TrojanTlsConfig) -> TlsClientOptions {
 
 fn normalize_tproxy_network(_network: Option<&str>) -> Network {
     Network::Tcp
+}
+
+fn normalize_direct_network(network: Option<&str>) -> Network {
+    match network {
+        Some("udp") => Network::Udp,
+        _ => Network::Tcp,
+    }
 }
 
 fn parse_host(value: &str) -> Host {

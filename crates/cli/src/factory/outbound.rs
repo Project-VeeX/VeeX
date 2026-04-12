@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use veex_config::ProxyConfig;
 use veex_core::{OutboundConnector, OutboundRegistry, ProxyError};
-use veex_outbound_direct::{build_dialer as build_direct_dialer, DirectOutbound};
+use veex_outbound_direct::{
+    build_dialer as build_direct_dialer, build_packet_dialer as build_direct_packet_dialer,
+    DirectOutbound,
+};
 use veex_outbound_trojan::{build_dialer as build_trojan_dialer, TrojanOutbound};
 
 use crate::factory::{lower_outbound, LoweredOutbound, RuntimeServices};
@@ -18,9 +21,16 @@ pub fn build_outbounds(
             LoweredOutbound::Direct(direct) => {
                 let logger =
                     veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
-                let dialer = build_direct_dialer(direct.dial, Arc::clone(&services.host_resolver))?;
-                let instance: Arc<dyn OutboundConnector> =
-                    Arc::new(DirectOutbound::new(direct.meta, logger, dialer)?);
+                let dialer =
+                    build_direct_dialer(direct.dial.clone(), Arc::clone(&services.host_resolver))?;
+                let packet_dialer =
+                    build_direct_packet_dialer(direct.dial, Arc::clone(&services.host_resolver))?;
+                let instance: Arc<dyn OutboundConnector> = Arc::new(DirectOutbound::new(
+                    direct.meta,
+                    logger,
+                    dialer,
+                    packet_dialer,
+                )?);
                 registry.register(instance)?;
             }
             LoweredOutbound::Trojan(trojan) => {

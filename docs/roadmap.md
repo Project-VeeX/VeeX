@@ -6,7 +6,7 @@
 
 ## 1. Current Position
 
-As of the current repository state (`0.5.3`), VeeX has established a narrow but usable TCP execution-plane baseline for router-oriented environments.
+As of the current repository state (`0.5.3`), VeeX has established a narrow but usable TCP execution-plane baseline for router-oriented environments, plus a first-stage UDP packet foundation for `direct-in -> direct-out`.
 
 That baseline includes:
 
@@ -15,9 +15,10 @@ That baseline includes:
 - ordered `route.rules` evaluation with `route.final`
 - bounded `action="sniff"` context enrichment
 - sequential multi-address connect fallback
+- dispatcher-owned UDP association mapping for `direct` inbound to `direct` outbound
 - structured observability and stable error classification
 
-The project priority remains consolidation and validation of this TCP execution plane rather than expansion into a broader network platform.
+The project priority remains consolidation and validation of this execution plane rather than expansion into a broader network platform.
 
 ## 2. Completed Phases
 
@@ -92,7 +93,7 @@ The current roadmap remains focused on tightening the existing surface:
 - real-device transparent-proxy validation, especially for `tproxy`, `routing_mark`, and `fw4/nft`
 - keeping config contract, examples, tests, and public docs aligned
 - preserving router, transport, and observability boundaries while implementation quality improves
-- continuing to harden the existing TCP execution path rather than broadening scope prematurely
+- continuing to harden the existing TCP path and the new minimal UDP packet path rather than broadening scope prematurely
 
 ## 4. Out Of Scope For The Current Roadmap
 
@@ -100,7 +101,7 @@ The following are not part of the current roadmap:
 
 - built-in DNS or FakeDNS
 - DoH or DoT
-- UDP proxying
+- generalized UDP proxying beyond the current `direct-in -> direct-out` packet foundation
 - TUN
 - kernel-level bypass semantics
 - full sing-box compatibility
@@ -119,16 +120,16 @@ Under those conditions, future discussion may include:
 
 - a richer but still explicit route matching or action surface
 - stronger sniff-assisted routing within the current model
-- incremental capabilities that still fit the TCP execution-plane role
+- incremental capabilities that still fit the current execution-plane role, including DNS built on top of the packet foundation
 
 ## 6. Summary
 
-VeeX is still in a consolidation phase: the main work is to harden, validate, and clarify the existing TCP execution plane rather than to widen the project into a larger networking system.
+VeeX is still in a consolidation phase: the main work is to harden, validate, and clarify the existing TCP path and the first-stage UDP packet foundation rather than to widen the project into a larger networking system.
 
 In one sentence:
 
 ```text
-VeeX is prioritizing consolidation of its TCP execution plane over broad platform expansion.
+VeeX is prioritizing consolidation of its stream path and minimal packet path over broad platform expansion.
 ```
 
 ## 7. Related Documents

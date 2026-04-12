@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-VeeX is a Rust execution core for OpenWrt-class and Linux router environments. Its role is intentionally narrow: provide a correct and observable TCP data plane for explicit-proxy and transparent-proxy deployments.
+VeeX is a Rust execution core for OpenWrt-class and Linux router environments. Its role is intentionally narrow: provide a correct and observable TCP data plane plus a minimal UDP packet foundation for explicit-proxy and transparent-proxy-adjacent deployments.
 
 The target topology is:
 
@@ -25,6 +25,7 @@ VeeX is not designed to be a full proxy platform, a DNS system, or a general net
 VeeX prefers a small, reliable capability surface over broad feature coverage. The current project deliberately focuses on:
 
 - TCP ingress and egress
+- a minimal UDP packet execution path for `direct` inbound to `direct` outbound
 - explicit routing decisions
 - bounded context enrichment
 - connection execution
@@ -55,7 +56,7 @@ The architecture assumes that key execution stages must remain visible and expla
 
 ## 3. System Architecture
 
-The main data path is:
+The main stream data path is:
 
 ```text
 Inbound
@@ -64,6 +65,17 @@ Inbound
 -> Outbound
 -> Transport (TCP / TLS)
 -> Relay
+```
+
+The current minimal packet data path is:
+
+```text
+Direct UDP Inbound
+-> PacketDispatcher
+-> Router
+-> Outbound
+-> Packet session
+-> Reverse packet path
 ```
 
 At a high level:
@@ -77,6 +89,7 @@ At a high level:
 | outbound | execute the selected outbound behavior |
 | transport | perform TCP connect and optional TLS handshake |
 | relay | forward bytes between inbound and outbound streams |
+| packet dispatcher | maintain UDP associations, outbound packet sessions, and reverse packet flow |
 
 The current runtime ownership model is intentionally simple:
 
@@ -89,10 +102,11 @@ The current runtime skeleton is also intentionally layered:
 - top-level `Inbound` and `Outbound` traits stay thin and lifecycle-oriented
 - execution-model traits separate protocol families rather than collapsing all behavior into one mega trait
 - inbound protocol objects submit normalized execution requests through a narrow sink view (`InboundSink`) rather than depending on dispatcher internals directly
-- dispatcher stays thin: route still selects an outbound tag, dispatcher resolves that tag through a single outbound registry, and the selected outbound executes through one unified dispatcher-facing connector view (`OutboundConnector`)
+- dispatcher stays thin: route still selects an outbound tag, dispatcher resolves that tag through a single outbound registry, and the selected outbound executes through one unified dispatcher-facing connector view (`OutboundConnector`) for stream and packet capabilities
 - transparent destination recovery remains protocol-specific and does not get folded into `Listener`
 - normalized trojan runtime fields use upstream address, key, and TLS capability rather than a raw config bag
 - `Listener` and `Dialer` are shared infrastructure capabilities, not protocol-logic containers
+- UDP association state belongs to the packet dispatcher, not to protocol-private inbound state
 
 ## 4. Routing Model
 
@@ -175,16 +189,17 @@ Important consequences:
 
 The current public capability surface includes:
 
-- inbound: `direct`, `socks`, `redirect`, `tproxy` for TCP
-- outbound: `direct`, `trojan`
+- inbound: `direct` for TCP and minimal UDP, `socks`, `redirect`, `tproxy` for TCP
+- outbound: `direct` for TCP stream and UDP packet session, `trojan` for TCP stream
 - routing: ordered `route.rules`, `route.final`, and `action="sniff"` upgrades
 - connect behavior: sequential multi-address fallback
 - runtime: foreground daemon-style execution with config checking
+- packet execution: dispatcher-owned UDP association mapping for `direct-in -> direct-out`
 
 The current public non-goals include:
 
 - built-in DNS or FakeDNS
-- UDP proxying
+- generalized UDP proxying beyond the current `direct-in -> direct-out` foundation
 - TUN
 - kernel-level bypass semantics
 - destination override based on sniffed data
@@ -199,12 +214,12 @@ This repository owns the execution core, configuration surface, examples, and co
 
 ## 10. Summary
 
-VeeX is a TCP execution core built around one routing pipeline, bounded context enrichment, explicit policy, and observable stage boundaries.
+VeeX is a focused execution core built around one routing pipeline, bounded context enrichment, explicit policy, and observable stage boundaries, with a deliberately small UDP packet foundation.
 
 In one sentence:
 
 ```text
-VeeX is a focused TCP execution core built around ordered routing and bounded context enrichment.
+VeeX is a focused execution core built around ordered routing, bounded context enrichment, and a minimal UDP packet foundation.
 ```
 
 ## 11. Related Documents

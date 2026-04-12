@@ -1,0 +1,27 @@
+{
+  "log": {
+    "level": "info",
+    "disabled": false,
+    "timestamp": false
+  },
+  "inbounds": [
+    {
+      "type": "direct",
+      "tag": "direct-udp-in",
+      "listen": "127.0.0.1",
+      "listen_port": 1053,
+      "network": "udp",
+      "override_address": "127.0.0.1",
+      "override_port": 5353
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "final": "direct"
+  }
+}

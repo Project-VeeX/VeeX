@@ -1,8 +1,15 @@
-use std::{future::Future, io, net::SocketAddr, pin::Pin, sync::Arc};
+use std::{future::Future, io, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use socket2::{Domain, Protocol, Socket, Type};
-use tokio::net::TcpStream;
-use veex_core::{Dial, DialContext, Dialer, Host, Result};
+use tokio::{
+    net::{TcpStream, UdpSocket},
+    time::timeout,
+};
+use tracing::{debug, info, warn};
+use veex_core::{
+    sanitize_field, Dial, DialContext, Dialer, Host, PacketDialer, PacketSession,
+    PacketSessionHandle, ProxyError, Result,
+};
 use veex_transport::{
     connect_host_with_resolver, resolve_host, ConnectTraceContext, HostResolver,
     TcpAttemptConnector, TcpConnectOptions,
@@ -15,6 +22,9 @@ use crate::error::{
 pub type MarkedConnectorFuture =
     Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send + 'static>>;
 pub type MarkedConnector = dyn Fn(SocketAddr, u32) -> MarkedConnectorFuture + Send + Sync;
+pub type MarkedUdpConnectorFuture =
+    Pin<Box<dyn Future<Output = io::Result<UdpSocket>> + Send + 'static>>;
+pub type MarkedUdpConnector = dyn Fn(SocketAddr, u32) -> MarkedUdpConnectorFuture + Send + Sync;
 
 pub fn system_host_resolver() -> Arc<HostResolver> {
     Arc::new(|host, port| Box::pin(async move { resolve_host(&host, port).await }))
@@ -25,6 +35,13 @@ pub fn build_dialer(dial: Dial, resolver: Arc<HostResolver>) -> Result<Dialer> {
         Box::pin(connect_marked_socket(address, routing_mark)) as MarkedConnectorFuture
     });
     build_dialer_with_connector(dial, resolver, marked_connector)
+}
+
+pub fn build_packet_dialer(dial: Dial, resolver: Arc<HostResolver>) -> Result<PacketDialer> {
+    let marked_connector = Arc::new(|address, routing_mark| {
+        Box::pin(connect_marked_udp_socket(address, routing_mark)) as MarkedUdpConnectorFuture
+    });
+    build_packet_dialer_with_connector(dial, resolver, marked_connector)
 }
 
 pub fn build_dialer_with_connector(
@@ -42,6 +59,33 @@ pub fn build_dialer_with_connector(
             Box::pin(async move {
                 connect_destination(&host, port, resolver.as_ref(), dial, ctx, &marked_connector)
                     .await
+            })
+        }),
+    ))
+}
+
+pub fn build_packet_dialer_with_connector(
+    dial: Dial,
+    resolver: Arc<HostResolver>,
+    marked_connector: Arc<MarkedUdpConnector>,
+) -> Result<PacketDialer> {
+    validate_routing_mark_support(dial.routing_mark)?;
+
+    Ok(PacketDialer::new(
+        dial,
+        Arc::new(move |host, port, dial, ctx| {
+            let resolver = Arc::clone(&resolver);
+            let marked_connector = Arc::clone(&marked_connector);
+            Box::pin(async move {
+                connect_packet_destination(
+                    &host,
+                    port,
+                    resolver.as_ref(),
+                    dial,
+                    ctx,
+                    &marked_connector,
+                )
+                .await
             })
         }),
     ))
@@ -77,11 +121,105 @@ async fn connect_destination(
     .await
 }
 
+async fn connect_packet_destination(
+    host: &Host,
+    port: u16,
+    resolver: &HostResolver,
+    dial: Dial,
+    ctx: DialContext,
+    marked_connector: &Arc<MarkedUdpConnector>,
+) -> Result<PacketSessionHandle> {
+    let host_field = sanitize_field(&host.to_string()).into_owned();
+    let addresses = resolver(host.clone(), port).await?;
+    let attempt_count = addresses.len();
+    let mut last_error = None;
+
+    for (idx, address) in addresses.into_iter().enumerate() {
+        let attempt_index = (idx + 1) as u64;
+        log_udp_connect_attempt(
+            &ctx,
+            &host_field,
+            port,
+            address,
+            dial.routing_mark,
+            attempt_index,
+            dial.timeout,
+        );
+
+        match connect_udp_socket(address, dial.timeout, dial.routing_mark, marked_connector).await {
+            Ok(socket) => {
+                log_udp_connect_success(
+                    &ctx,
+                    &host_field,
+                    port,
+                    address,
+                    dial.routing_mark,
+                    attempt_index,
+                );
+                return Ok(Arc::new(DirectPacketSession::new(socket)) as PacketSessionHandle);
+            }
+            Err(err) => {
+                log_udp_connect_failed(
+                    &ctx,
+                    &host_field,
+                    port,
+                    address,
+                    dial.routing_mark,
+                    attempt_index,
+                    &err,
+                );
+                last_error = Some(err);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        ProxyError::dial(format!(
+            "no reachable udp address for {host_field}:{port} after {attempt_count} attempts"
+        ))
+    }))
+}
+
+async fn connect_udp_socket(
+    address: SocketAddr,
+    timeout_duration: Option<Duration>,
+    routing_mark: Option<u32>,
+    marked_connector: &Arc<MarkedUdpConnector>,
+) -> Result<UdpSocket> {
+    let connect_future = async {
+        match routing_mark {
+            Some(mark) => marked_connector(address, mark).await,
+            None => {
+                let socket = UdpSocket::bind(udp_bind_addr(address)).await?;
+                socket.connect(address).await?;
+                Ok(socket)
+            }
+        }
+    };
+
+    match timeout_duration {
+        Some(duration) => timeout(duration, connect_future)
+            .await
+            .map_err(|_| ProxyError::timeout(format!("udp connect timeout to {address}")))?
+            .map_err(|err| ProxyError::dial_ctx(format!("udp connect failed to {address}"), err)),
+        None => connect_future
+            .await
+            .map_err(|err| ProxyError::dial_ctx(format!("udp connect failed to {address}"), err)),
+    }
+}
+
 pub(crate) async fn connect_marked_socket(
     address: SocketAddr,
     routing_mark: u32,
 ) -> io::Result<TcpStream> {
     connect_marked_socket_impl(address, routing_mark).await
+}
+
+pub(crate) async fn connect_marked_udp_socket(
+    address: SocketAddr,
+    routing_mark: u32,
+) -> io::Result<UdpSocket> {
+    connect_marked_udp_socket_impl(address, routing_mark).await
 }
 
 #[cfg(target_os = "linux")]
@@ -172,4 +310,189 @@ async fn connect_marked_socket_impl(
         io::ErrorKind::Unsupported,
         format!("direct outbound routing_mark is not supported on this platform for {address}"),
     ))
+}
+
+#[cfg(target_os = "linux")]
+async fn connect_marked_udp_socket_impl(
+    address: SocketAddr,
+    routing_mark: u32,
+) -> io::Result<UdpSocket> {
+    use std::os::fd::AsRawFd;
+
+    let domain = if address.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP)).map_err(|err| {
+        io_error_with_context(
+            format!("failed to create direct udp socket for {address}"),
+            err,
+        )
+    })?;
+    socket.set_nonblocking(true).map_err(|err| {
+        io_error_with_context(
+            format!("failed to switch direct udp socket to nonblocking mode for {address}"),
+            err,
+        )
+    })?;
+    socket.bind(&udp_bind_addr(address).into()).map_err(|err| {
+        io_error_with_context(
+            format!("failed to bind direct udp socket for {address}"),
+            err,
+        )
+    })?;
+    let mark = routing_mark as libc::c_int;
+    let rc = unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_MARK,
+            (&mark as *const libc::c_int).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    if rc != 0 {
+        return Err(last_os_error_with_context(format!(
+            "failed to set SO_MARK={routing_mark} for udp {address}"
+        )));
+    }
+    socket.connect(&address.into()).map_err(|err| {
+        io_error_with_context(
+            format!("direct udp connect failed to {address} with SO_MARK={routing_mark}"),
+            err,
+        )
+    })?;
+
+    let std_socket: std::net::UdpSocket = socket.into();
+    UdpSocket::from_std(std_socket).map_err(|err| {
+        io_error_with_context(
+            format!("failed to register marked direct udp socket for {address} with tokio"),
+            err,
+        )
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn connect_marked_udp_socket_impl(
+    address: SocketAddr,
+    _routing_mark: u32,
+) -> io::Result<UdpSocket> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!("direct outbound routing_mark is not supported on this platform for udp {address}"),
+    ))
+}
+
+fn udp_bind_addr(address: SocketAddr) -> SocketAddr {
+    if address.is_ipv4() {
+        SocketAddr::from(([0, 0, 0, 0], 0))
+    } else {
+        SocketAddr::from(([0u16; 8], 0))
+    }
+}
+
+struct DirectPacketSession {
+    socket: UdpSocket,
+}
+
+impl DirectPacketSession {
+    fn new(socket: UdpSocket) -> Self {
+        Self { socket }
+    }
+}
+
+impl PacketSession for DirectPacketSession {
+    fn send_packet(&self, payload: Vec<u8>) -> veex_core::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let written = self.socket.send(&payload).await?;
+            if written != payload.len() {
+                return Err(ProxyError::relay(format!(
+                    "direct udp send truncated: wrote {written} of {} bytes",
+                    payload.len()
+                )));
+            }
+            Ok(())
+        })
+    }
+
+    fn recv_packet(&self) -> veex_core::BoxFuture<'_, Vec<u8>> {
+        Box::pin(async move {
+            let mut buf = vec![0u8; u16::MAX as usize];
+            let size = self.socket.recv(&mut buf).await?;
+            buf.truncate(size);
+            Ok(buf)
+        })
+    }
+}
+
+fn log_udp_connect_attempt(
+    ctx: &DialContext,
+    host_field: &str,
+    port: u16,
+    address: SocketAddr,
+    routing_mark: Option<u32>,
+    attempt_index: u64,
+    timeout_duration: Option<Duration>,
+) {
+    debug!(
+        event = "udp_connect_attempt",
+        session_id = ctx.session_id,
+        outbound = %sanitize_field(&ctx.outbound_tag),
+        host = %host_field,
+        port = port as u64,
+        resolved_addr = %address,
+        routing_mark = ?routing_mark,
+        attempt_index,
+        timeout_ms = timeout_duration.map(|duration| duration.as_millis() as u64),
+        network = %"udp",
+        "udp connect attempt"
+    );
+}
+
+fn log_udp_connect_success(
+    ctx: &DialContext,
+    host_field: &str,
+    port: u16,
+    address: SocketAddr,
+    routing_mark: Option<u32>,
+    attempt_index: u64,
+) {
+    info!(
+        event = "udp_connect_success",
+        session_id = ctx.session_id,
+        outbound = %sanitize_field(&ctx.outbound_tag),
+        host = %host_field,
+        port = port as u64,
+        resolved_addr = %address,
+        routing_mark = ?routing_mark,
+        attempt_index,
+        network = %"udp",
+        "udp connect success"
+    );
+}
+
+fn log_udp_connect_failed(
+    ctx: &DialContext,
+    host_field: &str,
+    port: u16,
+    address: SocketAddr,
+    routing_mark: Option<u32>,
+    attempt_index: u64,
+    err: &ProxyError,
+) {
+    warn!(
+        event = "udp_connect_failed",
+        session_id = ctx.session_id,
+        outbound = %sanitize_field(&ctx.outbound_tag),
+        host = %host_field,
+        port = port as u64,
+        resolved_addr = %address,
+        routing_mark = ?routing_mark,
+        attempt_index,
+        network = %"udp",
+        error_kind = ?err.kind(),
+        error = %err,
+        "udp connect failed"
+    );
 }

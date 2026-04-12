@@ -1,6 +1,6 @@
 use std::{
     io,
-    net::{Ipv4Addr, SocketAddr, TcpListener},
+    net::{Ipv4Addr, SocketAddr, TcpListener, UdpSocket},
 };
 
 use tracing::{debug, warn};
@@ -14,6 +14,11 @@ use socket2::{Domain, Protocol, Socket, Type};
 #[cfg(target_os = "linux")]
 pub(crate) fn create_dual_stack_listener(addr: SocketAddr) -> io::Result<TcpListener> {
     create_listener(addr, false)
+}
+
+#[cfg(target_os = "linux")]
+pub fn create_dual_stack_udp_socket(addr: SocketAddr) -> io::Result<UdpSocket> {
+    create_udp_socket(addr)
 }
 
 #[cfg(target_os = "linux")]
@@ -63,6 +68,44 @@ fn create_listener_once(addr: SocketAddr, transparent: bool) -> io::Result<TcpLi
 
     socket.bind(&addr.into())?;
     socket.listen(1024)?;
+    socket.set_nonblocking(true)?;
+    Ok(socket.into())
+}
+
+#[cfg(target_os = "linux")]
+fn create_udp_socket(addr: SocketAddr) -> io::Result<UdpSocket> {
+    match create_udp_socket_once(addr) {
+        Ok(socket) => Ok(socket),
+        Err(primary_err) => match ipv4_fallback_addr(addr) {
+            Some(fallback_addr) => {
+                emit_listener_fallback(addr, fallback_addr, &primary_err);
+                create_udp_socket_once(fallback_addr).map_err(|fallback_err| {
+                    io::Error::new(
+                        fallback_err.kind(),
+                        format!(
+                            "failed to create udp socket on {addr}: {primary_err}; ipv4 fallback on {fallback_addr} also failed: {fallback_err}"
+                        ),
+                    )
+                })
+            }
+            None => Err(primary_err),
+        },
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn create_udp_socket_once(addr: SocketAddr) -> io::Result<UdpSocket> {
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_address(true)?;
+    if domain == Domain::IPV6 {
+        socket.set_only_v6(false)?;
+    }
+    socket.bind(&addr.into())?;
     socket.set_nonblocking(true)?;
     Ok(socket.into())
 }

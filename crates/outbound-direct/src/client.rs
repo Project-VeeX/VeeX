@@ -11,7 +11,8 @@ use std::{
 
 use veex_core::{
     BoxFuture, BoxedAsyncStream, DialContext, Dialer, Logger, Outbound, OutboundConnector,
-    OutboundMeta, ProxyError, Result, SessionContext, StreamOutbound,
+    OutboundMeta, PacketDialer, PacketSessionHandle, ProxyError, Result, SessionContext,
+    StreamOutbound,
 };
 
 #[derive(Debug)]
@@ -22,7 +23,8 @@ struct DirectOutboundState {
 pub struct DirectOutbound {
     meta: OutboundMeta,
     logger: Logger,
-    dialer: Dialer,
+    stream_dialer: Dialer,
+    packet_dialer: PacketDialer,
     state: Arc<DirectOutboundState>,
 }
 
@@ -31,17 +33,24 @@ impl fmt::Debug for DirectOutbound {
         f.debug_struct("DirectOutbound")
             .field("meta", &self.meta)
             .field("logger", &self.logger)
-            .field("dialer", &self.dialer)
+            .field("stream_dialer", &self.stream_dialer)
+            .field("packet_dialer", &self.packet_dialer)
             .finish()
     }
 }
 
 impl DirectOutbound {
-    pub fn new(meta: OutboundMeta, logger: Logger, dialer: Dialer) -> Result<Self> {
+    pub fn new(
+        meta: OutboundMeta,
+        logger: Logger,
+        stream_dialer: Dialer,
+        packet_dialer: PacketDialer,
+    ) -> Result<Self> {
         let outbound = Self {
             meta,
             logger,
-            dialer,
+            stream_dialer,
+            packet_dialer,
             state: Arc::new(DirectOutboundState {
                 closed: AtomicBool::new(false),
             }),
@@ -89,7 +98,7 @@ impl Outbound for DirectOutbound {
 impl StreamOutbound for DirectOutbound {
     fn connect_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
         let destination = ctx.meta.destination.clone();
-        let dialer = self.dialer.clone();
+        let dialer = self.stream_dialer.clone();
         let trace = DialContext {
             session_id: ctx.meta.id,
             outbound_tag: self.meta.tag.clone(),
@@ -113,6 +122,26 @@ impl OutboundConnector for DirectOutbound {
     fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
         self.connect_stream(ctx)
     }
+
+    fn connect_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
+        let destination = ctx.meta.destination.clone();
+        let dialer = self.packet_dialer.clone();
+        let trace = DialContext {
+            session_id: ctx.meta.id,
+            outbound_tag: self.meta.tag.clone(),
+        };
+        let closed = self.is_closed();
+
+        Box::pin(async move {
+            if closed {
+                return Err(ProxyError::Shutdown);
+            }
+
+            dialer
+                .connect(&destination.host, destination.port, trace)
+                .await
+        })
+    }
 }
 
 #[cfg(test)]
@@ -128,14 +157,26 @@ mod tests {
         time::sleep,
     };
     use veex_core::{
-        Destination, Dial, Dialer, Host, Logger, Network, Outbound, OutboundMeta, SessionContext,
-        SessionMeta, StreamOutbound,
+        Destination, Dial, Dialer, Host, Logger, Network, Outbound, OutboundMeta, PacketDialer,
+        SessionContext, SessionMeta, StreamOutbound,
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     use crate::dialer::{build_dialer_with_connector, system_host_resolver, MarkedConnectorFuture};
 
     use super::DirectOutbound;
+
+    fn shutdown_packet_dialer() -> PacketDialer {
+        PacketDialer::new(
+            Dial {
+                timeout: Some(Duration::from_secs(1)),
+                routing_mark: None,
+            },
+            Arc::new(|_host, _port, _dial, _ctx| {
+                Box::pin(async { Err(veex_core::ProxyError::Shutdown) })
+            }),
+        )
+    }
 
     #[test]
     fn direct_outbound_is_constructible_for_dispatcher_registration() {
@@ -152,6 +193,7 @@ mod tests {
             OutboundMeta::new("direct", "direct"),
             Logger::new("direct", "direct"),
             dialer,
+            shutdown_packet_dialer(),
         )
         .expect("build direct");
 
@@ -187,6 +229,7 @@ mod tests {
             OutboundMeta::new("direct", "direct"),
             Logger::new("direct", "direct"),
             dialer,
+            shutdown_packet_dialer(),
         )
         .expect("direct should build");
         let ctx = SessionContext::new(
@@ -265,6 +308,7 @@ mod tests {
             OutboundMeta::new("direct", "direct"),
             Logger::new("direct", "direct"),
             dialer,
+            shutdown_packet_dialer(),
         )
         .expect("direct should build");
         let ctx = SessionContext::new(
@@ -326,6 +370,7 @@ mod tests {
             OutboundMeta::new("direct", "direct"),
             Logger::new("direct", "direct"),
             dialer,
+            shutdown_packet_dialer(),
         )
         .expect("direct should build");
         let ctx = SessionContext::new(

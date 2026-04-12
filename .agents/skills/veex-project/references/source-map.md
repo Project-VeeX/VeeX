@@ -39,6 +39,7 @@ After the above, open only the topic-specific sources you need:
   - authoritative source for what changed between releases
 - `examples/socks-trojan.json`
 - `examples/direct-trojan.json`
+- `examples/direct-udp-echo.json`
 - `examples/redirect-trojan.json`
 - `examples/tproxy-compat.json`
   - use examples as concrete configuration starting points

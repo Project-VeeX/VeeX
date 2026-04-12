@@ -14,15 +14,16 @@ use rustls::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, UdpSocket},
     sync::oneshot,
 };
 use tokio_rustls::TlsAcceptor;
 use veex_cli::runtime::{run_with_shutdown, RuntimeError};
 use veex_config::{
-    DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteActionConfig,
-    RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig, SocksInboundConfig,
-    TrojanOutboundConfig, TrojanTlsConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+    DirectInboundConfig, DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig,
+    ProxyConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig,
+    RouteTargetConfig, SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
+    DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
 };
 use veex_core::{Destination, ErrorKind, Host};
 use veex_outbound_trojan::build_trojan_request;
@@ -99,6 +100,107 @@ async fn runtime_supports_socks_to_direct_round_trip() {
         .expect("runtime task should join")
         .expect("runtime should stop cleanly");
     echo_task.await.expect("echo task should join");
+}
+
+#[tokio::test]
+async fn runtime_supports_direct_udp_to_direct_udp_round_trip() {
+    let echo_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("udp echo socket should bind");
+    let echo_addr = echo_socket
+        .local_addr()
+        .expect("udp echo socket should expose local addr");
+    let echo_task = tokio::spawn(async move {
+        let mut buf = [0u8; 1024];
+        for _ in 0..2 {
+            let (size, peer) = echo_socket
+                .recv_from(&mut buf)
+                .await
+                .expect("udp echo should receive payload");
+            echo_socket
+                .send_to(&buf[..size], peer)
+                .await
+                .expect("udp echo should send payload");
+        }
+    });
+
+    let inbound_addr = reserve_udp_port().await;
+    let config = ProxyConfig {
+        log: LogConfig {
+            level: "debug".into(),
+            disabled: false,
+            timestamp: false,
+        },
+        inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
+            tag: "direct-udp-in".into(),
+            listen: "127.0.0.1".into(),
+            listen_port: inbound_addr.port(),
+            network: Some("udp".into()),
+            override_address: Some("127.0.0.1".into()),
+            override_port: Some(echo_addr.port()),
+        })],
+        outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
+            tag: "direct".into(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            routing_mark: None,
+        })],
+        route: RouteConfig {
+            final_outbound: "direct".into(),
+            rules: vec![],
+        },
+    };
+    let (_guard, trace_buffer) = install_test_subscriber();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runtime_task = tokio::spawn(async move {
+        run_with_shutdown(&config, async move {
+            shutdown_rx
+                .await
+                .map_err(|err| format!("shutdown channel failed: {err}"))?;
+            Ok(())
+        })
+        .await
+    });
+
+    run_direct_udp_client_round_trip(inbound_addr)
+        .await
+        .expect("udp direct round-trip should succeed");
+
+    let _ = shutdown_tx.send(());
+    runtime_task
+        .await
+        .expect("runtime task should join")
+        .expect("runtime should stop cleanly");
+    echo_task.await.expect("echo task should join");
+
+    let events = captured_events(&trace_buffer);
+    assert_has_event(
+        &events,
+        "packet_association_create",
+        &[
+            ("inbound", "direct-udp-in"),
+            ("outbound", "direct"),
+            ("level", "INFO"),
+        ],
+    );
+    assert_has_event(
+        &events,
+        "packet_association_hit",
+        &[
+            ("inbound", "direct-udp-in"),
+            ("outbound", "direct"),
+            ("level", "DEBUG"),
+        ],
+    );
+    assert_has_event(
+        &events,
+        "udp_connect_success",
+        &[
+            ("outbound", "direct"),
+            ("network", "udp"),
+            ("level", "INFO"),
+        ],
+    );
 }
 
 #[tokio::test]
@@ -1122,6 +1224,55 @@ async fn run_socks_client_expect_relay_failure(
         }
         Err(err) => format!("failed to read relay response: {err}"),
     }
+}
+
+async fn run_direct_udp_client_round_trip(inbound_addr: SocketAddr) -> Result<(), String> {
+    let client = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .map_err(|err| format!("failed to bind udp client: {err}"))?;
+    let mut echoed = [0u8; 16];
+
+    for _ in 0..100 {
+        client
+            .send_to(b"ping", inbound_addr)
+            .await
+            .map_err(|err| format!("failed to send first udp payload: {err}"))?;
+        match tokio::time::timeout(Duration::from_millis(50), client.recv_from(&mut echoed)).await {
+            Ok(Ok((size, _peer))) if &echoed[..size] == b"ping" => {
+                client
+                    .send_to(b"pang", inbound_addr)
+                    .await
+                    .map_err(|err| format!("failed to send second udp payload: {err}"))?;
+                let (size, _peer) =
+                    tokio::time::timeout(Duration::from_secs(1), client.recv_from(&mut echoed))
+                        .await
+                        .map_err(|_| "timed out waiting for second udp echo".to_string())?
+                        .map_err(|err| format!("failed to receive second udp echo: {err}"))?;
+                if &echoed[..size] != b"pang" {
+                    return Err(format!("unexpected second udp echo: {:?}", &echoed[..size]));
+                }
+                return Ok(());
+            }
+            Ok(Ok((_size, _peer))) => {}
+            Ok(Err(err)) => return Err(format!("failed to receive first udp echo: {err}")),
+            Err(_) => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    }
+
+    Err(format!(
+        "udp inbound did not become ready on {inbound_addr}"
+    ))
+}
+
+async fn reserve_udp_port() -> SocketAddr {
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("temporary udp socket should bind");
+    socket
+        .local_addr()
+        .expect("temporary udp addr should exist")
 }
 
 struct TrojanServerResult {

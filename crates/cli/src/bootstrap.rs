@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use thiserror::Error;
 use veex_config::{ProxyConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
-use veex_core::{Dispatcher, Inbound, InboundSink, OutboundRegistry, ProxyError};
+use veex_core::{
+    Dispatcher, Inbound, InboundSink, OutboundRegistry, PacketDispatcher, PacketSink, ProxyError,
+};
 
 use crate::factory::{build_inbounds, build_outbounds, build_router, RuntimeServices};
 
@@ -33,11 +35,13 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
     let services = RuntimeServices::default();
     let outbounds = build_outbounds(config, &services).map_err(BootstrapError::OutboundBuild)?;
     ensure_required_outbounds_built(config, outbounds.as_ref())?;
-    let sink: Arc<dyn InboundSink> = Arc::new(Dispatcher::new(
-        build_router(config),
-        Arc::clone(&outbounds),
-    ));
-    let inbounds = build_inbounds(config, sink).map_err(BootstrapError::InboundBuild)?;
+    let router = build_router(config);
+    let stream_sink: Arc<dyn InboundSink> =
+        Arc::new(Dispatcher::new(router.clone(), Arc::clone(&outbounds)));
+    let packet_sink: Arc<dyn PacketSink> =
+        Arc::new(PacketDispatcher::new(router, Arc::clone(&outbounds)));
+    let inbounds =
+        build_inbounds(config, stream_sink, packet_sink).map_err(BootstrapError::InboundBuild)?;
 
     Ok(RuntimeState {
         inbounds,

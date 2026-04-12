@@ -4,7 +4,7 @@ These constraints come from actual phase task packs, closure notes, and complete
 
 ## Scope Constraints
 
-- VeeX is currently a TCP execution plane. Do not silently expand the work into a DNS platform, UDP stack, TUN path, fake-ip system, generalized sniffing platform, or full rule engine.
+- VeeX is currently a stream-first execution plane with only a minimal `direct-in -> direct-out` UDP packet foundation. Do not silently expand the work into a DNS platform, generalized UDP stack, TUN path, fake-ip system, generalized sniffing platform, or full rule engine.
 - `route.bypass` has been removed; express direct-routing exceptions through ordinary `route.rules` instead.
 - OpenWrt packaging, `procd`, and LuCI/feed work belong to downstream repositories, not this main repo.
 

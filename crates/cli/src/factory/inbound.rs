@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use veex_config::ProxyConfig;
-use veex_core::{Inbound, InboundSink, Listener, ListenerFactory, ProxyError};
-use veex_inbound_direct::{create_direct_listener, DirectInbound};
+use veex_core::{Inbound, InboundSink, Listener, ListenerFactory, Network, PacketSink, ProxyError};
+use veex_inbound_direct::{create_direct_listener, DirectInbound, DirectUdpInbound};
 use veex_inbound_socks::SocksInbound;
 use veex_inbound_transparent::{
     create_redirect_listener, create_tproxy_listener, RedirectInbound, TProxyInbound,
@@ -12,7 +12,8 @@ use crate::factory::{lower_inbound, LoweredInbound};
 
 pub fn build_inbounds(
     config: &ProxyConfig,
-    sink: Arc<dyn InboundSink>,
+    stream_sink: Arc<dyn InboundSink>,
+    packet_sink: Arc<dyn PacketSink>,
 ) -> Result<Vec<Arc<dyn Inbound>>, ProxyError> {
     let mut inbounds: Vec<Arc<dyn Inbound>> = Vec::new();
 
@@ -21,19 +22,36 @@ pub fn build_inbounds(
             LoweredInbound::Direct(direct) => {
                 let logger =
                     veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
-                let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
-                    Box::pin(async move { create_direct_listener(addr).map_err(Into::into) })
-                });
-                let listener = Listener::new(direct.listen, listener_factory);
-                let instance = DirectInbound::new(
-                    direct.meta,
-                    logger,
-                    Arc::clone(&sink),
-                    listener,
-                    direct.override_host,
-                    direct.override_port,
-                )?;
-                inbounds.push(instance as Arc<dyn Inbound>);
+                match direct.network {
+                    Network::Tcp => {
+                        let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
+                            Box::pin(
+                                async move { create_direct_listener(addr).map_err(Into::into) },
+                            )
+                        });
+                        let listener = Listener::new(direct.listen, listener_factory);
+                        let instance = DirectInbound::new(
+                            direct.meta,
+                            logger,
+                            Arc::clone(&stream_sink),
+                            listener,
+                            direct.override_host,
+                            direct.override_port,
+                        )?;
+                        inbounds.push(instance as Arc<dyn Inbound>);
+                    }
+                    Network::Udp => {
+                        let instance = DirectUdpInbound::new(
+                            direct.meta,
+                            logger,
+                            Arc::clone(&packet_sink),
+                            direct.listen,
+                            direct.override_host,
+                            direct.override_port,
+                        )?;
+                        inbounds.push(instance as Arc<dyn Inbound>);
+                    }
+                }
             }
             LoweredInbound::Socks(socks) => {
                 let logger =
@@ -44,7 +62,8 @@ pub fn build_inbounds(
                         Box::pin(async move { Ok(tokio::net::TcpListener::bind(addr).await?) })
                     }),
                 );
-                let instance = SocksInbound::new(socks.meta, logger, Arc::clone(&sink), listener)?;
+                let instance =
+                    SocksInbound::new(socks.meta, logger, Arc::clone(&stream_sink), listener)?;
                 inbounds.push(instance as Arc<dyn Inbound>);
             }
             LoweredInbound::Redirect(redirect) => {
@@ -54,8 +73,12 @@ pub fn build_inbounds(
                     Box::pin(async move { create_redirect_listener(addr).map_err(Into::into) })
                 });
                 let listener = Listener::new(redirect.listen, listener_factory);
-                let instance =
-                    RedirectInbound::new(redirect.meta, logger, Arc::clone(&sink), listener)?;
+                let instance = RedirectInbound::new(
+                    redirect.meta,
+                    logger,
+                    Arc::clone(&stream_sink),
+                    listener,
+                )?;
                 inbounds.push(instance as Arc<dyn Inbound>);
             }
             LoweredInbound::TProxy(tproxy) => {
@@ -68,7 +91,7 @@ pub fn build_inbounds(
                 let instance = TProxyInbound::new(
                     tproxy.meta,
                     logger,
-                    Arc::clone(&sink),
+                    Arc::clone(&stream_sink),
                     listener,
                     tproxy.network,
                 )?;
@@ -118,8 +141,12 @@ mod tests {
             veex_core::Router::with_default_outbound("direct"),
             Arc::new(veex_core::OutboundRegistry::default()),
         ));
+        let packet_sink: Arc<dyn PacketSink> = Arc::new(veex_core::PacketDispatcher::new(
+            veex_core::Router::with_default_outbound("direct"),
+            Arc::new(veex_core::OutboundRegistry::default()),
+        ));
 
-        let inbounds = build_inbounds(&config, sink).expect("inbounds should build");
+        let inbounds = build_inbounds(&config, sink, packet_sink).expect("inbounds should build");
 
         assert_eq!(inbounds.len(), 1);
         assert_eq!(inbounds[0].meta().tag, "direct-in");
@@ -153,8 +180,12 @@ mod tests {
             veex_core::Router::with_default_outbound("direct"),
             Arc::new(veex_core::OutboundRegistry::default()),
         ));
+        let packet_sink: Arc<dyn PacketSink> = Arc::new(veex_core::PacketDispatcher::new(
+            veex_core::Router::with_default_outbound("direct"),
+            Arc::new(veex_core::OutboundRegistry::default()),
+        ));
 
-        let inbounds = build_inbounds(&config, sink).expect("inbounds should build");
+        let inbounds = build_inbounds(&config, sink, packet_sink).expect("inbounds should build");
 
         assert_eq!(inbounds.len(), 1);
         assert_eq!(inbounds[0].meta().tag, "tproxy-in");

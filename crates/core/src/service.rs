@@ -15,6 +15,7 @@ use tokio::{
 
 use crate::{
     error::{ProxyError, Result},
+    packet::PacketSessionHandle,
     types::{Host, Listen},
 };
 
@@ -63,11 +64,13 @@ pub struct DialContext {
 type ListenerBindFuture = Pin<Box<dyn Future<Output = Result<TcpListener>> + Send + 'static>>;
 type ListenerAcceptFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 type DialFuture = Pin<Box<dyn Future<Output = Result<TcpStream>> + Send + 'static>>;
+type PacketDialFuture = Pin<Box<dyn Future<Output = Result<PacketSessionHandle>> + Send + 'static>>;
 
 pub type ListenerFactory = dyn Fn(SocketAddr) -> ListenerBindFuture + Send + Sync;
 pub type ListenerAcceptHandler =
     dyn Fn(TcpStream, SocketAddr) -> ListenerAcceptFuture + Send + Sync;
 pub type DialConnect = dyn Fn(Host, u16, Dial, DialContext) -> DialFuture + Send + Sync;
+pub type PacketConnect = dyn Fn(Host, u16, Dial, DialContext) -> PacketDialFuture + Send + Sync;
 
 #[derive(Default)]
 struct ListenerState {
@@ -217,6 +220,39 @@ impl Dialer {
     }
 
     pub async fn connect(&self, host: &Host, port: u16, ctx: DialContext) -> Result<TcpStream> {
+        (self.connector)(host.clone(), port, self.dial.clone(), ctx).await
+    }
+}
+
+#[derive(Clone)]
+pub struct PacketDialer {
+    dial: Dial,
+    connector: Arc<PacketConnect>,
+}
+
+impl fmt::Debug for PacketDialer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PacketDialer")
+            .field("dial", &self.dial)
+            .finish()
+    }
+}
+
+impl PacketDialer {
+    pub fn new(dial: Dial, connector: Arc<PacketConnect>) -> Self {
+        Self { dial, connector }
+    }
+
+    pub fn dial(&self) -> &Dial {
+        &self.dial
+    }
+
+    pub async fn connect(
+        &self,
+        host: &Host,
+        port: u16,
+        ctx: DialContext,
+    ) -> Result<PacketSessionHandle> {
         (self.connector)(host.clone(), port, self.dial.clone(), ctx).await
     }
 }

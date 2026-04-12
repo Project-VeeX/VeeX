@@ -4,6 +4,8 @@ pub mod dispatcher;
 pub mod error;
 pub mod listen;
 pub mod logging;
+pub mod packet;
+pub mod packet_dispatcher;
 pub mod relay;
 pub mod router;
 pub mod service;
@@ -17,6 +19,11 @@ pub use dispatcher::{Dispatcher, InboundSink, OutboundConnector, OutboundRegistr
 pub use error::{ErrorKind, ProxyError, Result};
 pub use listen::{format_listen_addr, parse_listen_addr};
 pub use logging::{sanitize_field, Logger};
+pub use packet::{
+    PacketAssociationKey, PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle,
+    PacketWriter,
+};
+pub use packet_dispatcher::{PacketDispatcher, PacketSink};
 pub use relay::{relay_bidirectional, RelayErrorWithStats, RelayStats};
 pub use router::{
     RouteAction, RouteDecision, RouteFinalAction, RouteInput, RouteRule, RouteTarget,
@@ -24,7 +31,7 @@ pub use router::{
 };
 pub use service::{
     Dial, DialConnect, DialContext, Dialer, InboundMeta, Listener, ListenerAcceptHandler,
-    ListenerFactory, OutboundMeta,
+    ListenerFactory, OutboundMeta, PacketConnect, PacketDialer,
 };
 pub use session::{build_session_bootstrap, SessionBootstrap};
 pub use shutdown::{shutdown_channel, ShutdownSignal, ShutdownTrigger};

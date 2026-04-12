@@ -143,7 +143,7 @@ The current observability whitepaper deliberately does not define:
 - a kernel-bypass observability layer
 - generalized observability for unsupported features outside the current VeeX scope
 
-VeeX focuses on making the existing TCP execution plane observable before widening into larger telemetry systems.
+VeeX focuses on making the existing execution plane observable before widening into larger telemetry systems.
 
 ## 9. Validation Boundary
 

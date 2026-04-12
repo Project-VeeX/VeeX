@@ -6,6 +6,7 @@ use veex_observability::{emit_session_finish, SessionSummary};
 use crate::{
     error::ProxyError,
     logging::sanitize_field,
+    packet::PacketSessionHandle,
     relay::{relay_bidirectional_with_trace, RelayTraceContext},
     router::Router,
     traits::{BoxFuture, Outbound},
@@ -14,6 +15,18 @@ use crate::{
 
 pub trait OutboundConnector: Outbound {
     fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream>;
+
+    fn connect_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
+        let outbound_tag = self.meta().tag.clone();
+        let network = ctx.meta.network;
+        Box::pin(async move {
+            Err(ProxyError::protocol(format!(
+                "outbound '{}' does not support packet execution for {}",
+                outbound_tag,
+                network.as_str()
+            )))
+        })
+    }
 }
 
 pub trait InboundSink: Send + Sync {

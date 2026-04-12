@@ -17,18 +17,19 @@ impl<T> AsyncStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 pub type BoxedAsyncStream = Box<dyn AsyncStream>;
 
 /// Network protocol type.
-///
-/// Currently only TCP is supported; this enum is provided for future extensibility.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Network {
     /// TCP protocol.
     Tcp,
+    /// UDP protocol.
+    Udp,
 }
 
 impl Network {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Tcp => "tcp",
+            Self::Udp => "udp",
         }
     }
 }
@@ -38,7 +39,7 @@ impl Network {
 /// This distinction is important because domain names require resolution
 /// before a TCP connection can be established, while IP addresses can
 /// be connected directly.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Host {
     /// A numeric IP address (IPv4 or IPv6).
     Ip(IpAddr),
@@ -68,7 +69,7 @@ impl Host {
 ///
 /// This is the primary key used to route and connect sessions.
 /// Display format is `"host:port"` for IPv4/domains and `"[ipv6]:port"` for IPv6.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Destination {
     /// The target host — either an IP address or domain name.
     pub host: Host,

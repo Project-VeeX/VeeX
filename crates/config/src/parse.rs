@@ -1713,7 +1713,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_direct_inbound_network_other_than_tcp() {
+    fn rejects_direct_inbound_network_other_than_supported_values() {
         let input = r#"
         {
           "inbounds": [
@@ -1722,7 +1722,7 @@ mod tests {
               "tag": "direct-in",
               "listen": "0.0.0.0",
               "listen_port": 9000,
-              "network": "udp"
+              "network": "quic"
             }
           ],
           "outbounds": [
@@ -1732,9 +1732,47 @@ mod tests {
         }
         "#;
 
-        let err = parse_config(input).expect_err("non-tcp direct inbound network should fail");
+        let err = parse_config(input).expect_err("unsupported direct inbound network should fail");
         assert!(err.to_string().contains("$.inbounds[0].network"));
-        assert!(err.to_string().contains("only supports network='tcp'"));
+        assert!(err
+            .to_string()
+            .contains("only supports network='tcp' or network='udp'"));
+    }
+
+    #[test]
+    fn accepts_direct_inbound_udp_network() {
+        let input = r#"
+        {
+          "inbounds": [
+            {
+              "type": "direct",
+              "tag": "direct-in",
+              "listen": "127.0.0.1",
+              "listen_port": 9000,
+              "network": "udp",
+              "override_address": "127.0.0.1",
+              "override_port": 53
+            }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": { "final": "direct" }
+        }
+        "#;
+
+        let config = parse_config(input).expect("udp direct inbound should parse");
+        assert_eq!(
+            config.inbounds,
+            vec![InboundConfig::Direct(DirectInboundConfig {
+                tag: "direct-in".into(),
+                listen: "127.0.0.1".into(),
+                listen_port: 9000,
+                network: Some("udp".into()),
+                override_address: Some("127.0.0.1".into()),
+                override_port: Some(53),
+            })]
+        );
     }
 
     #[test]

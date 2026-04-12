@@ -33,7 +33,7 @@
 - `crates/core`
   - core types such as `Destination`, `Host`, and `SessionContext`
   - error model and `ErrorKind`
-  - `Router`, `Dispatcher`, and `relay`
+  - `Router`, `Dispatcher`, `PacketDispatcher`, and `relay`
   - platform-agnostic core contracts
 - `crates/infra-linux`
   - Linux transparent-socket capabilities
@@ -44,12 +44,12 @@
   - `redirect` original-destination recovery via shared Linux infrastructure
   - TCP-only `tproxy` inbound plus protocol-specific transparent destination recovery
 - `crates/inbound-direct`
-  - plain TCP listener ingress
+  - plain direct ingress for TCP stream and minimal UDP packet modes
   - listener-local destination forwarding plus optional override-address / override-port rewriting
 - `crates/inbound-socks`
   - SOCKS5 CONNECT inbound
 - `crates/outbound-direct`
-  - direct outbound
+  - direct outbound for TCP stream and UDP packet session
   - Linux `SO_MARK` path and no-loop egress behavior
 - `crates/outbound-trojan`
   - Trojan outbound
@@ -86,6 +86,12 @@
   - `crates/config`
   - `references/config-contract.md`
   - `references/validation-contract.md`
+- UDP packet execution / association behavior:
+  - `crates/core`
+  - `crates/inbound-direct`
+  - `crates/outbound-direct`
+  - `crates/cli`
+  - `references/config-contract.md`
 - Session failure semantics, summaries, or logging:
   - `crates/core`
   - `crates/observability`

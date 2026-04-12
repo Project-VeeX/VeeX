@@ -72,10 +72,10 @@ fn validate_inbounds(config: &ProxyConfig) -> Result<BTreeSet<String>, ConfigErr
 
 fn validate_direct_inbound(direct: &DirectInboundConfig, index: usize) -> Result<(), ConfigError> {
     if let Some(network) = direct.network.as_deref() {
-        if network != "tcp" {
+        if network != "tcp" && network != "udp" {
             return Err(ConfigError::semantic(
                 format!("$.inbounds[{index}].network"),
-                "direct inbound only supports network='tcp'",
+                "direct inbound only supports network='tcp' or network='udp'",
             ));
         }
     }
@@ -265,14 +265,31 @@ mod tests {
             tag: "direct-in".into(),
             listen: "0.0.0.0".into(),
             listen_port: 9000,
-            network: Some("udp".into()),
+            network: Some("quic".into()),
             override_address: None,
             override_port: None,
         })];
 
-        let err = validate_config(&config).expect_err("non-tcp direct network should fail");
+        let err = validate_config(&config).expect_err("unsupported direct network should fail");
         assert!(err.to_string().contains("$.inbounds[0].network"));
-        assert!(err.to_string().contains("only supports network='tcp'"));
+        assert!(err
+            .to_string()
+            .contains("only supports network='tcp' or network='udp'"));
+    }
+
+    #[test]
+    fn accepts_udp_direct_inbound_network() {
+        let mut config = valid_config();
+        config.inbounds = vec![InboundConfig::Direct(DirectInboundConfig {
+            tag: "direct-in".into(),
+            listen: "127.0.0.1".into(),
+            listen_port: 9000,
+            network: Some("udp".into()),
+            override_address: Some("127.0.0.1".into()),
+            override_port: Some(53),
+        })];
+
+        validate_config(&config).expect("udp direct inbound should validate");
     }
 
     #[test]

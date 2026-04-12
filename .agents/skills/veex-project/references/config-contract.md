@@ -18,6 +18,7 @@ Current supported configuration surface:
 - `direct.network`:
   - omitted: treated as TCP
   - `"tcp"`: accepted
+  - `"udp"`: accepted
   - any other value: rejected
 - direct inbound fields:
   - `tag`
@@ -35,9 +36,19 @@ Current supported configuration surface:
 - direct outbound fields:
   - `tag`
   - `routing_mark`
+  - runtime behavior:
+    - TCP stream connect is supported
+    - UDP packet session connect is supported
 - route fields:
   - `final`
   - `rules`
+
+Current UDP execution boundary:
+
+- only `direct` inbound accepts `network: "udp"`
+- only `direct` outbound supports packet execution
+- UDP association ownership lives in the packet dispatcher rather than in protocol-private inbound code
+- later DNS or detour work must reuse this path rather than bypass it with ad-hoc sockets
 
 ## `route.rules` Semantics
 
@@ -89,6 +100,7 @@ Known fields remain strictly typed. An unsupported type on a known field is stil
 The repository compatibility fixture is:
 
 - `examples/direct-trojan.json`
+- `examples/direct-udp-echo.json`
 - `examples/tproxy-compat.json`
 
 `examples/tproxy-compat.json` intentionally uses `listen="::"` to cover dual-stack validation more closely.
