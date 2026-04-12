@@ -34,7 +34,7 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
 - DNS:
   - internal DNS executor for TCP/UDP DNS ingress
   - `dns.rules` and `dns.final` server selection
-  - UDP/TCP upstream via detour-aware outbound stream/packet capability
+  - UDP/TCP/TLS/HTTPS upstream via detour-aware outbound stream/packet capability
 - Config compatibility:
   - a minimal sing-box-compatible JSON subset
   - `direct.routing_mark` is supported
@@ -42,7 +42,6 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
 ## Explicit Non-Goals
 
 - full built-in DNS platform
-- DoH / DoT client
 - fake-ip
 - generalized UDP proxying beyond the current `direct-in -> direct-out` foundation
 - TUN
@@ -53,7 +52,7 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
 
 ## DNS Boundary
 
-- Minimal DNS hijack and UDP/TCP upstream execution are now in scope because they reuse the packet foundation, stream path, and detour model.
+- Minimal DNS hijack and UDP/TCP/TLS/HTTPS upstream execution are now in scope because they reuse the packet foundation, stream path, and detour model.
 - DNS still must not pull VeeX into a larger platform shape: no FakeDNS, no cache-first resolver platform, and no general-purpose DNS policy engine in the current scope.
 - Router deployments can still choose to keep DNS outside VeeX when that better fits the deployment.
 

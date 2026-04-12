@@ -9,7 +9,9 @@ use veex_core::{
     Destination, Dial, Host, InboundMeta, Listen, Network, OutboundMeta, RouteAction,
     RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, SniffAction,
 };
-use veex_dns::{DnsRule, DnsRuntimeConfig, DnsServer, DnsServerTransport};
+use veex_dns::{
+    DnsHttpsOptions, DnsRule, DnsRuntimeConfig, DnsServer, DnsServerTransport, DEFAULT_DOH_PATH,
+};
 use veex_transport::TlsClientOptions;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -175,6 +177,15 @@ fn lower_dns_server(server: &veex_config::DnsServerConfig) -> DnsServer {
         transport: match &server.kind {
             DnsServerTypeConfig::Udp => DnsServerTransport::Udp,
             DnsServerTypeConfig::Tcp => DnsServerTransport::Tcp,
+            DnsServerTypeConfig::Tls => DnsServerTransport::Tls(lower_tls_options(&server.tls)),
+            DnsServerTypeConfig::Https => DnsServerTransport::Https(DnsHttpsOptions {
+                path: server
+                    .path
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_DOH_PATH.to_string()),
+                headers: server.headers.clone(),
+                tls: lower_tls_options(&server.tls),
+            }),
             DnsServerTypeConfig::Unsupported(kind) => DnsServerTransport::Unsupported(kind.clone()),
         },
         destination: Destination::new(parse_host(&server.server), server.server_port),

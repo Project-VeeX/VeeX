@@ -217,7 +217,13 @@ pub struct InputDnsServer {
     #[serde(default)]
     pub server_port: Option<Option<u16>>,
     #[serde(default)]
+    pub path: Option<Option<String>>,
+    #[serde(default)]
+    pub headers: Option<Option<BTreeMap<String, String>>>,
+    #[serde(default)]
     pub detour: Option<Option<String>>,
+    #[serde(default)]
+    pub tls: Option<Option<InputTrojanTlsConfig>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -10,14 +10,17 @@ use std::{
 use tokio::time::timeout;
 use tracing::{info, warn};
 use veex_core::{
-    read_dns_tcp_message, sanitize_field, write_dns_tcp_message, BoxFuture, Destination,
-    DnsExecutorHandle, DnsRequest, DnsResponse, Network, OutboundRegistry, ProxyError,
+    read_dns_tcp_message, sanitize_field, write_dns_tcp_message, BoxFuture, BoxedAsyncStream,
+    Destination, DnsExecutorHandle, DnsRequest, DnsResponse, Network, OutboundRegistry, ProxyError,
     SessionContext, SessionMeta,
 };
+use veex_transport::{connect_tls_stream, ConnectTraceContext, TlsClientOptions};
 
+mod http;
 mod router;
 mod wire;
 
+pub use http::DEFAULT_DOH_PATH;
 pub use router::{DnsRouteReason, DnsRouter, DnsRule, DnsSelection};
 pub use wire::parse_query_domain;
 
@@ -39,9 +42,18 @@ pub struct DnsServer {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DnsHttpsOptions {
+    pub path: String,
+    pub headers: BTreeMap<String, String>,
+    pub tls: TlsClientOptions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DnsServerTransport {
     Udp,
     Tcp,
+    Tls(TlsClientOptions),
+    Https(DnsHttpsOptions),
     Unsupported(String),
 }
 
@@ -109,7 +121,9 @@ impl DnsExecutor {
 
         let upstream_network = match &server.transport {
             DnsServerTransport::Udp => Network::Udp,
-            DnsServerTransport::Tcp => Network::Tcp,
+            DnsServerTransport::Tcp | DnsServerTransport::Tls(_) | DnsServerTransport::Https(_) => {
+                Network::Tcp
+            }
             DnsServerTransport::Unsupported(_) => request.protocol,
         };
         let ctx = SessionContext::new(
@@ -124,22 +138,9 @@ impl DnsExecutor {
             Vec::new(),
         );
 
-        let response = match &server.transport {
-            DnsServerTransport::Udp => {
-                self.execute_udp_query(&ctx, &server.detour, &request.raw_message, query_id)
-                    .await
-            }
-            DnsServerTransport::Tcp => {
-                self.execute_tcp_query(&ctx, &server.detour, &request.raw_message, query_id)
-                    .await
-            }
-            DnsServerTransport::Unsupported(kind) => {
-                return Err(ProxyError::protocol(format!(
-                    "dns server '{}' uses unsupported upstream type '{}'",
-                    server.tag, kind
-                )));
-            }
-        };
+        let response = self
+            .execute_server_query(&ctx, server, &request.raw_message, query_id)
+            .await;
 
         match response {
             Ok(response) => {
@@ -179,6 +180,34 @@ impl DnsExecutor {
         }
     }
 
+    async fn execute_server_query(
+        &self,
+        ctx: &SessionContext,
+        server: &DnsServer,
+        query: &[u8],
+        query_id: u64,
+    ) -> veex_core::Result<DnsResponse> {
+        match &server.transport {
+            DnsServerTransport::Udp => {
+                self.execute_udp_query(ctx, &server.detour, query, query_id)
+                    .await
+            }
+            DnsServerTransport::Tcp => self.execute_tcp_query(ctx, &server.detour, query).await,
+            DnsServerTransport::Tls(tls) => {
+                self.execute_tls_query(ctx, server, tls, query, query_id)
+                    .await
+            }
+            DnsServerTransport::Https(options) => {
+                self.execute_https_query(ctx, server, options, query, query_id)
+                    .await
+            }
+            DnsServerTransport::Unsupported(kind) => Err(ProxyError::protocol(format!(
+                "dns server '{}' uses unsupported upstream type '{}'",
+                server.tag, kind
+            ))),
+        }
+    }
+
     async fn execute_udp_query(
         &self,
         ctx: &SessionContext,
@@ -213,14 +242,134 @@ impl DnsExecutor {
         ctx: &SessionContext,
         detour: &str,
         query: &[u8],
-        _query_id: u64,
     ) -> veex_core::Result<DnsResponse> {
+        let mut stream = self.connect_detour_stream(ctx, detour).await?;
+        self.exchange_dns_over_stream(&mut *stream, query).await
+    }
+
+    async fn execute_tls_query(
+        &self,
+        ctx: &SessionContext,
+        server: &DnsServer,
+        tls: &TlsClientOptions,
+        query: &[u8],
+        query_id: u64,
+    ) -> veex_core::Result<DnsResponse> {
+        let stream = self.connect_detour_stream(ctx, &server.detour).await?;
+        let mut stream = self
+            .connect_tls_for_dns(stream, &server.destination, &server.detour, tls, query_id)
+            .await?;
+        self.exchange_dns_over_stream(&mut *stream, query).await
+    }
+
+    async fn execute_https_query(
+        &self,
+        ctx: &SessionContext,
+        server: &DnsServer,
+        options: &DnsHttpsOptions,
+        query: &[u8],
+        query_id: u64,
+    ) -> veex_core::Result<DnsResponse> {
+        let stream = self.connect_detour_stream(ctx, &server.detour).await?;
+        let mut stream = self
+            .connect_tls_for_dns(
+                stream,
+                &server.destination,
+                &server.detour,
+                &options.tls,
+                query_id,
+            )
+            .await?;
+
+        let host_header = options
+            .tls
+            .server_name
+            .clone()
+            .unwrap_or_else(|| server.destination.host.to_string());
+        let path_field = sanitize_field(&options.path).into_owned();
+        info!(
+            event = "dns_https_exchange_start",
+            query_id,
+            server = %sanitize_field(&server.tag),
+            detour = %sanitize_field(&server.detour),
+            path = %path_field,
+            "dns https exchange started"
+        );
+        http::write_doh_http1_request(
+            &mut *stream,
+            &host_header,
+            &options.path,
+            &options.headers,
+            query,
+        )
+        .await?;
+        let response = match timeout(
+            self.query_timeout,
+            http::read_doh_http1_response(&mut *stream),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(ProxyError::timeout(format!(
+                    "dns upstream response timeout after {} ms",
+                    self.query_timeout.as_millis()
+                )));
+            }
+        };
+        info!(
+            event = "dns_https_exchange_success",
+            query_id,
+            server = %sanitize_field(&server.tag),
+            detour = %sanitize_field(&server.detour),
+            path = %path_field,
+            response_bytes = response.len() as u64,
+            "dns https exchange succeeded"
+        );
+        Ok(DnsResponse::new(response))
+    }
+
+    async fn connect_detour_stream(
+        &self,
+        ctx: &SessionContext,
+        detour: &str,
+    ) -> veex_core::Result<BoxedAsyncStream> {
         let outbound = self.outbounds.get(detour).ok_or_else(|| {
             ProxyError::config(format!("missing outbound tag for dns detour: {detour}"))
         })?;
-        let mut stream = outbound.connect(ctx).await?;
-        write_dns_tcp_message(&mut *stream, query).await?;
-        let response = timeout(self.query_timeout, read_dns_tcp_message(&mut *stream)).await;
+        outbound.connect(ctx).await
+    }
+
+    async fn connect_tls_for_dns(
+        &self,
+        stream: BoxedAsyncStream,
+        destination: &Destination,
+        detour: &str,
+        tls: &TlsClientOptions,
+        query_id: u64,
+    ) -> veex_core::Result<BoxedAsyncStream> {
+        let trace = ConnectTraceContext {
+            session_id: query_id,
+            outbound: detour.to_string(),
+            routing_mark: None,
+        };
+        connect_tls_stream(
+            stream,
+            &destination.host,
+            destination.port,
+            tls,
+            Some(&trace),
+        )
+        .await
+    }
+
+    async fn exchange_dns_over_stream(
+        &self,
+        stream: &mut dyn veex_core::AsyncStream,
+        query: &[u8],
+    ) -> veex_core::Result<DnsResponse> {
+        write_dns_tcp_message(stream, query).await?;
+        let response = timeout(self.query_timeout, read_dns_tcp_message(stream)).await;
         let response = match response {
             Ok(result) => result?,
             Err(_) => {
@@ -248,6 +397,8 @@ impl DnsServerTransport {
         match self {
             Self::Udp => "udp",
             Self::Tcp => "tcp",
+            Self::Tls(_) => "tls",
+            Self::Https(_) => "https",
             Self::Unsupported(kind) => kind.as_str(),
         }
     }

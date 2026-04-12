@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use ipnet::IpNet;
 
@@ -128,13 +128,18 @@ pub struct DnsServerConfig {
     pub kind: DnsServerTypeConfig,
     pub server: String,
     pub server_port: u16,
+    pub path: Option<String>,
+    pub headers: BTreeMap<String, String>,
     pub detour: String,
+    pub tls: TrojanTlsConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DnsServerTypeConfig {
     Udp,
     Tcp,
+    Tls,
+    Https,
     Unsupported(String),
 }
 

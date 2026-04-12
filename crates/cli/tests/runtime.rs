@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     net::{Ipv4Addr, SocketAddr},
     path::PathBuf,
@@ -50,6 +51,8 @@ impl DnsIngressTransport {
 enum DnsUpstreamTransport {
     Udp,
     Tcp,
+    Tls,
+    Https,
 }
 
 impl DnsUpstreamTransport {
@@ -57,6 +60,8 @@ impl DnsUpstreamTransport {
         match self {
             Self::Udp => DnsServerTypeConfig::Udp,
             Self::Tcp => DnsServerTypeConfig::Tcp,
+            Self::Tls => DnsServerTypeConfig::Tls,
+            Self::Https => DnsServerTypeConfig::Https,
         }
     }
 
@@ -64,6 +69,8 @@ impl DnsUpstreamTransport {
         match self {
             Self::Udp => "udp",
             Self::Tcp => "tcp",
+            Self::Tls => "tls",
+            Self::Https => "https",
         }
     }
 }
@@ -260,6 +267,26 @@ async fn runtime_supports_tcp_dns_hijack_to_udp_upstream_round_trip() {
 #[tokio::test]
 async fn runtime_supports_tcp_dns_hijack_to_tcp_upstream_round_trip() {
     assert_dns_hijack_round_trip(DnsIngressTransport::Tcp, DnsUpstreamTransport::Tcp).await;
+}
+
+#[tokio::test]
+async fn runtime_supports_udp_dns_hijack_to_tls_upstream_round_trip() {
+    assert_dns_hijack_round_trip(DnsIngressTransport::Udp, DnsUpstreamTransport::Tls).await;
+}
+
+#[tokio::test]
+async fn runtime_supports_udp_dns_hijack_to_https_upstream_round_trip() {
+    assert_dns_hijack_round_trip(DnsIngressTransport::Udp, DnsUpstreamTransport::Https).await;
+}
+
+#[tokio::test]
+async fn runtime_supports_tcp_dns_hijack_to_tls_upstream_round_trip() {
+    assert_dns_hijack_round_trip(DnsIngressTransport::Tcp, DnsUpstreamTransport::Tls).await;
+}
+
+#[tokio::test]
+async fn runtime_supports_tcp_dns_hijack_to_https_upstream_round_trip() {
+    assert_dns_hijack_round_trip(DnsIngressTransport::Tcp, DnsUpstreamTransport::Https).await;
 }
 
 #[tokio::test]
@@ -1342,54 +1369,7 @@ async fn assert_dns_hijack_round_trip(
         DnsIngressTransport::Udp => reserve_udp_port().await,
         DnsIngressTransport::Tcp => reserve_local_port().await,
     };
-    let (upstream_addr, upstream_task) = match upstream {
-        DnsUpstreamTransport::Udp => {
-            let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-                .await
-                .expect("udp dns upstream should bind");
-            let addr = socket
-                .local_addr()
-                .expect("udp dns upstream addr should exist");
-            let task = tokio::spawn(async move {
-                let mut buf = [0u8; 1024];
-                let (size, peer) = socket
-                    .recv_from(&mut buf)
-                    .await
-                    .expect("udp dns upstream should receive query");
-                let response = build_dns_noerror_response(&buf[..size]);
-                socket
-                    .send_to(&response, peer)
-                    .await
-                    .expect("udp dns upstream should send response");
-                buf[..size].to_vec()
-            });
-            (addr, task)
-        }
-        DnsUpstreamTransport::Tcp => {
-            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-                .await
-                .expect("tcp dns upstream should bind");
-            let addr = listener
-                .local_addr()
-                .expect("tcp dns upstream addr should exist");
-            let task = tokio::spawn(async move {
-                let (mut stream, _) = listener
-                    .accept()
-                    .await
-                    .expect("tcp dns upstream should accept");
-                let query = read_dns_tcp_message(&mut stream)
-                    .await
-                    .expect("tcp dns upstream should read frame")
-                    .expect("tcp dns upstream should receive a query");
-                let response = build_dns_noerror_response(&query);
-                write_dns_tcp_message(&mut stream, &response)
-                    .await
-                    .expect("tcp dns upstream should write frame");
-                query
-            });
-            (addr, task)
-        }
-    };
+    let (upstream_addr, upstream_task) = spawn_dns_upstream_server(upstream).await;
     let config = ProxyConfig {
         log: LogConfig {
             level: "debug".into(),
@@ -1403,7 +1383,10 @@ async fn assert_dns_hijack_round_trip(
                 kind: upstream.as_kind(),
                 server: "127.0.0.1".into(),
                 server_port: upstream_addr.port(),
+                path: dns_server_path(upstream),
+                headers: dns_server_headers(upstream),
                 detour: "direct".into(),
+                tls: dns_server_tls_config(upstream),
             }],
             rules: vec![DnsRuleConfig {
                 domain: vec!["trojan.example.com".into()],
@@ -1466,9 +1449,26 @@ async fn assert_dns_hijack_round_trip(
         .expect("runtime task should join")
         .expect("runtime should stop cleanly");
 
-    let upstream_query = upstream_task.await.expect("dns upstream task should join");
-    assert_eq!(upstream_query, query);
+    let upstream_observation = upstream_task.await.expect("dns upstream task should join");
+    assert_eq!(upstream_observation.query, query);
     assert_eq!(response, build_dns_noerror_response(&query));
+    if matches!(upstream, DnsUpstreamTransport::Https) {
+        assert_eq!(upstream_observation.path.as_deref(), Some("/dns-query"));
+        assert_eq!(
+            upstream_observation
+                .headers
+                .get("x-veex-dns")
+                .map(String::as_str),
+            Some("step-b")
+        );
+        assert_eq!(
+            upstream_observation
+                .headers
+                .get("content-type")
+                .map(String::as_str),
+            Some("application/dns-message")
+        );
+    }
 
     let events = captured_events(&trace_buffer);
     assert_has_event(
@@ -1530,6 +1530,146 @@ async fn assert_dns_hijack_round_trip(
                 "tcp dns hijack should not enter relay: {events:?}"
             );
         }
+    }
+
+    if matches!(
+        upstream,
+        DnsUpstreamTransport::Tls | DnsUpstreamTransport::Https
+    ) {
+        assert_has_event(
+            &events,
+            "tls_handshake_start",
+            &[
+                ("outbound", "direct"),
+                ("server_name", "localhost"),
+                ("level", "INFO"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "tls_handshake_success",
+            &[
+                ("outbound", "direct"),
+                ("server_name", "localhost"),
+                ("level", "INFO"),
+            ],
+        );
+    }
+
+    if matches!(upstream, DnsUpstreamTransport::Https) {
+        assert_has_event(
+            &events,
+            "dns_https_exchange_start",
+            &[("server", "direct-dns"), ("level", "INFO")],
+        );
+        assert_has_event(
+            &events,
+            "dns_https_exchange_success",
+            &[("server", "direct-dns"), ("level", "INFO")],
+        );
+    }
+}
+
+struct DnsUpstreamObservation {
+    query: Vec<u8>,
+    path: Option<String>,
+    headers: BTreeMap<String, String>,
+}
+
+async fn spawn_dns_upstream_server(
+    upstream: DnsUpstreamTransport,
+) -> (SocketAddr, tokio::task::JoinHandle<DnsUpstreamObservation>) {
+    match upstream {
+        DnsUpstreamTransport::Udp => {
+            let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("udp dns upstream should bind");
+            let addr = socket
+                .local_addr()
+                .expect("udp dns upstream addr should exist");
+            let task = tokio::spawn(async move {
+                let mut buf = [0u8; 1024];
+                let (size, peer) = socket
+                    .recv_from(&mut buf)
+                    .await
+                    .expect("udp dns upstream should receive query");
+                let response = build_dns_noerror_response(&buf[..size]);
+                socket
+                    .send_to(&response, peer)
+                    .await
+                    .expect("udp dns upstream should send response");
+                DnsUpstreamObservation {
+                    query: buf[..size].to_vec(),
+                    path: None,
+                    headers: BTreeMap::new(),
+                }
+            });
+            (addr, task)
+        }
+        DnsUpstreamTransport::Tcp => {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("tcp dns upstream should bind");
+            let addr = listener
+                .local_addr()
+                .expect("tcp dns upstream addr should exist");
+            let task = tokio::spawn(async move {
+                let (mut stream, _) = listener
+                    .accept()
+                    .await
+                    .expect("tcp dns upstream should accept");
+                let query = read_dns_tcp_message(&mut stream)
+                    .await
+                    .expect("tcp dns upstream should read frame")
+                    .expect("tcp dns upstream should receive a query");
+                let response = build_dns_noerror_response(&query);
+                write_dns_tcp_message(&mut stream, &response)
+                    .await
+                    .expect("tcp dns upstream should write frame");
+                DnsUpstreamObservation {
+                    query,
+                    path: None,
+                    headers: BTreeMap::new(),
+                }
+            });
+            (addr, task)
+        }
+        DnsUpstreamTransport::Tls => spawn_dns_tls_upstream("localhost").await,
+        DnsUpstreamTransport::Https => spawn_dns_https_upstream("localhost").await,
+    }
+}
+
+fn dns_server_tls_config(upstream: DnsUpstreamTransport) -> TrojanTlsConfig {
+    TrojanTlsConfig {
+        enabled: true,
+        server_name: match upstream {
+            DnsUpstreamTransport::Tls | DnsUpstreamTransport::Https => Some("localhost".into()),
+            DnsUpstreamTransport::Udp | DnsUpstreamTransport::Tcp => None,
+        },
+        disable_sni: false,
+        insecure: matches!(
+            upstream,
+            DnsUpstreamTransport::Tls | DnsUpstreamTransport::Https
+        ),
+        certificate_path: None,
+        ca_path: None,
+        handshake_timeout: DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+    }
+}
+
+fn dns_server_path(upstream: DnsUpstreamTransport) -> Option<String> {
+    match upstream {
+        DnsUpstreamTransport::Https => Some("/dns-query".into()),
+        _ => None,
+    }
+}
+
+fn dns_server_headers(upstream: DnsUpstreamTransport) -> BTreeMap<String, String> {
+    match upstream {
+        DnsUpstreamTransport::Https => {
+            BTreeMap::from([(String::from("X-VeeX-Dns"), String::from("step-b"))])
+        }
+        _ => BTreeMap::new(),
     }
 }
 
@@ -1598,6 +1738,165 @@ fn build_dns_noerror_response(query: &[u8]) -> Vec<u8> {
     response.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
     response.extend_from_slice(&query[12..]);
     response
+}
+
+async fn spawn_dns_tls_upstream(
+    server_name: &str,
+) -> (SocketAddr, tokio::task::JoinHandle<DnsUpstreamObservation>) {
+    let acceptor = build_test_tls_acceptor(server_name);
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("tls dns upstream should bind");
+    let addr = listener
+        .local_addr()
+        .expect("tls dns upstream addr should exist");
+    let task = tokio::spawn(async move {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("tls dns upstream should accept");
+        let mut stream = acceptor
+            .accept(stream)
+            .await
+            .expect("tls dns upstream should accept tls");
+        let query = read_dns_tcp_message(&mut stream)
+            .await
+            .expect("tls dns upstream should read frame")
+            .expect("tls dns upstream should receive a query");
+        let response = build_dns_noerror_response(&query);
+        write_dns_tcp_message(&mut stream, &response)
+            .await
+            .expect("tls dns upstream should write frame");
+        DnsUpstreamObservation {
+            query,
+            path: None,
+            headers: BTreeMap::new(),
+        }
+    });
+    (addr, task)
+}
+
+async fn spawn_dns_https_upstream(
+    server_name: &str,
+) -> (SocketAddr, tokio::task::JoinHandle<DnsUpstreamObservation>) {
+    let acceptor = build_test_tls_acceptor(server_name);
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("https dns upstream should bind");
+    let addr = listener
+        .local_addr()
+        .expect("https dns upstream addr should exist");
+    let task = tokio::spawn(async move {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("https dns upstream should accept");
+        let mut stream = acceptor
+            .accept(stream)
+            .await
+            .expect("https dns upstream should accept tls");
+        let (path, headers, query) = read_http1_request(&mut stream).await;
+        let response = build_dns_noerror_response(&query);
+        write_http1_dns_response(&mut stream, &response)
+            .await
+            .expect("https dns upstream should write response");
+        DnsUpstreamObservation {
+            query,
+            path: Some(path),
+            headers,
+        }
+    });
+    (addr, task)
+}
+
+fn build_test_tls_acceptor(server_name: &str) -> TlsAcceptor {
+    let certified = generate_simple_self_signed(vec![server_name.to_string()])
+        .expect("certificate generation should succeed");
+    let certificate = certified.cert.der().clone();
+    let key = certified.key_pair.serialize_der();
+    let config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![CertificateDer::from(certificate.as_ref().to_vec())],
+            PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key)),
+        )
+        .expect("server config should build");
+    TlsAcceptor::from(Arc::new(config))
+}
+
+async fn read_http1_request<S>(stream: &mut S) -> (String, BTreeMap<String, String>, Vec<u8>)
+where
+    S: tokio::io::AsyncRead + Unpin,
+{
+    let mut head = Vec::new();
+    loop {
+        let byte = stream
+            .read_u8()
+            .await
+            .expect("http request should remain readable");
+        head.push(byte);
+        if head.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+
+    head.truncate(head.len() - 4);
+    let head = String::from_utf8(head).expect("http request head should be valid utf-8");
+    let mut lines = head.split("\r\n");
+    let request_line = lines.next().expect("http request line should exist");
+    let mut request_parts = request_line.split_whitespace();
+    assert_eq!(request_parts.next(), Some("POST"));
+    let path = request_parts
+        .next()
+        .expect("http request path should exist")
+        .to_string();
+
+    let mut headers = BTreeMap::new();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        let (name, value) = line
+            .split_once(':')
+            .expect("http request header should contain ':'");
+        headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+    }
+
+    let content_length = headers
+        .get("content-length")
+        .expect("http request should include content-length")
+        .parse::<usize>()
+        .expect("content-length should be numeric");
+    let mut body = vec![0u8; content_length];
+    stream
+        .read_exact(&mut body)
+        .await
+        .expect("http request body should read");
+
+    (path, headers, body)
+}
+
+async fn write_http1_dns_response<S>(stream: &mut S, body: &[u8]) -> Result<(), String>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+{
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream
+        .write_all(head.as_bytes())
+        .await
+        .map_err(|err| format!("failed to write http response headers: {err}"))?;
+    stream
+        .write_all(body)
+        .await
+        .map_err(|err| format!("failed to write http response body: {err}"))?;
+    stream
+        .flush()
+        .await
+        .map_err(|err| format!("failed to flush http response: {err}"))?;
+    Ok(())
 }
 
 async fn reserve_udp_port() -> SocketAddr {

@@ -23,7 +23,7 @@ use crate::verifier::{
     build_client_config, validate_certificate_paths, CertificateVerifierOptions, VerifierError,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TlsClientOptions {
     pub enabled: bool,
     pub server_name: Option<String>,
@@ -142,6 +142,31 @@ pub async fn connect_tls(
     options: &TlsClientOptions,
     trace: Option<&ConnectTraceContext>,
 ) -> Result<BoxedAsyncStream> {
+    let resolved_addr = stream.peer_addr().ok();
+    connect_tls_inner(stream, resolved_addr, host, port, options, trace).await
+}
+
+pub async fn connect_tls_stream(
+    stream: BoxedAsyncStream,
+    host: &Host,
+    port: u16,
+    options: &TlsClientOptions,
+    trace: Option<&ConnectTraceContext>,
+) -> Result<BoxedAsyncStream> {
+    connect_tls_inner(stream, None, host, port, options, trace).await
+}
+
+async fn connect_tls_inner<S>(
+    stream: S,
+    resolved_addr: Option<SocketAddr>,
+    host: &Host,
+    port: u16,
+    options: &TlsClientOptions,
+    trace: Option<&ConnectTraceContext>,
+) -> Result<BoxedAsyncStream>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     if !options.enabled {
         return Ok(Box::new(stream));
     }
@@ -167,7 +192,7 @@ pub async fn connect_tls(
     let host_field = host.to_string();
     let host_field = sanitize_field(&host_field).into_owned();
     let server_name_field = sanitize_field(&server_name).into_owned();
-    let trace_fields = TlsTraceFields::new(&stream, &host_field, &server_name_field, port);
+    let trace_fields = TlsTraceFields::new(&host_field, &server_name_field, port, resolved_addr);
     let tls_start = Instant::now();
 
     // Transport owns TLS handshake events and keeps them scoped to host/port/socket details.
@@ -231,12 +256,17 @@ struct TlsTraceFields<'a> {
 }
 
 impl<'a> TlsTraceFields<'a> {
-    fn new(stream: &TcpStream, host_field: &'a str, server_name_field: &'a str, port: u16) -> Self {
+    fn new(
+        host_field: &'a str,
+        server_name_field: &'a str,
+        port: u16,
+        resolved_addr: Option<SocketAddr>,
+    ) -> Self {
         Self {
             host_field,
             server_name_field,
             port,
-            resolved_addr: stream.peer_addr().ok(),
+            resolved_addr,
         }
     }
 

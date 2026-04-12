@@ -837,6 +837,7 @@ dependencies = [
  "tracing",
  "veex-core",
  "veex-test-tracing",
+ "veex-transport",
 ]
 
 [[package]]

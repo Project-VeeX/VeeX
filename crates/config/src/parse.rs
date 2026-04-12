@@ -49,6 +49,11 @@ struct ParseReport {
     diagnostics: ParseDiagnostics,
 }
 
+const DEFAULT_DNS_SERVER_PORT: u16 = 53;
+const DEFAULT_DOT_SERVER_PORT: u16 = 853;
+const DEFAULT_DOH_SERVER_PORT: u16 = 443;
+const DEFAULT_DOH_PATH: &str = "/dns-query";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IgnoredDisposition {
     Ignore(&'static str),
@@ -290,21 +295,39 @@ fn input_dns_server_into_config(
     input_server: InputDnsServer,
     index: usize,
 ) -> Result<DnsServerConfig, ConfigError> {
+    let kind = parse_dns_server_type(input_server.kind);
     Ok(DnsServerConfig {
         tag: input_server.tag,
-        kind: parse_dns_server_type(input_server.kind),
+        kind: kind.clone(),
         server: required_nested_string(
             input_server.server,
             format!("$.dns.servers[{index}].server"),
         )?,
-        server_port: required_nested_port(
+        server_port: nested_port_or_default(
             input_server.server_port,
             format!("$.dns.servers[{index}].server_port"),
+            default_dns_server_port(&kind),
+        )?,
+        path: optional_nested_string(input_server.path, format!("$.dns.servers[{index}].path"))?
+            .or_else(|| {
+                if matches!(kind, DnsServerTypeConfig::Https) {
+                    Some(DEFAULT_DOH_PATH.to_string())
+                } else {
+                    None
+                }
+            }),
+        headers: optional_string_map(
+            input_server.headers,
+            format!("$.dns.servers[{index}].headers"),
         )?,
         detour: required_nested_string(
             input_server.detour,
             format!("$.dns.servers[{index}].detour"),
         )?,
+        tls: input_trojan_tls_into_config(input_trojan_tls_or_default(
+            input_server.tls,
+            format!("$.dns.servers[{index}].tls"),
+        )?),
     })
 }
 
@@ -344,7 +367,19 @@ fn parse_dns_server_type(value: String) -> DnsServerTypeConfig {
     match value.trim().to_ascii_lowercase().as_str() {
         "udp" => DnsServerTypeConfig::Udp,
         "tcp" => DnsServerTypeConfig::Tcp,
+        "tls" => DnsServerTypeConfig::Tls,
+        "https" => DnsServerTypeConfig::Https,
         other => DnsServerTypeConfig::Unsupported(other.to_string()),
+    }
+}
+
+fn default_dns_server_port(kind: &DnsServerTypeConfig) -> u16 {
+    match kind {
+        DnsServerTypeConfig::Udp
+        | DnsServerTypeConfig::Tcp
+        | DnsServerTypeConfig::Unsupported(_) => DEFAULT_DNS_SERVER_PORT,
+        DnsServerTypeConfig::Tls => DEFAULT_DOT_SERVER_PORT,
+        DnsServerTypeConfig::Https => DEFAULT_DOH_SERVER_PORT,
     }
 }
 
@@ -462,6 +497,43 @@ fn required_nested_port(
         Some(Some(value)) => Ok(value),
         Some(None) => Err(ConfigError::validation(path, "expected integer port")),
         None => Err(ConfigError::validation(path, "field is required")),
+    }
+}
+
+fn nested_port_or_default(
+    value: Option<Option<u16>>,
+    path: impl Into<String>,
+    default: u16,
+) -> Result<u16, ConfigError> {
+    let path = path.into();
+    match value {
+        Some(Some(value)) => Ok(value),
+        Some(None) => Err(ConfigError::validation(path, "expected integer port")),
+        None => Ok(default),
+    }
+}
+
+fn optional_nested_string(
+    value: Option<Option<String>>,
+    path: impl Into<String>,
+) -> Result<Option<String>, ConfigError> {
+    let path = path.into();
+    match value {
+        Some(Some(value)) => Ok(Some(value)),
+        Some(None) => Err(ConfigError::validation(path, "expected string")),
+        None => Ok(None),
+    }
+}
+
+fn optional_string_map(
+    value: Option<Option<std::collections::BTreeMap<String, String>>>,
+    path: impl Into<String>,
+) -> Result<std::collections::BTreeMap<String, String>, ConfigError> {
+    let path = path.into();
+    match value {
+        Some(Some(value)) => Ok(value),
+        Some(None) => Err(ConfigError::validation(path, "expected object")),
+        None => Ok(std::collections::BTreeMap::new()),
     }
 }
 
@@ -625,8 +697,8 @@ fn classify_dns_ignored(field: &str) -> Option<IgnoredDisposition> {
             "address" | "domain_resolver" | "address_resolver" => IgnoredDisposition::Warn(
                 "field is accepted for compatibility but does not affect the current dns server runtime",
             ),
-            "path" | "tls" | "headers" | "client_subnet" => IgnoredDisposition::Ignore(
-                "field is accepted for future dns upstream support but ignored by the current udp/tcp dns runtime",
+            "client_subnet" => IgnoredDisposition::Ignore(
+                "field is accepted for compatibility but ignored by the current dns server runtime",
             ),
             _ => return None,
         });
@@ -958,7 +1030,10 @@ mod tests {
         DEFAULT_TLS_HANDSHAKE_TIMEOUT,
     };
 
-    use super::{parse_config, parse_config_report_unvalidated, parse_config_with_diagnostics};
+    use super::{
+        parse_config, parse_config_report_unvalidated, parse_config_with_diagnostics,
+        DEFAULT_DOH_PATH, DEFAULT_DOH_SERVER_PORT, DEFAULT_DOT_SERVER_PORT,
+    };
 
     #[test]
     fn parses_valid_minimal_config() {
@@ -1238,6 +1313,92 @@ mod tests {
         let config = parse_config(input).expect("dns tcp config should parse");
         let dns = config.dns.expect("dns config should exist");
         assert!(matches!(dns.servers[0].kind, DnsServerTypeConfig::Tcp));
+    }
+
+    #[test]
+    fn parses_dns_tls_server_type_with_default_port() {
+        let input = r#"
+        {
+          "dns": {
+            "final": "dot-dns",
+            "servers": [
+              {
+                "tag": "dot-dns",
+                "type": "tls",
+                "server": "dns.example.com",
+                "detour": "direct",
+                "tls": {
+                  "server_name": "dns.example.com",
+                  "insecure": true
+                }
+              }
+            ]
+          },
+          "inbounds": [
+            { "type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": 15353, "network": "udp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct"
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("dns tls config should parse");
+        let dns = config.dns.expect("dns config should exist");
+        assert!(matches!(dns.servers[0].kind, DnsServerTypeConfig::Tls));
+        assert_eq!(dns.servers[0].server_port, DEFAULT_DOT_SERVER_PORT);
+        assert_eq!(
+            dns.servers[0].tls.server_name.as_deref(),
+            Some("dns.example.com")
+        );
+    }
+
+    #[test]
+    fn parses_dns_https_server_type_with_default_port_and_path() {
+        let input = r#"
+        {
+          "dns": {
+            "final": "doh-dns",
+            "servers": [
+              {
+                "tag": "doh-dns",
+                "type": "https",
+                "server": "dns.example.com",
+                "headers": {
+                  "X-Test": "true"
+                },
+                "detour": "direct",
+                "tls": {
+                  "server_name": "dns.example.com",
+                  "insecure": true
+                }
+              }
+            ]
+          },
+          "inbounds": [
+            { "type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": 15353, "network": "udp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct"
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("dns https config should parse");
+        let dns = config.dns.expect("dns config should exist");
+        assert!(matches!(dns.servers[0].kind, DnsServerTypeConfig::Https));
+        assert_eq!(dns.servers[0].server_port, DEFAULT_DOH_SERVER_PORT);
+        assert_eq!(dns.servers[0].path.as_deref(), Some(DEFAULT_DOH_PATH));
+        assert_eq!(
+            dns.servers[0].headers.get("X-Test").map(String::as_str),
+            Some("true")
+        );
     }
 
     #[test]

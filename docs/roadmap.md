@@ -17,7 +17,7 @@ That baseline includes:
 - sequential multi-address connect fallback
 - dispatcher-owned UDP association mapping for `direct` inbound to `direct` outbound
 - `hijack-dns` final-action handoff into a minimal DNS executor
-- UDP or TCP DNS upstream queries routed through detour-aware outbound stream/packet capability
+- UDP, TCP, DoT, or DoH DNS upstream queries routed through detour-aware outbound stream/packet capability
 - structured observability and stable error classification
 
 The project priority remains consolidation and validation of this execution plane rather than expansion into a broader network platform.
@@ -102,7 +102,6 @@ The current roadmap remains focused on tightening the existing surface:
 The following are not part of the current roadmap:
 
 - FakeDNS
-- DoH or DoT
 - generalized UDP proxying beyond the current `direct-in -> direct-out` packet foundation
 - TUN
 - kernel-level bypass semantics

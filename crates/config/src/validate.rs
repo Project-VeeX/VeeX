@@ -4,8 +4,9 @@ use crate::{
     defaults::DEFAULT_DIRECT_OUTBOUND_TAG,
     error::ConfigError,
     schema::{
-        DirectInboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig, InboundConfig,
-        OutboundConfig, ProxyConfig, RouteActionConfig, RouteFinalActionConfig, RouteRuleConfig,
+        DirectInboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig, DnsServerTypeConfig,
+        InboundConfig, OutboundConfig, ProxyConfig, RouteActionConfig, RouteFinalActionConfig,
+        RouteRuleConfig,
     },
 };
 
@@ -289,7 +290,66 @@ fn validate_dns_server(
         ));
     }
 
+    if matches!(
+        server.kind,
+        DnsServerTypeConfig::Tls | DnsServerTypeConfig::Https
+    ) {
+        if !server.tls.enabled {
+            return Err(ConfigError::semantic(
+                format!("$.dns.servers[{index}].tls.enabled"),
+                "dns tls/https server requires tls.enabled=true",
+            ));
+        }
+
+        if server.tls.disable_sni && !server.tls.insecure && server.tls.server_name.is_none() {
+            return Err(ConfigError::semantic(
+                format!("$.dns.servers[{index}].tls"),
+                "disable_sni=true requires server_name or insecure=true",
+            ));
+        }
+    }
+
+    if matches!(server.kind, DnsServerTypeConfig::Https) {
+        let path = server.path.as_deref().ok_or_else(|| {
+            ConfigError::semantic(
+                format!("$.dns.servers[{index}].path"),
+                "https dns server requires a request path",
+            )
+        })?;
+        if path.trim().is_empty() {
+            return Err(ConfigError::semantic(
+                format!("$.dns.servers[{index}].path"),
+                "https dns server path must not be empty",
+            ));
+        }
+        if !path.starts_with('/') {
+            return Err(ConfigError::semantic(
+                format!("$.dns.servers[{index}].path"),
+                "https dns server path must start with '/'",
+            ));
+        }
+    }
+
+    for (header_name, header_value) in &server.headers {
+        if header_name.trim().is_empty() {
+            return Err(ConfigError::semantic(
+                format!("$.dns.servers[{index}].headers"),
+                "dns https header name must not be empty",
+            ));
+        }
+        if contains_http_newline(header_name) || contains_http_newline(header_value) {
+            return Err(ConfigError::semantic(
+                format!("$.dns.servers[{index}].headers"),
+                "dns https headers must not contain CR or LF characters",
+            ));
+        }
+    }
+
     Ok(())
+}
+
+fn contains_http_newline(value: &str) -> bool {
+    value.contains('\r') || value.contains('\n')
 }
 
 fn validate_dns_rule(
@@ -467,7 +527,18 @@ mod tests {
                 kind: DnsServerTypeConfig::Udp,
                 server: "223.5.5.5".into(),
                 server_port: 53,
+                path: None,
+                headers: Default::default(),
                 detour: "direct".into(),
+                tls: crate::TrojanTlsConfig {
+                    enabled: true,
+                    server_name: None,
+                    disable_sni: false,
+                    insecure: false,
+                    certificate_path: None,
+                    ca_path: None,
+                    handshake_timeout: crate::DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+                },
             }],
             rules: vec![],
         });
@@ -485,12 +556,84 @@ mod tests {
                 kind: DnsServerTypeConfig::Tcp,
                 server: "223.5.5.5".into(),
                 server_port: 53,
+                path: None,
+                headers: Default::default(),
                 detour: "direct".into(),
+                tls: crate::TrojanTlsConfig {
+                    enabled: true,
+                    server_name: None,
+                    disable_sni: false,
+                    insecure: false,
+                    certificate_path: None,
+                    ca_path: None,
+                    handshake_timeout: crate::DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+                },
             }],
             rules: vec![],
         });
 
         validate_config(&config).expect("tcp dns section should validate");
+    }
+
+    #[test]
+    fn accepts_dns_section_with_tls_server_detour() {
+        let mut config = valid_config();
+        config.dns = Some(DnsConfig {
+            final_server: "dot".into(),
+            servers: vec![DnsServerConfig {
+                tag: "dot".into(),
+                kind: DnsServerTypeConfig::Tls,
+                server: "dns.example.com".into(),
+                server_port: 853,
+                path: None,
+                headers: Default::default(),
+                detour: "direct".into(),
+                tls: crate::TrojanTlsConfig {
+                    enabled: true,
+                    server_name: Some("dns.example.com".into()),
+                    disable_sni: false,
+                    insecure: false,
+                    certificate_path: None,
+                    ca_path: None,
+                    handshake_timeout: crate::DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+                },
+            }],
+            rules: vec![],
+        });
+
+        validate_config(&config).expect("tls dns section should validate");
+    }
+
+    #[test]
+    fn accepts_dns_section_with_https_server_detour() {
+        let mut config = valid_config();
+        config.dns = Some(DnsConfig {
+            final_server: "doh".into(),
+            servers: vec![DnsServerConfig {
+                tag: "doh".into(),
+                kind: DnsServerTypeConfig::Https,
+                server: "dns.example.com".into(),
+                server_port: 443,
+                path: Some("/dns-query".into()),
+                headers: std::collections::BTreeMap::from([(
+                    String::from("X-Test"),
+                    String::from("true"),
+                )]),
+                detour: "direct".into(),
+                tls: crate::TrojanTlsConfig {
+                    enabled: true,
+                    server_name: Some("dns.example.com".into()),
+                    disable_sni: false,
+                    insecure: false,
+                    certificate_path: None,
+                    ca_path: None,
+                    handshake_timeout: crate::DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+                },
+            }],
+            rules: vec![],
+        });
+
+        validate_config(&config).expect("https dns section should validate");
     }
 
     #[test]
