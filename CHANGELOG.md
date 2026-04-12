@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0
+
+- Implemented a minimal formal closed loop for the DNS (include hijack-dns router action, dns-executor, dns-router, dns-server, etc.).
+- Added DOT and DOH upstream support for secure DNS resolution.    
+- Implemented the domain resolver to use for resolving outbound domain names it own.
+- Implemented and decoupled the TCP path.
+- Added minimal UDP packet execution path.
+- Added direct  inbound support for direct traffic handling. 
+
 ## 0.5.3
 
 - Refactored the runtime skeleton around protocol-owned subjects: inbound and outbound implementations now own their long-lived state directly, without shadow runtime wrappers or split execution copies.
