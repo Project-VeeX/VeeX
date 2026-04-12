@@ -236,7 +236,6 @@ impl DnsExecutor {
             },
             Vec::new(),
         );
-        ctx.set_domain_resolver_override(server.domain_resolver.clone());
         ctx.set_resolve_context(Some(resolve_context.for_dns_upstream_dial(
             server.detour.clone(),
             server.tag.clone(),
@@ -263,7 +262,6 @@ impl DnsExecutor {
             },
             Vec::new(),
         );
-        ctx.set_domain_resolver_override(server.domain_resolver.clone());
         ctx.set_resolve_context(Some(resolve_context.clone()));
         ctx.state.buffered_payload = domain.as_bytes().to_vec();
         ctx

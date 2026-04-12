@@ -205,8 +205,6 @@ impl SessionRoute {
 pub struct SessionState {
     /// Payload data received from the client before the outbound was selected.
     pub buffered_payload: Vec<u8>,
-    /// Optional per-session override for the dns server used during dial-side resolution.
-    pub domain_resolver_override: Option<String>,
     /// Optional resolver context propagated into nested dial-side resolution.
     pub resolve_context: Option<ResolveContext>,
 }
@@ -232,7 +230,6 @@ impl SessionContext {
             route: SessionRoute::default(),
             state: SessionState {
                 buffered_payload,
-                domain_resolver_override: None,
                 resolve_context: None,
             },
         }
@@ -240,10 +237,6 @@ impl SessionContext {
 
     pub fn set_route(&mut self, selected_outbound: impl Into<String>, reason: RouteReason) {
         self.route = SessionRoute::selected(selected_outbound, reason);
-    }
-
-    pub fn set_domain_resolver_override(&mut self, resolver: Option<String>) {
-        self.state.domain_resolver_override = resolver;
     }
 
     pub fn set_resolve_context(&mut self, context: Option<ResolveContext>) {

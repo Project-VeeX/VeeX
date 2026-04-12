@@ -19,6 +19,7 @@ pub fn build_outbounds(
     for outbound in config.outbounds.iter().map(lower_outbound) {
         match outbound {
             LoweredOutbound::Direct(direct) => {
+                let resolver_policy = direct.dial.domain_resolver.clone();
                 let logger =
                     veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
                 let dialer =
@@ -28,18 +29,21 @@ pub fn build_outbounds(
                 let instance: Arc<dyn OutboundConnector> = Arc::new(DirectOutbound::new(
                     direct.meta,
                     logger,
+                    resolver_policy,
                     dialer,
                     packet_dialer,
                 )?);
                 registry.register(instance)?;
             }
             LoweredOutbound::Trojan(trojan) => {
+                let resolver_policy = trojan.dial.domain_resolver.clone();
                 let logger =
                     veex_core::Logger::new(trojan.meta.tag.clone(), trojan.meta.r#type.clone());
                 let dialer = build_trojan_dialer(trojan.dial, Arc::clone(&services.host_resolver));
                 let instance: Arc<dyn OutboundConnector> = Arc::new(TrojanOutbound::new(
                     trojan.meta,
                     logger,
+                    resolver_policy,
                     dialer,
                     trojan.upstream_addr,
                     trojan.key,

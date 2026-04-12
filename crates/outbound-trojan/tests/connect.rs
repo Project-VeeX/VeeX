@@ -28,6 +28,7 @@ async fn trojan_outbound_connects_and_writes_request() {
     let outbound = TrojanOutbound::new(
         OutboundMeta::new("proxy", "trojan"),
         Logger::new("proxy", "trojan"),
+        None,
         build_dialer(
             Dial {
                 timeout: Some(std::time::Duration::from_secs(1)),

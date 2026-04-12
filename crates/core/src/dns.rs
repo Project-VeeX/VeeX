@@ -121,6 +121,28 @@ impl ResolveContext {
         self
     }
 
+    pub fn from_outbound_policy(
+        existing: Option<&ResolveContext>,
+        caller_outbound_tag: impl Into<String>,
+        explicit_server_tag: Option<String>,
+    ) -> Self {
+        let caller_outbound_tag = caller_outbound_tag.into();
+
+        match existing {
+            Some(existing) => {
+                let mut context = existing.clone();
+                if context.caller_outbound_tag.is_none() {
+                    context.caller_outbound_tag = Some(caller_outbound_tag);
+                }
+                if context.explicit_server_tag.is_none() {
+                    context.explicit_server_tag = explicit_server_tag;
+                }
+                context
+            }
+            None => Self::outbound_dial(caller_outbound_tag, explicit_server_tag),
+        }
+    }
+
     pub fn for_dns_upstream_dial(
         &self,
         caller_outbound_tag: impl Into<String>,
@@ -191,7 +213,7 @@ mod tests {
 
     use tokio::{io::duplex, time::timeout};
 
-    use super::{read_dns_tcp_message, write_dns_tcp_message};
+    use super::{read_dns_tcp_message, write_dns_tcp_message, ResolveContext};
 
     #[tokio::test]
     async fn tcp_dns_frame_round_trip_preserves_payload() {
@@ -223,5 +245,19 @@ mod tests {
             .expect("clean eof should be accepted");
 
         assert!(read.is_none());
+    }
+
+    #[test]
+    fn outbound_policy_preserves_existing_explicit_resolver() {
+        let parent = ResolveContext::outbound_dial("dns-detour", Some("bootstrap".into()));
+
+        let context = ResolveContext::from_outbound_policy(
+            Some(&parent),
+            "proxy",
+            Some("outbound-default".into()),
+        );
+
+        assert_eq!(context.caller_outbound_tag.as_deref(), Some("dns-detour"));
+        assert_eq!(context.explicit_server_tag.as_deref(), Some("bootstrap"));
     }
 }

@@ -11,8 +11,8 @@ use std::{
 
 use veex_core::{
     BoxFuture, BoxedAsyncStream, DialContext, Dialer, Logger, Outbound, OutboundConnector,
-    OutboundMeta, PacketDialer, PacketSessionHandle, ProxyError, Result, SessionContext,
-    StreamOutbound,
+    OutboundMeta, PacketDialer, PacketSessionHandle, ProxyError, ResolveContext, Result,
+    SessionContext, StreamOutbound,
 };
 
 #[derive(Debug)]
@@ -23,6 +23,7 @@ struct DirectOutboundState {
 pub struct DirectOutbound {
     meta: OutboundMeta,
     logger: Logger,
+    resolver_policy: Option<String>,
     stream_dialer: Dialer,
     packet_dialer: PacketDialer,
     state: Arc<DirectOutboundState>,
@@ -33,6 +34,7 @@ impl fmt::Debug for DirectOutbound {
         f.debug_struct("DirectOutbound")
             .field("meta", &self.meta)
             .field("logger", &self.logger)
+            .field("resolver_policy", &self.resolver_policy)
             .field("stream_dialer", &self.stream_dialer)
             .field("packet_dialer", &self.packet_dialer)
             .finish()
@@ -43,12 +45,14 @@ impl DirectOutbound {
     pub fn new(
         meta: OutboundMeta,
         logger: Logger,
+        resolver_policy: Option<String>,
         stream_dialer: Dialer,
         packet_dialer: PacketDialer,
     ) -> Result<Self> {
         let outbound = Self {
             meta,
             logger,
+            resolver_policy,
             stream_dialer,
             packet_dialer,
             state: Arc::new(DirectOutboundState {
@@ -72,6 +76,18 @@ impl DirectOutbound {
 
     fn is_closed(&self) -> bool {
         self.state.closed.load(Ordering::Relaxed)
+    }
+
+    fn build_dial_context(&self, ctx: &SessionContext) -> DialContext {
+        DialContext {
+            session_id: ctx.meta.id,
+            outbound_tag: self.meta.tag.clone(),
+            resolve_context: Some(ResolveContext::from_outbound_policy(
+                ctx.state.resolve_context.as_ref(),
+                self.meta.tag.clone(),
+                self.resolver_policy.clone(),
+            )),
+        }
     }
 }
 
@@ -99,12 +115,7 @@ impl StreamOutbound for DirectOutbound {
     fn connect_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
         let destination = ctx.meta.destination.clone();
         let dialer = self.stream_dialer.clone();
-        let trace = DialContext {
-            session_id: ctx.meta.id,
-            outbound_tag: self.meta.tag.clone(),
-            domain_resolver_override: ctx.state.domain_resolver_override.clone(),
-            resolve_context: ctx.state.resolve_context.clone(),
-        };
+        let trace = self.build_dial_context(ctx);
         let closed = self.is_closed();
 
         Box::pin(async move {
@@ -128,12 +139,7 @@ impl OutboundConnector for DirectOutbound {
     fn connect_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
         let destination = ctx.meta.destination.clone();
         let dialer = self.packet_dialer.clone();
-        let trace = DialContext {
-            session_id: ctx.meta.id,
-            outbound_tag: self.meta.tag.clone(),
-            domain_resolver_override: ctx.state.domain_resolver_override.clone(),
-            resolve_context: ctx.state.resolve_context.clone(),
-        };
+        let trace = self.build_dial_context(ctx);
         let closed = self.is_closed();
 
         Box::pin(async move {
@@ -198,6 +204,7 @@ mod tests {
         let direct = DirectOutbound::new(
             OutboundMeta::new("direct", "direct"),
             Logger::new("direct", "direct"),
+            None,
             dialer,
             shutdown_packet_dialer(),
         )
@@ -235,6 +242,7 @@ mod tests {
         let direct = DirectOutbound::new(
             OutboundMeta::new("direct", "direct"),
             Logger::new("direct", "direct"),
+            None,
             dialer,
             shutdown_packet_dialer(),
         )
@@ -315,6 +323,7 @@ mod tests {
         let direct = DirectOutbound::new(
             OutboundMeta::new("direct", "direct"),
             Logger::new("direct", "direct"),
+            None,
             dialer,
             shutdown_packet_dialer(),
         )
@@ -378,6 +387,7 @@ mod tests {
         let direct = DirectOutbound::new(
             OutboundMeta::new("direct", "direct"),
             Logger::new("direct", "direct"),
+            None,
             dialer,
             shutdown_packet_dialer(),
         )

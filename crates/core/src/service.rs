@@ -61,7 +61,6 @@ pub struct Dial {
 pub struct DialContext {
     pub session_id: u64,
     pub outbound_tag: String,
-    pub domain_resolver_override: Option<String>,
     pub resolve_context: Option<ResolveContext>,
 }
 

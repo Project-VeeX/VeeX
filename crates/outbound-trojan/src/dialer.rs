@@ -53,22 +53,7 @@ pub fn build_dialer_with_connector(
 }
 
 fn build_resolve_context(dial: &Dial, ctx: &DialContext) -> ResolveContext {
-    let explicit_server_tag = ctx
-        .domain_resolver_override
-        .clone()
-        .or_else(|| dial.domain_resolver.clone());
-
-    match &ctx.resolve_context {
-        Some(existing) => {
-            let mut context = existing.clone();
-            if context.caller_outbound_tag.is_none() {
-                context.caller_outbound_tag = Some(ctx.outbound_tag.clone());
-            }
-            if explicit_server_tag.is_some() {
-                context.explicit_server_tag = explicit_server_tag;
-            }
-            context
-        }
-        None => ResolveContext::outbound_dial(ctx.outbound_tag.clone(), explicit_server_tag),
-    }
+    ctx.resolve_context.clone().unwrap_or_else(|| {
+        ResolveContext::outbound_dial(ctx.outbound_tag.clone(), dial.domain_resolver.clone())
+    })
 }
