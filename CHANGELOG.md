@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1
+
+- Unified the execution plane around explicit `stream` and `packet` module ownership.
+- Split core contracts into clearer `plane` and `portal` boundaries.
+- Reorganized internal module layout and naming without changing validated runtime behavior.
+
 ## 0.6.0
 
 - Implemented a minimal formal closed loop for the DNS (include hijack-dns router action, dns-executor, dns-router, dns-server, etc.).
