@@ -7,12 +7,18 @@
 //! ```
 
 pub mod packet;
+pub mod shared;
 pub mod stream;
 
 pub use packet::dispatcher::{PacketDispatcher, PacketSink};
-pub use packet::session::{
+pub use packet::forward::{
     PacketAssociationKey, PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle,
     PacketWriter,
 };
+pub use shared::{
+    DispatchOutbound, OutboundRegistry, RouteReason, SessionContext, SessionMeta, SessionRoute,
+    SessionState,
+};
 pub use stream::dispatcher::{InboundSink, StreamDispatcher};
+pub use stream::io::{AsyncStream, BoxedAsyncStream};
 pub use stream::relay::{relay_bidirectional, RelayErrorWithStats, RelayStats};

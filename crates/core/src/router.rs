@@ -3,12 +3,13 @@ use std::time::Duration;
 use ipnet::IpNet;
 use tracing::{debug, info, warn};
 
-pub use crate::types::RouteReason;
+pub use crate::plane::shared::context::RouteReason;
 
 use crate::{
     logging::sanitize_field,
+    plane::{shared::context::SessionContext, stream::io::BoxedAsyncStream},
     sniff::{sniff_stream_internal, SniffExecution, SniffResult},
-    types::{BoxedAsyncStream, Destination, Host, SessionContext},
+    types::{Destination, Host},
 };
 
 /// The result of a routing decision for a session.
@@ -865,7 +866,7 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 
-    use crate::types::{Destination, Network, SessionContext, SessionMeta};
+    use crate::{Destination, Network, SessionContext, SessionMeta};
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     use super::{RouteAction, RouteFinalAction, RouteInput, RouteReason, RouteRule, Router};

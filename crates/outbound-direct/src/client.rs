@@ -10,7 +10,7 @@ use std::{
 };
 
 use veex_core::{
-    BoxFuture, BoxedAsyncStream, DialContext, Dialer, Logger, Outbound, OutboundConnector,
+    BoxFuture, BoxedAsyncStream, DialContext, Dialer, DispatchOutbound, Logger, Outbound,
     OutboundMeta, PacketDialer, PacketSessionHandle, ProxyError, ResolveContext, Result,
     SessionContext, StreamOutbound,
 };
@@ -131,7 +131,7 @@ impl StreamOutbound for DirectOutbound {
     }
 }
 
-impl OutboundConnector for DirectOutbound {
+impl DispatchOutbound for DirectOutbound {
     fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
         self.connect_stream(ctx)
     }

@@ -4,7 +4,6 @@ use std::{
     net::SocketAddr,
     pin::Pin,
     sync::{Arc, OnceLock},
-    time::Duration,
 };
 
 use tokio::{
@@ -14,66 +13,16 @@ use tokio::{
 };
 
 use crate::{
-    dns::ResolveContext,
     error::{ProxyError, Result},
-    plane::packet::session::PacketSessionHandle,
-    types::{Host, Listen},
+    types::Listen,
 };
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct InboundMeta {
-    pub tag: String,
-    pub r#type: String,
-}
-
-impl InboundMeta {
-    pub fn new(tag: impl Into<String>, r#type: impl Into<String>) -> Self {
-        Self {
-            tag: tag.into(),
-            r#type: r#type.into(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OutboundMeta {
-    pub tag: String,
-    pub r#type: String,
-}
-
-impl OutboundMeta {
-    pub fn new(tag: impl Into<String>, r#type: impl Into<String>) -> Self {
-        Self {
-            tag: tag.into(),
-            r#type: r#type.into(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct Dial {
-    pub timeout: Option<Duration>,
-    pub routing_mark: Option<u32>,
-    pub domain_resolver: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DialContext {
-    pub session_id: u64,
-    pub outbound_tag: String,
-    pub resolve_context: Option<ResolveContext>,
-}
 
 type ListenerBindFuture = Pin<Box<dyn Future<Output = Result<TcpListener>> + Send + 'static>>;
 type ListenerAcceptFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-type DialFuture = Pin<Box<dyn Future<Output = Result<TcpStream>> + Send + 'static>>;
-type PacketDialFuture = Pin<Box<dyn Future<Output = Result<PacketSessionHandle>> + Send + 'static>>;
 
 pub type ListenerFactory = dyn Fn(SocketAddr) -> ListenerBindFuture + Send + Sync;
 pub type ListenerAcceptHandler =
     dyn Fn(TcpStream, SocketAddr) -> ListenerAcceptFuture + Send + Sync;
-pub type DialConnect = dyn Fn(Host, u16, Dial, DialContext) -> DialFuture + Send + Sync;
-pub type PacketConnect = dyn Fn(Host, u16, Dial, DialContext) -> PacketDialFuture + Send + Sync;
 
 #[derive(Default)]
 struct ListenerState {
@@ -198,64 +147,5 @@ impl Listener {
             Ok(result) => result,
             Err(err) => Err(ProxyError::protocol_ctx("listener task join failed", err)),
         }
-    }
-}
-
-#[derive(Clone)]
-pub struct Dialer {
-    dial: Dial,
-    connector: Arc<DialConnect>,
-}
-
-impl fmt::Debug for Dialer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Dialer").field("dial", &self.dial).finish()
-    }
-}
-
-impl Dialer {
-    pub fn new(dial: Dial, connector: Arc<DialConnect>) -> Self {
-        Self { dial, connector }
-    }
-
-    pub fn dial(&self) -> &Dial {
-        &self.dial
-    }
-
-    pub async fn connect(&self, host: &Host, port: u16, ctx: DialContext) -> Result<TcpStream> {
-        (self.connector)(host.clone(), port, self.dial.clone(), ctx).await
-    }
-}
-
-#[derive(Clone)]
-pub struct PacketDialer {
-    dial: Dial,
-    connector: Arc<PacketConnect>,
-}
-
-impl fmt::Debug for PacketDialer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PacketDialer")
-            .field("dial", &self.dial)
-            .finish()
-    }
-}
-
-impl PacketDialer {
-    pub fn new(dial: Dial, connector: Arc<PacketConnect>) -> Self {
-        Self { dial, connector }
-    }
-
-    pub fn dial(&self) -> &Dial {
-        &self.dial
-    }
-
-    pub async fn connect(
-        &self,
-        host: &Host,
-        port: u16,
-        ctx: DialContext,
-    ) -> Result<PacketSessionHandle> {
-        (self.connector)(host.clone(), port, self.dial.clone(), ctx).await
     }
 }

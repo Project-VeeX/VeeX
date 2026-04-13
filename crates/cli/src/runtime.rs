@@ -189,8 +189,8 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use veex_core::{
-        BoxFuture, BoxedAsyncStream, Destination, ErrorKind, Host, Logger, Network, Outbound,
-        OutboundConnector, OutboundMeta, OutboundRegistry, ProxyError, SessionContext, SessionMeta,
+        BoxFuture, BoxedAsyncStream, Destination, DispatchOutbound, ErrorKind, Host, Logger,
+        Network, Outbound, OutboundMeta, OutboundRegistry, ProxyError, SessionContext, SessionMeta,
     };
 
     use super::{close_outbounds, start_outbounds};
@@ -225,13 +225,13 @@ mod tests {
         }
     }
 
-    struct TestOutboundConnector {
+    struct TestDispatchOutbound {
         meta: OutboundMeta,
         logger: Logger,
         closed: AtomicBool,
     }
 
-    impl TestOutboundConnector {
+    impl TestDispatchOutbound {
         fn new(tag: impl Into<String>) -> Self {
             let tag = tag.into();
             Self {
@@ -242,7 +242,7 @@ mod tests {
         }
     }
 
-    impl Outbound for TestOutboundConnector {
+    impl Outbound for TestDispatchOutbound {
         fn meta(&self) -> &OutboundMeta {
             &self.meta
         }
@@ -262,7 +262,7 @@ mod tests {
         }
     }
 
-    impl OutboundConnector for TestOutboundConnector {
+    impl DispatchOutbound for TestDispatchOutbound {
         fn connect(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             let closed = self.closed.load(Ordering::Relaxed);
             Box::pin(async move {
@@ -293,7 +293,7 @@ mod tests {
     async fn runtime_close_outbounds_is_visible_to_dispatch_view() {
         let mut registry = OutboundRegistry::default();
         registry
-            .register(Arc::new(TestOutboundConnector::new("direct")))
+            .register(Arc::new(TestDispatchOutbound::new("direct")))
             .expect("outbound should register");
 
         close_outbounds(&registry)
@@ -314,7 +314,7 @@ mod tests {
     async fn runtime_start_outbounds_reopens_dispatch_view() {
         let mut registry = OutboundRegistry::default();
         registry
-            .register(Arc::new(TestOutboundConnector::new("direct")))
+            .register(Arc::new(TestDispatchOutbound::new("direct")))
             .expect("outbound should register");
 
         close_outbounds(&registry)
@@ -337,7 +337,7 @@ mod tests {
     async fn runtime_close_outbounds_is_idempotent() {
         let mut registry = OutboundRegistry::default();
         registry
-            .register(Arc::new(TestOutboundConnector::new("direct")))
+            .register(Arc::new(TestDispatchOutbound::new("direct")))
             .expect("outbound should register");
 
         close_outbounds(&registry)

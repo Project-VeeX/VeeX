@@ -14,12 +14,18 @@ use crate::{
     dns::{DnsExecutorHandle, DnsRequest},
     error::ProxyError,
     logging::sanitize_field,
-    plane::packet::session::{
-        PacketAssociationKey, PacketFrame, PacketMetadata, PacketSessionHandle, PacketWriter,
+    plane::{
+        packet::forward::{
+            PacketAssociationKey, PacketFrame, PacketMetadata, PacketSessionHandle, PacketWriter,
+        },
+        shared::{
+            context::{RouteReason, SessionContext, SessionMeta},
+            registry::OutboundRegistry,
+        },
     },
+    portal::traits::BoxFuture,
     router::{RouteFinalAction, Router},
-    traits::BoxFuture,
-    types::{Network, OutboundRegistry, RouteReason, SessionContext, SessionMeta},
+    types::Network,
 };
 
 const DEFAULT_PACKET_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -577,12 +583,11 @@ mod tests {
     use crate::{
         dns::{DnsExecutorHandle, DnsRequest, DnsResponse},
         logging::Logger,
-        plane::packet::session::{PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle},
         router::{RouteAction, RouteFinalAction, RouteRule},
-        service::OutboundMeta,
-        traits::{Outbound, OutboundConnector},
-        types::{Destination, Host, Network, OutboundRegistry},
-        ProxyError,
+        types::Host,
+        BoxFuture, BoxedAsyncStream, Destination, DispatchOutbound, Network, Outbound,
+        OutboundMeta, OutboundRegistry, PacketFrame, PacketMetadata, PacketSession,
+        PacketSessionHandle, ProxyError, SessionContext,
     };
 
     use super::{PacketDispatcher, PacketSink, PacketWriter};
@@ -595,7 +600,7 @@ mod tests {
     }
 
     impl PacketSession for TestPacketSession {
-        fn send_packet(&self, payload: Vec<u8>) -> crate::traits::BoxFuture<'_, ()> {
+        fn send_packet(&self, payload: Vec<u8>) -> BoxFuture<'_, ()> {
             let sent = Arc::clone(&self.sent);
             Box::pin(async move {
                 sent.lock().expect("sent mutex should lock").push(payload);
@@ -603,7 +608,7 @@ mod tests {
             })
         }
 
-        fn recv_packet(&self) -> crate::traits::BoxFuture<'_, Vec<u8>> {
+        fn recv_packet(&self) -> BoxFuture<'_, Vec<u8>> {
             Box::pin(async move {
                 self.recv
                     .lock()
@@ -620,7 +625,7 @@ mod tests {
     }
 
     impl PacketWriter for RecordingWriter {
-        fn send_to(&self, peer: SocketAddr, payload: Vec<u8>) -> crate::traits::BoxFuture<'_, ()> {
+        fn send_to(&self, peer: SocketAddr, payload: Vec<u8>) -> BoxFuture<'_, ()> {
             let sent = Arc::clone(&self.sent);
             Box::pin(async move {
                 sent.lock()
@@ -631,14 +636,14 @@ mod tests {
         }
     }
 
-    struct TestOutboundConnector {
+    struct TestDispatchOutbound {
         meta: OutboundMeta,
         logger: Logger,
         connect_count: AtomicUsize,
         session: PacketSessionHandle,
     }
 
-    impl TestOutboundConnector {
+    impl TestDispatchOutbound {
         fn new(tag: &str, session: PacketSessionHandle) -> Self {
             Self {
                 meta: OutboundMeta::new(tag, "test"),
@@ -649,7 +654,7 @@ mod tests {
         }
     }
 
-    impl Outbound for TestOutboundConnector {
+    impl Outbound for TestDispatchOutbound {
         fn meta(&self) -> &OutboundMeta {
             &self.meta
         }
@@ -658,23 +663,17 @@ mod tests {
             &self.logger
         }
 
-        fn close(&self) -> crate::traits::BoxFuture<'_, ()> {
+        fn close(&self) -> BoxFuture<'_, ()> {
             Box::pin(async { Ok(()) })
         }
     }
 
-    impl OutboundConnector for TestOutboundConnector {
-        fn connect(
-            &self,
-            _ctx: &crate::types::SessionContext,
-        ) -> crate::traits::BoxFuture<'_, crate::types::BoxedAsyncStream> {
+    impl DispatchOutbound for TestDispatchOutbound {
+        fn connect(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("stream path is not used in this test")) })
         }
 
-        fn connect_packet(
-            &self,
-            _ctx: &crate::types::SessionContext,
-        ) -> crate::traits::BoxFuture<'_, PacketSessionHandle> {
+        fn connect_packet(&self, _ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
             self.connect_count.fetch_add(1, Ordering::Relaxed);
             let session = Arc::clone(&self.session);
             Box::pin(async move { Ok(session) })
@@ -687,7 +686,7 @@ mod tests {
     }
 
     impl DnsExecutorHandle for TestDnsExecutor {
-        fn execute_query(&self, _request: DnsRequest) -> crate::traits::BoxFuture<'_, DnsResponse> {
+        fn execute_query(&self, _request: DnsRequest) -> BoxFuture<'_, DnsResponse> {
             self.query_count.fetch_add(1, Ordering::Relaxed);
             let responses = Arc::clone(&self.responses);
             Box::pin(async move {
@@ -709,10 +708,10 @@ mod tests {
             sent: Arc::clone(&sent),
             recv: AsyncMutex::new(upstream_rx),
         });
-        let outbound = Arc::new(TestOutboundConnector::new("direct", session));
+        let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
         let mut registry = OutboundRegistry::default();
         registry
-            .register(outbound.clone() as Arc<dyn OutboundConnector>)
+            .register(outbound.clone() as Arc<dyn DispatchOutbound>)
             .expect("registry should accept outbound");
         let dispatcher = PacketDispatcher::with_idle_timeout(
             crate::Router::with_default_outbound("direct"),
@@ -795,10 +794,10 @@ mod tests {
             sent: Arc::new(Mutex::new(Vec::new())),
             recv: AsyncMutex::new(upstream_rx),
         });
-        let outbound = Arc::new(TestOutboundConnector::new("direct", session));
+        let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
         let mut registry = OutboundRegistry::default();
         registry
-            .register(outbound as Arc<dyn OutboundConnector>)
+            .register(outbound as Arc<dyn DispatchOutbound>)
             .expect("registry should accept outbound");
         let dispatcher = PacketDispatcher::with_idle_timeout(
             crate::Router::with_default_outbound("direct"),

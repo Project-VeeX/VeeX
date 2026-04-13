@@ -1,7 +1,7 @@
 use std::{fmt, net::SocketAddr, sync::Arc};
 
 use crate::{
-    traits::BoxFuture,
+    portal::traits::BoxFuture,
     types::{Destination, Network},
 };
 

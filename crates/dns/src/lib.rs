@@ -706,8 +706,8 @@ mod tests {
 
     use tokio::sync::{mpsc, Mutex};
     use veex_core::{
-        BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DomainResolverHandle, Host,
-        Logger, Network, Outbound, OutboundConnector, OutboundMeta, PacketSessionHandle,
+        BoxedAsyncStream, Destination, DispatchOutbound, DnsExecutorHandle, DnsRequest,
+        DomainResolverHandle, Host, Logger, Network, Outbound, OutboundMeta, PacketSessionHandle,
         ProxyError, ResolveContext, SessionContext,
     };
 
@@ -765,7 +765,7 @@ mod tests {
         }
     }
 
-    impl OutboundConnector for TestOutbound {
+    impl DispatchOutbound for TestOutbound {
         fn connect(&self, _ctx: &SessionContext) -> veex_core::BoxFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("stream path unused")) })
         }
@@ -801,7 +801,7 @@ mod tests {
         });
         let mut registry = veex_core::OutboundRegistry::default();
         registry
-            .register(outbound as Arc<dyn OutboundConnector>)
+            .register(outbound as Arc<dyn DispatchOutbound>)
             .expect("test outbound should register");
         let executor = DnsExecutor::new(
             DnsRuntimeConfig {
@@ -874,7 +874,7 @@ mod tests {
         });
         let mut registry = veex_core::OutboundRegistry::default();
         registry
-            .register(outbound as Arc<dyn OutboundConnector>)
+            .register(outbound as Arc<dyn DispatchOutbound>)
             .expect("test outbound should register");
         let executor = DnsExecutor::new(
             DnsRuntimeConfig {

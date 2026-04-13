@@ -7,7 +7,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::task::JoinError;
 use tracing::debug;
 
-use crate::{error::ProxyError, types::BoxedAsyncStream};
+use crate::{error::ProxyError, plane::stream::io::BoxedAsyncStream};
 
 /// Byte transfer statistics for a relay session.
 ///
@@ -386,7 +386,7 @@ mod tests {
         map_join_result, relay_bidirectional, relay_bidirectional_with_trace, Direction,
         OneWayRelayError, RelayTraceContext,
     };
-    use crate::types::BoxedAsyncStream;
+    use crate::plane::stream::io::BoxedAsyncStream;
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     enum ReadStep {

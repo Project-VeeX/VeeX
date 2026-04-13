@@ -7,9 +7,15 @@ use crate::{
     dns::{read_dns_tcp_message, write_dns_tcp_message, DnsExecutorHandle, DnsRequest},
     error::ProxyError,
     logging::sanitize_field,
+    plane::{
+        shared::{
+            context::{RouteReason, SessionContext},
+            registry::OutboundRegistry,
+        },
+        stream::io::BoxedAsyncStream,
+    },
+    portal::traits::BoxFuture,
     router::{RouteFinalAction, Router},
-    traits::BoxFuture,
-    types::{BoxedAsyncStream, OutboundRegistry, RouteReason, SessionContext},
 };
 
 use super::relay::{relay_bidirectional_with_trace, RelayTraceContext};
@@ -335,12 +341,11 @@ mod tests {
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
     use super::{InboundSink, StreamDispatcher};
-    use crate::traits::{Outbound, OutboundConnector, StreamOutbound};
-    use crate::types::OutboundRegistry;
     use crate::{
-        BoxFuture, BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DnsResponse,
-        ErrorKind, Logger, Network, OutboundMeta, RouteAction, RouteFinalAction, RouteReason,
-        RouteRule, Router, SessionContext, SessionMeta, SessionRoute, SessionState,
+        BoxFuture, BoxedAsyncStream, Destination, DispatchOutbound, DnsExecutorHandle, DnsRequest,
+        DnsResponse, ErrorKind, Logger, Network, Outbound, OutboundMeta, OutboundRegistry,
+        RouteAction, RouteFinalAction, RouteReason, RouteRule, Router, SessionContext, SessionMeta,
+        SessionRoute, SessionState, StreamOutbound,
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
@@ -537,7 +542,7 @@ mod tests {
         }
     }
 
-    impl OutboundConnector for CaptureOutbound {
+    impl DispatchOutbound for CaptureOutbound {
         fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             self.connect_stream(ctx)
         }
@@ -587,7 +592,7 @@ mod tests {
         }
     }
 
-    impl OutboundConnector for ScriptedOutbound {
+    impl DispatchOutbound for ScriptedOutbound {
         fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             self.connect_stream(ctx)
         }

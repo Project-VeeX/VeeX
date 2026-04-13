@@ -5,12 +5,11 @@ pub mod error;
 pub mod listen;
 pub mod logging;
 pub mod plane;
+pub mod portal;
 pub mod router;
-pub mod service;
 pub mod session;
 pub mod shutdown;
 pub mod sniff;
-pub mod traits;
 pub mod types;
 
 pub use dns::{
@@ -22,29 +21,32 @@ pub use listen::{format_listen_addr, parse_listen_addr};
 pub use logging::{sanitize_field, Logger};
 pub use plane::{
     packet::dispatcher::{PacketDispatcher, PacketSink},
-    packet::session::{
+    packet::forward::{
         PacketAssociationKey, PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle,
         PacketWriter,
     },
+    shared::{
+        DispatchOutbound, OutboundRegistry, RouteReason, SessionContext, SessionMeta, SessionRoute,
+        SessionState,
+    },
     stream::dispatcher::{InboundSink, StreamDispatcher},
+    stream::io::{AsyncStream, BoxedAsyncStream},
     stream::relay::{relay_bidirectional, RelayErrorWithStats, RelayStats},
+};
+pub use portal::{
+    dialer::{Dial, DialConnect, DialContext, Dialer, PacketConnect, PacketDialer},
+    listener::{Listener, ListenerAcceptHandler, ListenerFactory},
+    meta::{InboundMeta, OutboundMeta},
+    traits::{
+        BoxFuture, Inbound, Outbound, ProxyOutbound, StreamInbound, StreamOutbound,
+        TransparentInbound,
+    },
 };
 pub use router::{
     RouteAction, RouteDecision, RouteFinalAction, RouteInput, RouteRule, RouteTarget,
     RouteUpgradeAction, Router, SniffAction,
 };
-pub use service::{
-    Dial, DialConnect, DialContext, Dialer, InboundMeta, Listener, ListenerAcceptHandler,
-    ListenerFactory, OutboundMeta, PacketConnect, PacketDialer,
-};
 pub use session::{build_session_bootstrap, SessionBootstrap};
 pub use shutdown::{shutdown_channel, ShutdownSignal, ShutdownTrigger};
 pub use sniff::{sniff_stream, PrefixedStream, SniffOutcome, SniffedProtocol};
-pub use traits::{
-    BoxFuture, Inbound, Outbound, OutboundConnector, ProxyOutbound, StreamInbound, StreamOutbound,
-    TransparentInbound,
-};
-pub use types::{
-    AsyncStream, BoxedAsyncStream, Destination, Host, Listen, Network, OutboundRegistry,
-    RouteReason, SessionContext, SessionMeta, SessionRoute, SessionState,
-};
+pub use types::{Destination, Host, Listen, Network};
