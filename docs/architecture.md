@@ -60,7 +60,7 @@ The main stream data path is:
 
 ```text
 Inbound
--> Dispatcher
+-> StreamDispatcher
 -> Router
 -> Outbound
 -> Transport (TCP / TLS)

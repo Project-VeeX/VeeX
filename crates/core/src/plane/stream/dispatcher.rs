@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use tracing::{info, warn};
 use veex_observability::{emit_session_finish, SessionSummary};
@@ -7,79 +7,18 @@ use crate::{
     dns::{read_dns_tcp_message, write_dns_tcp_message, DnsExecutorHandle, DnsRequest},
     error::ProxyError,
     logging::sanitize_field,
-    packet::PacketSessionHandle,
-    relay::{relay_bidirectional_with_trace, RelayTraceContext},
     router::{RouteFinalAction, Router},
-    traits::{BoxFuture, Outbound},
-    types::{BoxedAsyncStream, RouteReason, SessionContext},
+    traits::BoxFuture,
+    types::{BoxedAsyncStream, OutboundRegistry, RouteReason, SessionContext},
 };
 
-pub trait OutboundConnector: Outbound {
-    fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream>;
-
-    fn connect_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
-        let outbound_tag = self.meta().tag.clone();
-        let network = ctx.meta.network;
-        Box::pin(async move {
-            Err(ProxyError::protocol(format!(
-                "outbound '{}' does not support packet execution for {}",
-                outbound_tag,
-                network.as_str()
-            )))
-        })
-    }
-}
+use super::relay::{relay_bidirectional_with_trace, RelayTraceContext};
 
 pub trait InboundSink: Send + Sync {
     fn submit(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()>;
 }
 
-#[derive(Default)]
-pub struct OutboundRegistry {
-    outbounds: Vec<Arc<dyn OutboundConnector>>,
-    index_by_tag: HashMap<String, usize>,
-}
-
-impl OutboundRegistry {
-    pub fn register(&mut self, outbound: Arc<dyn OutboundConnector>) -> crate::Result<()> {
-        let tag = outbound.meta().tag.clone();
-        if self.index_by_tag.contains_key(&tag) {
-            return Err(ProxyError::config(format!(
-                "duplicate outbound tag in registry: {tag}"
-            )));
-        }
-
-        let index = self.outbounds.len();
-        self.outbounds.push(outbound);
-        self.index_by_tag.insert(tag, index);
-        Ok(())
-    }
-
-    pub fn get(&self, tag: &str) -> Option<Arc<dyn OutboundConnector>> {
-        self.index_by_tag
-            .get(tag)
-            .and_then(|index| self.outbounds.get(*index))
-            .map(Arc::clone)
-    }
-
-    pub fn contains(&self, tag: &str) -> bool {
-        self.index_by_tag.contains_key(tag)
-    }
-
-    pub fn len(&self) -> usize {
-        self.outbounds.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.outbounds.is_empty()
-    }
-
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &Arc<dyn OutboundConnector>> {
-        self.outbounds.iter()
-    }
-}
-
-pub struct Dispatcher {
+pub struct StreamDispatcher {
     router: Router,
     outbounds: Arc<OutboundRegistry>,
     dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
@@ -95,7 +34,7 @@ struct DispatchTraceContext {
     route_reason: RouteReason,
 }
 
-impl Dispatcher {
+impl StreamDispatcher {
     pub fn new(router: Router, outbounds: Arc<OutboundRegistry>) -> Self {
         Self::with_dns_executor(router, outbounds, None)
     }
@@ -137,7 +76,7 @@ impl Dispatcher {
             let trace = DispatchTraceContext::new(&ctx, outbound_tag.as_str(), route_reason);
             let inbound_stream = execution.stream;
 
-            // Dispatcher owns session-scoped lifecycle events. Lower-level transport,
+            // Stream dispatcher owns session-scoped lifecycle events. Lower-level transport,
             // outbound, and relay details stay in their respective modules.
             log_route_select(&trace, ctx.meta.network.as_str());
             let outbound = self.outbounds.get(&outbound_tag).ok_or_else(|| {
@@ -312,7 +251,7 @@ impl Dispatcher {
     }
 }
 
-impl InboundSink for Dispatcher {
+impl InboundSink for StreamDispatcher {
     fn submit(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()> {
         self.submit_impl(inbound_stream, ctx)
     }
@@ -362,7 +301,10 @@ fn log_relay_start(trace: &DispatchTraceContext) {
     );
 }
 
-fn log_relay_failed(trace: &DispatchTraceContext, relay_err: &crate::relay::RelayErrorWithStats) {
+fn log_relay_failed(
+    trace: &DispatchTraceContext,
+    relay_err: &crate::plane::stream::relay::RelayErrorWithStats,
+) {
     warn!(
         event = "relay_failed",
         session_id = trace.session_id,
@@ -392,10 +334,10 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-    use super::{Dispatcher, InboundSink, OutboundRegistry};
+    use super::{InboundSink, StreamDispatcher};
+    use crate::traits::{Outbound, OutboundConnector, StreamOutbound};
+    use crate::types::OutboundRegistry;
     use crate::{
-        dispatcher::OutboundConnector,
-        traits::{Outbound, StreamOutbound},
         BoxFuture, BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DnsResponse,
         ErrorKind, Logger, Network, OutboundMeta, RouteAction, RouteFinalAction, RouteReason,
         RouteRule, Router, SessionContext, SessionMeta, SessionRoute, SessionState,
@@ -659,7 +601,7 @@ mod tests {
             .register(Arc::new(outbound))
             .expect("outbound should register");
         let dispatcher =
-            Dispatcher::new(Router::with_default_outbound("proxy"), Arc::new(outbounds));
+            StreamDispatcher::new(Router::with_default_outbound("proxy"), Arc::new(outbounds));
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 7,
@@ -701,7 +643,7 @@ mod tests {
             )))
             .expect("outbound should register");
         let dispatcher =
-            Dispatcher::new(Router::with_default_outbound("proxy"), Arc::new(outbounds));
+            StreamDispatcher::new(Router::with_default_outbound("proxy"), Arc::new(outbounds));
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 9,
@@ -764,7 +706,7 @@ mod tests {
         let (_guard, trace_buffer) = install_test_subscriber();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let responses = Arc::new(Mutex::new(vec![b"\x12\x34dns-response".to_vec()]));
-        let dispatcher = Dispatcher::with_dns_executor(
+        let dispatcher = StreamDispatcher::with_dns_executor(
             Router::with_default_outbound("unused").with_rule(RouteRule {
                 inbound: vec!["dns-in".into()],
                 action: RouteAction::Final(RouteFinalAction::HijackDns),

@@ -16,7 +16,7 @@ use tokio::{
 use crate::{
     dns::ResolveContext,
     error::{ProxyError, Result},
-    packet::PacketSessionHandle,
+    plane::packet::session::PacketSessionHandle,
     types::{Host, Listen},
 };
 

@@ -706,8 +706,8 @@ mod tests {
 
     use tokio::sync::{mpsc, Mutex};
     use veex_core::{
-        packet::PacketSessionHandle, BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest,
-        DomainResolverHandle, Host, Logger, Network, Outbound, OutboundConnector, OutboundMeta,
+        BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DomainResolverHandle, Host,
+        Logger, Network, Outbound, OutboundConnector, OutboundMeta, PacketSessionHandle,
         ProxyError, ResolveContext, SessionContext,
     };
 

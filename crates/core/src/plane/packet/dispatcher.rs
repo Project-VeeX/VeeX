@@ -11,16 +11,15 @@ use tokio::sync::Notify;
 use tracing::{debug, info, warn};
 
 use crate::{
-    dispatcher::OutboundRegistry,
     dns::{DnsExecutorHandle, DnsRequest},
     error::ProxyError,
     logging::sanitize_field,
-    packet::{
+    plane::packet::session::{
         PacketAssociationKey, PacketFrame, PacketMetadata, PacketSessionHandle, PacketWriter,
     },
     router::{RouteFinalAction, Router},
     traits::BoxFuture,
-    types::{Network, RouteReason, SessionContext, SessionMeta},
+    types::{Network, OutboundRegistry, RouteReason, SessionContext, SessionMeta},
 };
 
 const DEFAULT_PACKET_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -576,14 +575,13 @@ mod tests {
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     use crate::{
-        dispatcher::{OutboundConnector, OutboundRegistry},
         dns::{DnsExecutorHandle, DnsRequest, DnsResponse},
         logging::Logger,
-        packet::{PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle},
+        plane::packet::session::{PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle},
         router::{RouteAction, RouteFinalAction, RouteRule},
         service::OutboundMeta,
-        traits::Outbound,
-        types::{Destination, Host, Network},
+        traits::{Outbound, OutboundConnector},
+        types::{Destination, Host, Network, OutboundRegistry},
         ProxyError,
     };
 

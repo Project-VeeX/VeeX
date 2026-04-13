@@ -3,8 +3,9 @@ use std::{future::Future, net::SocketAddr, pin::Pin};
 use tokio::net::TcpStream;
 
 use crate::{
-    error::Result,
+    error::{ProxyError, Result},
     logging::Logger,
+    plane::packet::session::PacketSessionHandle,
     service::{InboundMeta, OutboundMeta},
     types::{BoxedAsyncStream, SessionContext},
 };
@@ -44,4 +45,24 @@ pub trait StreamInbound: Inbound {
 
 pub trait TransparentInbound: Inbound {
     fn accept_transparent_stream(&self, stream: TcpStream, peer: SocketAddr) -> BoxFuture<'_, ()>;
+}
+
+/// Connector for dispatching a session to an outbound.
+///
+/// Both the stream and packet dispatchers use this trait to connect
+/// to outbounds; packet support is optional and defaults to error.
+pub trait OutboundConnector: Outbound {
+    fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream>;
+
+    fn connect_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
+        let outbound_tag = self.meta().tag.clone();
+        let network = ctx.meta.network;
+        Box::pin(async move {
+            Err(ProxyError::protocol(format!(
+                "outbound '{}' does not support packet execution for {}",
+                outbound_tag,
+                network.as_str()
+            )))
+        })
+    }
 }

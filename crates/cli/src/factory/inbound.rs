@@ -139,7 +139,7 @@ mod tests {
                 rules: vec![],
             },
         };
-        let sink: Arc<dyn InboundSink> = Arc::new(veex_core::Dispatcher::new(
+        let sink: Arc<dyn InboundSink> = Arc::new(veex_core::StreamDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
             Arc::new(veex_core::OutboundRegistry::default()),
         ));
@@ -180,7 +180,7 @@ mod tests {
                 rules: vec![],
             },
         };
-        let sink: Arc<dyn InboundSink> = Arc::new(veex_core::Dispatcher::new(
+        let sink: Arc<dyn InboundSink> = Arc::new(veex_core::StreamDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
             Arc::new(veex_core::OutboundRegistry::default()),
         ));
