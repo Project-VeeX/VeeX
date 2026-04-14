@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.3
+
+- Fixed TLS upstream verification so IP-address upstreams can complete standard certificate verification without requiring an explicit `server_name`.
+- Further consolidated the core execution plane around explicit `stream` / `packet` ownership, including clearer plane root abstractions, cleaner packet forwarding and DNS handoff boundaries, and more consistent packet tracing.
+
 ## 0.6.2
 
 - Fixed `direct` inbound so an empty `network` now means `tcp+udp`, matching sing-box `direct` inbound semantics instead of incorrectly falling back to TCP only.

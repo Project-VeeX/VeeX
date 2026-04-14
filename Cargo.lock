@@ -780,7 +780,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "veex-cli"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "rcgen",
  "rustls",
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "veex-config"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "humantime",
  "ipnet",
@@ -818,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "veex-core"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ipnet",
  "thiserror",
@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "veex-dns"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "tokio",
  "tracing",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "veex-inbound-direct"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "tokio",
  "tracing",
@@ -853,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "veex-inbound-socks"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "thiserror",
  "tokio",
@@ -863,7 +863,7 @@ dependencies = [
 
 [[package]]
 name = "veex-inbound-transparent"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "tokio",
  "tracing",
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "veex-infra-linux"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "libc",
  "socket2 0.5.10",
@@ -885,14 +885,14 @@ dependencies = [
 
 [[package]]
 name = "veex-observability"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "veex-outbound-direct"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "libc",
  "socket2 0.5.10",
@@ -906,7 +906,7 @@ dependencies = [
 
 [[package]]
 name = "veex-outbound-trojan"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "rcgen",
  "rustls",
@@ -922,7 +922,7 @@ dependencies = [
 
 [[package]]
 name = "veex-test-tracing"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -930,7 +930,7 @@ dependencies = [
 
 [[package]]
 name = "veex-transport"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "rcgen",
  "rustls",
