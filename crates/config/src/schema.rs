@@ -144,6 +144,7 @@ pub struct DomainResolverConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DnsServerTypeConfig {
+    Local,
     Udp,
     Tcp,
     Tls,

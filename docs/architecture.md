@@ -195,7 +195,7 @@ The current public capability surface includes:
 - connect behavior: sequential multi-address fallback
 - runtime: foreground daemon-style execution with config checking
 - packet execution: dispatcher-owned UDP association mapping for `direct-in -> direct-out`
-- dns: minimal internal executor for `dns-in -> hijack-dns -> UDP/TCP/TLS/HTTPS upstream via detour outbound`, with ingress and upstream transport selected independently
+- dns: minimal internal executor for `dns-in -> hijack-dns -> local UDP via system nameservers or UDP/TCP/TLS/HTTPS upstream`, with ingress and upstream transport selected independently
 
 The current public non-goals include:
 

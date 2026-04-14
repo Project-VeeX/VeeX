@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{info, warn};
 use veex_core::{
@@ -15,6 +16,7 @@ use veex_core::{
     Destination, DnsExecutorHandle, DnsRequest, DnsResponse, DomainResolverHandle, Host, Network,
     OutboundRegistry, ProxyError, ResolveContext, SessionContext, SessionMeta,
 };
+use veex_infra_linux::load_system_dns_servers;
 use veex_transport::{connect_tls_stream, ConnectTraceContext, TlsClientOptions};
 
 mod http;
@@ -53,6 +55,7 @@ pub struct DnsHttpsOptions {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DnsServerTransport {
+    Local,
     Udp,
     Tcp,
     Tls(TlsClientOptions),
@@ -275,6 +278,7 @@ impl DnsExecutor {
         query_id: u64,
     ) -> veex_core::Result<DnsResponse> {
         match &server.transport {
+            DnsServerTransport::Local => self.execute_local_query(query).await,
             DnsServerTransport::Udp => {
                 self.execute_udp_query(ctx, &server.detour, query, query_id)
                     .await
@@ -293,6 +297,30 @@ impl DnsExecutor {
                 server.tag, kind
             ))),
         }
+    }
+
+    async fn execute_local_query(&self, query: &[u8]) -> veex_core::Result<DnsResponse> {
+        let nameservers = load_system_dns_servers()
+            .map_err(|err| ProxyError::resolve_ctx("failed to load system dns nameservers", err))?;
+
+        if nameservers.is_empty() {
+            return Err(ProxyError::resolve(
+                "system dns resolver did not provide any nameserver",
+            ));
+        }
+
+        let mut last_error = None;
+        for nameserver in nameservers {
+            let destination = SocketAddr::new(nameserver, 53);
+            match self.execute_local_udp_query(destination, query).await {
+                Ok(response) => return Ok(DnsResponse::new(response)),
+                Err(err) => last_error = Some(err),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            ProxyError::resolve("system dns resolver did not provide any reachable nameserver")
+        }))
     }
 
     async fn execute_udp_query(
@@ -322,6 +350,38 @@ impl DnsExecutor {
         log_close_result(query_id, session.close().await);
 
         response.map(DnsResponse::new)
+    }
+
+    async fn execute_local_udp_query(
+        &self,
+        destination: SocketAddr,
+        query: &[u8],
+    ) -> veex_core::Result<Vec<u8>> {
+        let socket = UdpSocket::bind(udp_bind_addr(destination.ip()))
+            .await
+            .map_err(|err| ProxyError::resolve_ctx("failed to bind local dns udp socket", err))?;
+        socket.connect(destination).await.map_err(|err| {
+            ProxyError::resolve_ctx("failed to connect local dns udp socket", err)
+        })?;
+        socket
+            .send(query)
+            .await
+            .map_err(|err| ProxyError::resolve_ctx("failed to send local dns query", err))?;
+
+        let mut buffer = vec![0; 2048];
+        let size = match timeout(self.query_timeout, socket.recv(&mut buffer)).await {
+            Ok(result) => result.map_err(|err| {
+                ProxyError::resolve_ctx("failed to receive local dns response", err)
+            })?,
+            Err(_) => {
+                return Err(ProxyError::timeout(format!(
+                    "dns upstream response timeout after {} ms",
+                    self.query_timeout.as_millis()
+                )));
+            }
+        };
+        buffer.truncate(size);
+        Ok(buffer)
     }
 
     async fn execute_tcp_query(
@@ -663,6 +723,7 @@ impl DomainResolverHandle for DnsExecutor {
 impl DnsServerTransport {
     pub fn as_str(&self) -> &str {
         match self {
+            Self::Local => "local",
             Self::Udp => "udp",
             Self::Tcp => "tcp",
             Self::Tls(_) => "tls",
@@ -674,11 +735,18 @@ impl DnsServerTransport {
 
 fn upstream_network(transport: &DnsServerTransport) -> Network {
     match transport {
-        DnsServerTransport::Udp => Network::Udp,
+        DnsServerTransport::Local | DnsServerTransport::Udp => Network::Udp,
         DnsServerTransport::Tcp
         | DnsServerTransport::Tls(_)
         | DnsServerTransport::Https(_)
         | DnsServerTransport::Unsupported(_) => Network::Tcp,
+    }
+}
+
+fn udp_bind_addr(destination: IpAddr) -> SocketAddr {
+    match destination {
+        IpAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+        IpAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
     }
 }
 
@@ -704,6 +772,7 @@ mod tests {
         },
     };
 
+    use tokio::net::UdpSocket;
     use tokio::sync::{mpsc, Mutex};
     use veex_core::{
         BoxedAsyncStream, Destination, DispatchOutbound, DnsExecutorHandle, DnsRequest,
@@ -712,8 +781,8 @@ mod tests {
     };
 
     use super::{
-        build_a_query, DnsExecutor, DnsRule, DnsRuntimeConfig, DnsServer, DnsServerTransport,
-        MAX_DNS_RECURSION_DEPTH,
+        build_a_query, udp_bind_addr, DnsExecutor, DnsRule, DnsRuntimeConfig, DnsServer,
+        DnsServerTransport, MAX_DNS_RECURSION_DEPTH,
     };
 
     struct TestPacketSession {
@@ -987,6 +1056,60 @@ mod tests {
             .expect_err("resolver should enforce recursion depth");
 
         assert!(err.to_string().contains("recursion depth exceeded"));
+    }
+
+    #[tokio::test]
+    async fn local_udp_query_exchanges_standard_dns_payload() {
+        let query = vec![0x12, 0x34, 0x56];
+        let response = vec![0xab, 0xcd, 0xef];
+        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("udp server should bind");
+        let addr = socket.local_addr().expect("udp server addr should resolve");
+        let expected_query = query.clone();
+        let expected_response = response.clone();
+        let server = tokio::spawn(async move {
+            let mut buffer = [0u8; 2048];
+            let (size, peer) = socket
+                .recv_from(&mut buffer)
+                .await
+                .expect("udp server should receive");
+            assert_eq!(&buffer[..size], expected_query.as_slice());
+            socket
+                .send_to(&expected_response, peer)
+                .await
+                .expect("udp server should respond");
+        });
+
+        let executor = DnsExecutor::new(
+            DnsRuntimeConfig {
+                final_server_tag: String::new(),
+                servers: Vec::new(),
+                rules: Vec::new(),
+            },
+            Arc::new(veex_core::OutboundRegistry::default()),
+        )
+        .expect("dns executor should build");
+
+        let result = executor
+            .execute_local_udp_query(addr, &query)
+            .await
+            .expect("local udp query should succeed");
+
+        server.await.expect("udp server task should join");
+        assert_eq!(result, response);
+    }
+
+    #[test]
+    fn udp_bind_addr_matches_destination_family() {
+        assert_eq!(
+            udp_bind_addr(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
+        );
+        assert_eq!(
+            udp_bind_addr(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)),
+            SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, 0))
+        );
     }
 
     fn build_dns_answer_response(domain: &str, ip: [u8; 4]) -> Vec<u8> {

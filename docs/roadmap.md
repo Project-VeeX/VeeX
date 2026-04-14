@@ -17,7 +17,7 @@ That baseline includes:
 - sequential multi-address connect fallback
 - dispatcher-owned UDP association mapping for `direct` inbound to `direct` outbound
 - `hijack-dns` final-action handoff into a minimal DNS executor
-- UDP, TCP, DoT, or DoH DNS upstream queries routed through detour-aware outbound stream/packet capability
+- local UDP system-resolver queries plus UDP, TCP, DoT, or DoH DNS upstream queries
 - structured observability and stable error classification
 
 The project priority remains consolidation and validation of this execution plane rather than expansion into a broader network platform.

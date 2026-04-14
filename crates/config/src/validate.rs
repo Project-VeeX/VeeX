@@ -260,6 +260,10 @@ fn validate_dns_server(
         ));
     }
 
+    if matches!(server.kind, DnsServerTypeConfig::Local) {
+        return Ok(());
+    }
+
     if server.server.trim().is_empty() {
         return Err(ConfigError::semantic(
             format!("$.dns.servers[{index}].server"),
@@ -370,6 +374,9 @@ fn validate_domain_resolvers(
 
     if let Some(dns) = config.dns.as_ref() {
         for (index, server) in dns.servers.iter().enumerate() {
+            if matches!(server.kind, DnsServerTypeConfig::Local) {
+                continue;
+            }
             if let Some(resolver) = server.domain_resolver.as_ref() {
                 validate_domain_resolver_reference(
                     dns_server_tags,
@@ -702,6 +709,75 @@ mod tests {
         });
 
         validate_config(&config).expect("https dns section should validate");
+    }
+
+    #[test]
+    fn accepts_dns_section_with_local_server_without_detour() {
+        let mut config = valid_config();
+        config.dns = Some(DnsConfig {
+            final_server: "local".into(),
+            servers: vec![DnsServerConfig {
+                tag: "local".into(),
+                kind: DnsServerTypeConfig::Local,
+                server: String::new(),
+                server_port: 0,
+                path: Some(String::new()),
+                headers: std::collections::BTreeMap::from([(
+                    String::from(""),
+                    String::from("value"),
+                )]),
+                detour: String::new(),
+                domain_resolver: Some(crate::DomainResolverConfig {
+                    server: "missing".into(),
+                }),
+                tls: crate::TrojanTlsConfig {
+                    enabled: false,
+                    server_name: None,
+                    disable_sni: false,
+                    insecure: false,
+                    certificate_path: None,
+                    ca_path: None,
+                    handshake_timeout: crate::DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+                },
+            }],
+            rules: vec![],
+        });
+
+        validate_config(&config).expect("local dns section should validate");
+    }
+
+    #[test]
+    fn rejects_dns_final_empty_string_when_explicitly_set() {
+        let mut config = valid_config();
+        config.dns = Some(DnsConfig {
+            final_server: String::new(),
+            servers: vec![DnsServerConfig {
+                tag: "local".into(),
+                kind: DnsServerTypeConfig::Local,
+                server: String::new(),
+                server_port: 53,
+                path: None,
+                headers: Default::default(),
+                detour: String::new(),
+                domain_resolver: None,
+                tls: crate::TrojanTlsConfig {
+                    enabled: true,
+                    server_name: None,
+                    disable_sni: false,
+                    insecure: false,
+                    certificate_path: None,
+                    ca_path: None,
+                    handshake_timeout: crate::DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+                },
+            }],
+            rules: vec![],
+        });
+
+        let err = validate_config(&config).expect_err("explicit empty dns.final should fail");
+        assert!(err.to_string().contains("$.dns.final"));
+        assert!(err
+            .to_string()
+            .contains("dns.final points to missing dns server"));
     }
 
     #[test]

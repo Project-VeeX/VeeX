@@ -281,14 +281,16 @@ fn input_trojan_tls_into_config(input_config: InputTrojanTlsConfig) -> TrojanTls
 }
 
 fn input_dns_into_config(input_config: InputDnsConfig) -> Result<DnsConfig, ConfigError> {
+    let servers = input_config
+        .servers
+        .into_iter()
+        .enumerate()
+        .map(|(index, server)| input_dns_server_into_config(server, index))
+        .collect::<Result<Vec<_>, _>>()?;
+
     Ok(DnsConfig {
-        final_server: required_nested_string(input_config.final_server, "$.dns.final")?,
-        servers: input_config
-            .servers
-            .into_iter()
-            .enumerate()
-            .map(|(index, server)| input_dns_server_into_config(server, index))
-            .collect::<Result<Vec<_>, _>>()?,
+        final_server: parse_dns_final_server(input_config.final_server, &servers)?,
+        servers,
         rules: input_config
             .rules
             .unwrap_or_default()
@@ -304,13 +306,35 @@ fn input_dns_server_into_config(
     index: usize,
 ) -> Result<DnsServerConfig, ConfigError> {
     let kind = parse_dns_server_type(input_server.kind);
+    let server = if matches!(kind, DnsServerTypeConfig::Local) {
+        optional_nested_string(
+            input_server.server,
+            format!("$.dns.servers[{index}].server"),
+        )?
+        .unwrap_or_default()
+    } else {
+        required_nested_string(
+            input_server.server,
+            format!("$.dns.servers[{index}].server"),
+        )?
+    };
+    let detour = if matches!(kind, DnsServerTypeConfig::Local) {
+        optional_nested_string(
+            input_server.detour,
+            format!("$.dns.servers[{index}].detour"),
+        )?
+        .unwrap_or_default()
+    } else {
+        required_nested_string(
+            input_server.detour,
+            format!("$.dns.servers[{index}].detour"),
+        )?
+    };
+
     Ok(DnsServerConfig {
         tag: input_server.tag,
         kind: kind.clone(),
-        server: required_nested_string(
-            input_server.server,
-            format!("$.dns.servers[{index}].server"),
-        )?,
+        server,
         server_port: nested_port_or_default(
             input_server.server_port,
             format!("$.dns.servers[{index}].server_port"),
@@ -328,10 +352,7 @@ fn input_dns_server_into_config(
             input_server.headers,
             format!("$.dns.servers[{index}].headers"),
         )?,
-        detour: required_nested_string(
-            input_server.detour,
-            format!("$.dns.servers[{index}].detour"),
-        )?,
+        detour,
         domain_resolver: optional_domain_resolver(
             input_server.domain_resolver,
             format!("$.dns.servers[{index}].domain_resolver"),
@@ -377,6 +398,7 @@ fn input_dns_rule_into_config(
 
 fn parse_dns_server_type(value: String) -> DnsServerTypeConfig {
     match value.trim().to_ascii_lowercase().as_str() {
+        "local" => DnsServerTypeConfig::Local,
         "udp" => DnsServerTypeConfig::Udp,
         "tcp" => DnsServerTypeConfig::Tcp,
         "tls" => DnsServerTypeConfig::Tls,
@@ -387,11 +409,25 @@ fn parse_dns_server_type(value: String) -> DnsServerTypeConfig {
 
 fn default_dns_server_port(kind: &DnsServerTypeConfig) -> u16 {
     match kind {
-        DnsServerTypeConfig::Udp
+        DnsServerTypeConfig::Local
+        | DnsServerTypeConfig::Udp
         | DnsServerTypeConfig::Tcp
         | DnsServerTypeConfig::Unsupported(_) => DEFAULT_DNS_SERVER_PORT,
         DnsServerTypeConfig::Tls => DEFAULT_DOT_SERVER_PORT,
         DnsServerTypeConfig::Https => DEFAULT_DOH_SERVER_PORT,
+    }
+}
+
+fn parse_dns_final_server(
+    value: Option<Option<String>>,
+    servers: &[DnsServerConfig],
+) -> Result<String, ConfigError> {
+    match value {
+        Some(Some(value)) if !value.is_empty() => Ok(value),
+        Some(Some(_)) | Some(None) | None => Ok(servers
+            .first()
+            .map(|server| server.tag.clone())
+            .unwrap_or_default()),
     }
 }
 
@@ -1076,7 +1112,8 @@ mod tests {
 
     use super::{
         parse_config, parse_config_report_unvalidated, parse_config_with_diagnostics,
-        DEFAULT_DOH_PATH, DEFAULT_DOH_SERVER_PORT, DEFAULT_DOT_SERVER_PORT,
+        DEFAULT_DNS_SERVER_PORT, DEFAULT_DOH_PATH, DEFAULT_DOH_SERVER_PORT,
+        DEFAULT_DOT_SERVER_PORT,
     };
 
     #[test]
@@ -1357,6 +1394,156 @@ mod tests {
         let config = parse_config(input).expect("dns tcp config should parse");
         let dns = config.dns.expect("dns config should exist");
         assert!(matches!(dns.servers[0].kind, DnsServerTypeConfig::Tcp));
+    }
+
+    #[test]
+    fn defaults_dns_final_to_first_server_when_omitted() {
+        let input = r#"
+        {
+          "dns": {
+            "servers": [
+              {
+                "tag": "first-dns",
+                "type": "udp",
+                "server": "223.5.5.5",
+                "detour": "direct"
+              },
+              {
+                "tag": "second-dns",
+                "type": "udp",
+                "server": "1.1.1.1",
+                "detour": "direct"
+              }
+            ]
+          },
+          "inbounds": [
+            { "type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": 15353, "network": "udp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct"
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("dns final should default");
+        let dns = config.dns.expect("dns config should exist");
+
+        assert_eq!(dns.final_server, "first-dns");
+    }
+
+    #[test]
+    fn defaults_dns_final_to_first_server_when_null() {
+        let input = r#"
+        {
+          "dns": {
+            "final": null,
+            "servers": [
+              {
+                "tag": "first-dns",
+                "type": "udp",
+                "server": "223.5.5.5",
+                "detour": "direct"
+              },
+              {
+                "tag": "second-dns",
+                "type": "udp",
+                "server": "1.1.1.1",
+                "detour": "direct"
+              }
+            ]
+          },
+          "inbounds": [
+            { "type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": 15353, "network": "udp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct"
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("dns final null should default");
+        let dns = config.dns.expect("dns config should exist");
+
+        assert_eq!(dns.final_server, "first-dns");
+    }
+
+    #[test]
+    fn defaults_dns_final_to_first_server_when_empty_string() {
+        let input = r#"
+        {
+          "dns": {
+            "final": "",
+            "servers": [
+              {
+                "tag": "first-dns",
+                "type": "udp",
+                "server": "223.5.5.5",
+                "detour": "direct"
+              },
+              {
+                "tag": "second-dns",
+                "type": "udp",
+                "server": "1.1.1.1",
+                "detour": "direct"
+              }
+            ]
+          },
+          "inbounds": [
+            { "type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": 15353, "network": "udp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct"
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("dns final empty string should default");
+        let dns = config.dns.expect("dns config should exist");
+
+        assert_eq!(dns.final_server, "first-dns");
+    }
+
+    #[test]
+    fn parses_dns_local_server_type_without_detour_or_server() {
+        let input = r#"
+        {
+          "dns": {
+            "final": "local-dns",
+            "servers": [
+              {
+                "tag": "local-dns",
+                "type": "local"
+              }
+            ]
+          },
+          "inbounds": [
+            { "type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": 15353, "network": "udp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct"
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("dns local config should parse");
+        let dns = config.dns.expect("dns config should exist");
+
+        assert!(matches!(dns.servers[0].kind, DnsServerTypeConfig::Local));
+        assert!(dns.servers[0].server.is_empty());
+        assert!(dns.servers[0].detour.is_empty());
+        assert_eq!(dns.servers[0].server_port, DEFAULT_DNS_SERVER_PORT);
     }
 
     #[test]

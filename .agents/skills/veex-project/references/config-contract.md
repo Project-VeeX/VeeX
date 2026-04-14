@@ -83,13 +83,14 @@ Current rule execution contract:
 
 The current accepted DNS subset is intentionally narrow:
 
-- `dns.final` — required default DNS server tag
+- `dns.final`:
+  - when omitted, set to `null`, or set to `""`, defaults to `dns.servers[0].tag`
+  - when present, must match an existing DNS server tag
 - `dns.servers[*]`:
   - `tag`
   - `type`
-  - `server`
-  - `server_port`
-  - `detour`
+  - `server` / `server_port` / `detour` for non-`local` upstreams
+  - `local` reads `nameserver` entries from `/etc/resolv.conf` and ignores unused upstream fields
 - `dns.rules[*]`:
   - `domain`
   - `server`
@@ -97,8 +98,9 @@ The current accepted DNS subset is intentionally narrow:
 
 Current DNS runtime boundary:
 
-- UDP and TCP upstream servers are executed
-- non-UDP/non-TCP server types may remain present in config, but selecting them is a runtime unsupported path
+- `local` executes standard UDP queries against `nameserver` entries read from `/etc/resolv.conf`
+- UDP and TCP upstream servers are executed through detour-aware outbound stream or packet capability
+- TLS/HTTPS upstream servers are executed through detour-aware outbound stream capability
 - DNS server selection belongs to the DNS subsystem, not to `route.rules`
 - DNS queries use short-lived upstream stream or packet sessions rather than client-facing associations or relay
 

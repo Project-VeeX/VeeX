@@ -8,6 +8,7 @@ license.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 veex-core = { path = "../core" }
+veex-infra-linux = { path = "../infra-linux" }
 veex-transport = { path = "../transport" }
 
 [dev-dependencies]

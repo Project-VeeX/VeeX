@@ -183,6 +183,7 @@ fn lower_dns_server(server: &veex_config::DnsServerConfig) -> DnsServer {
     DnsServer {
         tag: server.tag.clone(),
         transport: match &server.kind {
+            DnsServerTypeConfig::Local => DnsServerTransport::Local,
             DnsServerTypeConfig::Udp => DnsServerTransport::Udp,
             DnsServerTypeConfig::Tcp => DnsServerTransport::Tcp,
             DnsServerTypeConfig::Tls => DnsServerTransport::Tls(lower_tls_options(&server.tls)),
@@ -196,7 +197,10 @@ fn lower_dns_server(server: &veex_config::DnsServerConfig) -> DnsServer {
             }),
             DnsServerTypeConfig::Unsupported(kind) => DnsServerTransport::Unsupported(kind.clone()),
         },
-        destination: Destination::new(parse_host(&server.server), server.server_port),
+        destination: match &server.kind {
+            DnsServerTypeConfig::Local => Destination::new(Host::Domain("local".into()), 53),
+            _ => Destination::new(parse_host(&server.server), server.server_port),
+        },
         detour: server.detour.clone(),
         domain_resolver: server
             .domain_resolver
