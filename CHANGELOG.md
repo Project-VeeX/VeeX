@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2
+
+- Fixed `direct` inbound so an empty `network` now means `tcp+udp`, matching sing-box `direct` inbound semantics instead of incorrectly falling back to TCP only.
+- Added `dns.servers[*].type = "local"` to read system DNS servers from `/etc/resolv.conf` and send standard UDP DNS queries without `detour`.
+- Updated `dns.final` so omitted, `null`, or empty-string values now default to the first configured DNS server.
+
 ## 0.6.1
 
 - Unified the execution plane around explicit `stream` and `packet` module ownership.
