@@ -10,9 +10,9 @@ use std::{
 };
 
 use veex_core::{
-    BoxFuture, BoxedAsyncStream, DialContext, Dialer, DispatchOutbound, Logger, Outbound,
-    OutboundMeta, PacketDialer, PacketSessionHandle, ProxyError, ResolveContext, Result,
-    SessionContext, StreamOutbound,
+    BoxFuture, BoxedAsyncStream, DialContext, Dialer, Logger, Outbound, OutboundMeta, PacketDialer,
+    PacketSessionHandle, PlaneOutbound, ProxyError, ResolveContext, Result, SessionContext,
+    StreamOutbound,
 };
 
 #[derive(Debug)]
@@ -131,12 +131,12 @@ impl StreamOutbound for DirectOutbound {
     }
 }
 
-impl DispatchOutbound for DirectOutbound {
-    fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
-        self.connect_stream(ctx)
+impl PlaneOutbound for DirectOutbound {
+    fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        StreamOutbound::connect_stream(self, ctx)
     }
 
-    fn connect_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
+    fn open_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
         let destination = ctx.meta.destination.clone();
         let dialer = self.packet_dialer.clone();
         let trace = self.build_dial_context(ctx);

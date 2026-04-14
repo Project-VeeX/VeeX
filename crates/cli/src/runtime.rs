@@ -189,8 +189,8 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use veex_core::{
-        BoxFuture, BoxedAsyncStream, Destination, DispatchOutbound, ErrorKind, Host, Logger,
-        Network, Outbound, OutboundMeta, OutboundRegistry, ProxyError, SessionContext, SessionMeta,
+        BoxFuture, BoxedAsyncStream, Destination, ErrorKind, Host, Logger, Network, Outbound,
+        OutboundMeta, OutboundRegistry, PlaneOutbound, ProxyError, SessionContext, SessionMeta,
     };
 
     use super::{close_outbounds, start_outbounds};
@@ -262,8 +262,8 @@ mod tests {
         }
     }
 
-    impl DispatchOutbound for TestDispatchOutbound {
-        fn connect(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+    impl PlaneOutbound for TestDispatchOutbound {
+        fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             let closed = self.closed.load(Ordering::Relaxed);
             Box::pin(async move {
                 if closed {
@@ -303,7 +303,7 @@ mod tests {
         let outbound = registry
             .get("direct")
             .expect("registry should return dispatch view");
-        let err = match outbound.connect(&test_context()).await {
+        let err = match outbound.open_stream(&test_context()).await {
             Ok(_) => panic!("dispatch view should observe runtime close"),
             Err(err) => err,
         };
@@ -328,7 +328,7 @@ mod tests {
             .get("direct")
             .expect("registry should return dispatch view");
         outbound
-            .connect(&test_context())
+            .open_stream(&test_context())
             .await
             .expect("dispatch view should reuse same runtime object after start");
     }

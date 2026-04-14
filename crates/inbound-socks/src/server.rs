@@ -13,8 +13,8 @@ use tokio::{
 use tracing::{info, warn};
 use veex_core::{
     build_session_bootstrap, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound,
-    InboundMeta, InboundSink, Listener, ListenerAcceptHandler, Logger, ProxyError, Result,
-    SessionBootstrap, StreamInbound,
+    InboundMeta, Listener, ListenerAcceptHandler, Logger, ProxyError, Result, SessionBootstrap,
+    StreamInbound, StreamSink,
 };
 
 use crate::{
@@ -32,7 +32,7 @@ struct SocksInboundState {
 pub struct SocksInbound {
     meta: InboundMeta,
     logger: Logger,
-    sink: Arc<dyn InboundSink>,
+    sink: Arc<dyn StreamSink>,
     listener: Listener,
     state: Arc<SocksInboundState>,
 }
@@ -41,7 +41,7 @@ impl SocksInbound {
     pub fn new(
         meta: InboundMeta,
         logger: Logger,
-        sink: Arc<dyn InboundSink>,
+        sink: Arc<dyn StreamSink>,
         listener: Listener,
     ) -> Result<Arc<Self>> {
         let inbound = Arc::new(Self {
@@ -323,8 +323,7 @@ mod tests {
         sync::oneshot,
     };
     use veex_core::{
-        BoxFuture, Destination, Inbound, InboundMeta, InboundSink, Listener, ListenerFactory,
-        Logger,
+        BoxFuture, Destination, Inbound, InboundMeta, Listener, ListenerFactory, Logger, StreamSink,
     };
 
     use super::SocksInbound;
@@ -333,7 +332,7 @@ mod tests {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,
     }
 
-    impl InboundSink for RecordingSink {
+    impl StreamSink for RecordingSink {
         fn submit(
             &self,
             _inbound_stream: veex_core::BoxedAsyncStream,
@@ -355,7 +354,7 @@ mod tests {
         let listen_addr = reserve_local_port().await;
         let expected = Destination::from_domain("example.com", 443);
         let (tx, rx) = oneshot::channel();
-        let sink: Arc<dyn InboundSink> = Arc::new(RecordingSink {
+        let sink: Arc<dyn StreamSink> = Arc::new(RecordingSink {
             tx: Mutex::new(Some(tx)),
         });
         let inbound = SocksInbound::new(

@@ -6,19 +6,21 @@
 //!   packet/  — UDP packet execution via PacketDispatcher
 //! ```
 
+pub mod outbound;
 pub mod packet;
-pub mod shared;
+pub mod registry;
+pub mod session;
 pub mod stream;
 
+pub use crate::router::RouteReason;
+pub use outbound::PlaneOutbound;
 pub use packet::dispatcher::{PacketDispatcher, PacketSink};
-pub use packet::forward::{
+pub use packet::io::{
     PacketAssociationKey, PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle,
     PacketWriter,
 };
-pub use shared::{
-    DispatchOutbound, OutboundRegistry, RouteReason, SessionContext, SessionMeta, SessionRoute,
-    SessionState,
-};
-pub use stream::dispatcher::{InboundSink, StreamDispatcher};
+pub use registry::OutboundRegistry;
+pub use session::{SessionContext, SessionMeta, SessionRoute, SessionState};
+pub use stream::dispatcher::{StreamDispatcher, StreamSink};
 pub use stream::io::{AsyncStream, BoxedAsyncStream};
 pub use stream::relay::{relay_bidirectional, RelayErrorWithStats, RelayStats};

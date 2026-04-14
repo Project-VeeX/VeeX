@@ -3,14 +3,27 @@ use std::time::Duration;
 use ipnet::IpNet;
 use tracing::{debug, info, warn};
 
-pub use crate::plane::shared::context::RouteReason;
-
 use crate::{
     logging::sanitize_field,
-    plane::{shared::context::SessionContext, stream::io::BoxedAsyncStream},
+    plane::{session::SessionContext, stream::io::BoxedAsyncStream},
     sniff::{sniff_stream_internal, SniffExecution, SniffResult},
     types::{Destination, Host},
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RouteReason {
+    Rule,
+    Final,
+}
+
+impl RouteReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rule => "rule",
+            Self::Final => "final",
+        }
+    }
+}
 
 /// The result of a routing decision for a session.
 #[derive(Clone, Debug, Eq, PartialEq)]

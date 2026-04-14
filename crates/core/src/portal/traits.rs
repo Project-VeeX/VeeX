@@ -5,7 +5,7 @@ use tokio::net::TcpStream;
 use crate::{
     error::Result,
     logging::Logger,
-    plane::{shared::context::SessionContext, stream::io::BoxedAsyncStream},
+    plane::{session::SessionContext, stream::io::BoxedAsyncStream},
     portal::meta::{InboundMeta, OutboundMeta},
 };
 

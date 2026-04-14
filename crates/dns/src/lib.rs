@@ -333,7 +333,7 @@ impl DnsExecutor {
         let outbound = self.outbounds.get(detour).ok_or_else(|| {
             ProxyError::config(format!("missing outbound tag for dns detour: {detour}"))
         })?;
-        let session = outbound.connect_packet(ctx).await?;
+        let session = outbound.open_packet(ctx).await?;
 
         if let Err(err) = session.send_packet(query.to_vec()).await {
             log_close_result(query_id, session.close().await);
@@ -484,7 +484,7 @@ impl DnsExecutor {
         let outbound = self.outbounds.get(detour).ok_or_else(|| {
             ProxyError::config(format!("missing outbound tag for dns detour: {detour}"))
         })?;
-        outbound.connect(ctx).await
+        outbound.open_stream(ctx).await
     }
 
     async fn connect_tls_for_dns(
@@ -775,9 +775,9 @@ mod tests {
     use tokio::net::UdpSocket;
     use tokio::sync::{mpsc, Mutex};
     use veex_core::{
-        BoxedAsyncStream, Destination, DispatchOutbound, DnsExecutorHandle, DnsRequest,
-        DomainResolverHandle, Host, Logger, Network, Outbound, OutboundMeta, PacketSessionHandle,
-        ProxyError, ResolveContext, SessionContext,
+        BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DomainResolverHandle, Host,
+        Logger, Network, Outbound, OutboundMeta, PacketSessionHandle, PlaneOutbound, ProxyError,
+        ResolveContext, SessionContext,
     };
 
     use super::{
@@ -834,12 +834,12 @@ mod tests {
         }
     }
 
-    impl DispatchOutbound for TestOutbound {
-        fn connect(&self, _ctx: &SessionContext) -> veex_core::BoxFuture<'_, BoxedAsyncStream> {
+    impl PlaneOutbound for TestOutbound {
+        fn open_stream(&self, _ctx: &SessionContext) -> veex_core::BoxFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("stream path unused")) })
         }
 
-        fn connect_packet(
+        fn open_packet(
             &self,
             ctx: &SessionContext,
         ) -> veex_core::BoxFuture<'_, PacketSessionHandle> {
@@ -870,7 +870,7 @@ mod tests {
         });
         let mut registry = veex_core::OutboundRegistry::default();
         registry
-            .register(outbound as Arc<dyn DispatchOutbound>)
+            .register(outbound as Arc<dyn PlaneOutbound>)
             .expect("test outbound should register");
         let executor = DnsExecutor::new(
             DnsRuntimeConfig {
@@ -943,7 +943,7 @@ mod tests {
         });
         let mut registry = veex_core::OutboundRegistry::default();
         registry
-            .register(outbound as Arc<dyn DispatchOutbound>)
+            .register(outbound as Arc<dyn PlaneOutbound>)
             .expect("test outbound should register");
         let executor = DnsExecutor::new(
             DnsRuntimeConfig {

@@ -2,29 +2,9 @@ use std::{net::SocketAddr, sync::Arc, time::Instant};
 
 use crate::{
     dns::ResolveContext,
+    router::RouteReason,
     types::{Destination, Network},
 };
-
-/// The reason a particular route decision was made.
-///
-/// This is used for observability and logging to understand why
-/// a session was routed to a specific outbound.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RouteReason {
-    /// Routed by the user-defined route.rules chain.
-    Rule,
-    /// Routed by the default final action after no rule produced a final action.
-    Final,
-}
-
-impl RouteReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Rule => "rule",
-            Self::Final => "final",
-        }
-    }
-}
 
 /// Immutable metadata for a session.
 ///
@@ -124,7 +104,8 @@ mod tests {
 
     use crate::types::{Destination, Host, Network};
 
-    use super::{RouteReason, SessionContext, SessionMeta};
+    use super::{SessionContext, SessionMeta};
+    use crate::router::RouteReason;
 
     #[test]
     fn session_context_starts_with_empty_route_and_buffered_payload_state() {

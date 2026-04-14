@@ -10,8 +10,8 @@ use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
     build_session_bootstrap, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Host,
-    Inbound, InboundMeta, InboundSink, Listener, ListenerAcceptHandler, Logger, ProxyError, Result,
-    SessionBootstrap, StreamInbound,
+    Inbound, InboundMeta, Listener, ListenerAcceptHandler, Logger, ProxyError, Result,
+    SessionBootstrap, StreamInbound, StreamSink,
 };
 
 use crate::DirectError;
@@ -23,7 +23,7 @@ struct DirectInboundState {
 pub struct DirectInbound {
     meta: InboundMeta,
     logger: Logger,
-    sink: Arc<dyn InboundSink>,
+    sink: Arc<dyn StreamSink>,
     listener: Listener,
     override_host: Option<Host>,
     override_port: Option<u16>,
@@ -34,7 +34,7 @@ impl DirectInbound {
     pub fn new(
         meta: InboundMeta,
         logger: Logger,
-        sink: Arc<dyn InboundSink>,
+        sink: Arc<dyn StreamSink>,
         listener: Listener,
         override_host: Option<Host>,
         override_port: Option<u16>,
@@ -221,8 +221,8 @@ mod tests {
 
     use tokio::{net::TcpListener, net::TcpStream, sync::oneshot};
     use veex_core::{
-        BoxFuture, Destination, Host, Inbound, InboundMeta, InboundSink, Listener, ListenerFactory,
-        Logger,
+        BoxFuture, Destination, Host, Inbound, InboundMeta, Listener, ListenerFactory, Logger,
+        StreamSink,
     };
 
     use super::DirectInbound;
@@ -231,7 +231,7 @@ mod tests {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,
     }
 
-    impl InboundSink for RecordingSink {
+    impl StreamSink for RecordingSink {
         fn submit(
             &self,
             _inbound_stream: veex_core::BoxedAsyncStream,
@@ -253,7 +253,7 @@ mod tests {
         let listen_addr = reserve_local_port().await;
         let expected = Destination::from_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), listen_addr.port());
         let (tx, rx) = oneshot::channel();
-        let sink: Arc<dyn InboundSink> = Arc::new(RecordingSink {
+        let sink: Arc<dyn StreamSink> = Arc::new(RecordingSink {
             tx: Mutex::new(Some(tx)),
         });
         let inbound = DirectInbound::new(
@@ -288,7 +288,7 @@ mod tests {
         let listen_addr = reserve_local_port().await;
         let expected = Destination::from_domain("example.com", 8443);
         let (tx, rx) = oneshot::channel();
-        let sink: Arc<dyn InboundSink> = Arc::new(RecordingSink {
+        let sink: Arc<dyn StreamSink> = Arc::new(RecordingSink {
             tx: Mutex::new(Some(tx)),
         });
         let inbound = DirectInbound::new(
@@ -323,7 +323,7 @@ mod tests {
         let listen_addr = reserve_local_port().await;
         let expected = Destination::from_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), 9443);
         let (tx, rx) = oneshot::channel();
-        let sink: Arc<dyn InboundSink> = Arc::new(RecordingSink {
+        let sink: Arc<dyn StreamSink> = Arc::new(RecordingSink {
             tx: Mutex::new(Some(tx)),
         });
         let inbound = DirectInbound::new(

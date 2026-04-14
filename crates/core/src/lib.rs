@@ -20,16 +20,15 @@ pub use error::{ErrorKind, ProxyError, Result};
 pub use listen::{format_listen_addr, parse_listen_addr};
 pub use logging::{sanitize_field, Logger};
 pub use plane::{
+    outbound::PlaneOutbound,
     packet::dispatcher::{PacketDispatcher, PacketSink},
-    packet::forward::{
+    packet::io::{
         PacketAssociationKey, PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle,
         PacketWriter,
     },
-    shared::{
-        DispatchOutbound, OutboundRegistry, RouteReason, SessionContext, SessionMeta, SessionRoute,
-        SessionState,
-    },
-    stream::dispatcher::{InboundSink, StreamDispatcher},
+    registry::OutboundRegistry,
+    session::{SessionContext, SessionMeta, SessionRoute, SessionState},
+    stream::dispatcher::{StreamDispatcher, StreamSink},
     stream::io::{AsyncStream, BoxedAsyncStream},
     stream::relay::{relay_bidirectional, RelayErrorWithStats, RelayStats},
 };
@@ -43,7 +42,7 @@ pub use portal::{
     },
 };
 pub use router::{
-    RouteAction, RouteDecision, RouteFinalAction, RouteInput, RouteRule, RouteTarget,
+    RouteAction, RouteDecision, RouteFinalAction, RouteInput, RouteReason, RouteRule, RouteTarget,
     RouteUpgradeAction, Router, SniffAction,
 };
 pub use session::{build_session_bootstrap, SessionBootstrap};

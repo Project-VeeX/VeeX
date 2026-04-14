@@ -1,30 +1,31 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
         Arc, Mutex, MutexGuard,
     },
     time::{Duration, Instant},
 };
 
-use tokio::sync::Notify;
-use tracing::{debug, info, warn};
+use tracing::warn;
 
 use crate::{
-    dns::{DnsExecutorHandle, DnsRequest},
+    dns::DnsExecutorHandle,
     error::ProxyError,
     logging::sanitize_field,
     plane::{
-        packet::forward::{
-            PacketAssociationKey, PacketFrame, PacketMetadata, PacketSessionHandle, PacketWriter,
+        packet::{
+            dns::hijack_packet_dns,
+            forward::{
+                log_packet_association_close, log_packet_association_hit, PacketAssociation,
+            },
+            io::{PacketAssociationKey, PacketFrame, PacketMetadata, PacketWriter},
         },
-        shared::{
-            context::{RouteReason, SessionContext, SessionMeta},
-            registry::OutboundRegistry,
-        },
+        registry::OutboundRegistry,
+        session::{SessionContext, SessionMeta},
     },
     portal::traits::BoxFuture,
-    router::{RouteFinalAction, Router},
+    router::{RouteFinalAction, RouteReason, Router},
     types::Network,
 };
 
@@ -49,37 +50,6 @@ pub struct PacketDispatcher {
     associations: Arc<Mutex<HashMap<PacketAssociationKey, Arc<PacketAssociation>>>>,
     next_association_id: AtomicU64,
     idle_timeout: Duration,
-}
-
-struct PacketAssociation {
-    id: u64,
-    key: PacketAssociationKey,
-    outbound_tag: String,
-    route_reason: RouteReason,
-    session: PacketSessionHandle,
-    writer: Arc<dyn PacketWriter>,
-    last_activity: Mutex<Instant>,
-    activity: Notify,
-    closed: AtomicBool,
-    close_notify: Notify,
-}
-
-#[derive(Clone, Debug)]
-struct PacketAssociationTrace {
-    association_id: u64,
-    inbound_field: String,
-    outbound_field: String,
-    peer_field: String,
-    destination_field: String,
-    route_reason: RouteReason,
-}
-
-#[derive(Debug)]
-enum PacketAssociationCloseReason {
-    Idle,
-    UpstreamError(ProxyError),
-    ClientWriteError(ProxyError),
-    Shutdown,
 }
 
 impl PacketDispatcher {
@@ -142,10 +112,10 @@ impl PacketDispatcher {
         association: Arc<PacketAssociation>,
     ) -> Result<Arc<PacketAssociation>, Arc<PacketAssociation>> {
         let mut associations = lock_unpoisoned(&self.associations);
-        if let Some(existing) = associations.get(&association.key) {
+        if let Some(existing) = associations.get(association.key()) {
             return Err(Arc::clone(existing));
         }
-        associations.insert(association.key.clone(), Arc::clone(&association));
+        associations.insert(association.key().clone(), Arc::clone(&association));
         Ok(association)
     }
 
@@ -166,22 +136,15 @@ impl PacketDispatcher {
             .outbounds
             .get(&outbound_tag)
             .ok_or_else(|| ProxyError::config(format!("missing outbound tag: {outbound_tag}")))?;
-        let session = outbound.connect_packet(&ctx).await?;
-        let association = Arc::new(PacketAssociation {
-            id: ctx.meta.id,
-            key: metadata.association_key(),
+        let session = outbound.open_packet(&ctx).await?;
+        Ok(PacketAssociation::new(
+            ctx.meta.id,
+            metadata.association_key(),
             outbound_tag,
             route_reason,
             session,
             writer,
-            last_activity: Mutex::new(Instant::now()),
-            activity: Notify::new(),
-            closed: AtomicBool::new(false),
-            close_notify: Notify::new(),
-        });
-
-        log_packet_association_create(&PacketAssociationTrace::from_association(&association));
-        Ok(association)
+        ))
     }
 
     async fn hijack_dns(
@@ -193,62 +156,7 @@ impl PacketDispatcher {
         let executor = self.dns_executor.as_ref().ok_or_else(|| {
             ProxyError::config("route selected 'hijack-dns' but dns executor is not configured")
         })?;
-        let inbound = sanitize_field(&packet.metadata.inbound_tag).into_owned();
-        let peer = sanitize_field(&packet.metadata.peer.to_string()).into_owned();
-        let destination = sanitize_field(&packet.metadata.destination.to_string()).into_owned();
-        info!(
-            event = "packet_hijack_dns",
-            inbound = %inbound,
-            peer = %peer,
-            destination = %destination,
-            route_reason = %route_reason.as_str(),
-            "packet handed off to dns executor"
-        );
-
-        let peer_addr = packet.metadata.peer;
-        let response = match executor
-            .execute_query(DnsRequest::from_packet(packet))
-            .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                warn!(
-                    event = "packet_hijack_dns_failed",
-                    inbound = %inbound,
-                    peer = %peer,
-                    destination = %destination,
-                    route_reason = %route_reason.as_str(),
-                    error_kind = ?err.kind(),
-                    error = %err,
-                    "dns executor failed"
-                );
-                return Err(err);
-            }
-        };
-
-        if let Err(err) = writer.send_to(peer_addr, response.raw_message).await {
-            warn!(
-                event = "packet_hijack_dns_write_failed",
-                inbound = %inbound,
-                peer = %peer,
-                destination = %destination,
-                route_reason = %route_reason.as_str(),
-                error_kind = ?err.kind(),
-                error = %err,
-                "dns response write-back failed"
-            );
-            return Err(err);
-        }
-
-        info!(
-            event = "packet_hijack_dns_complete",
-            inbound = %inbound,
-            peer = %peer,
-            destination = %destination,
-            route_reason = %route_reason.as_str(),
-            "dns response written back to client"
-        );
-        Ok(())
+        hijack_packet_dns(executor, packet, writer, route_reason).await
     }
 
     fn spawn_reverse_loop(&self, association: Arc<PacketAssociation>) {
@@ -257,22 +165,19 @@ impl PacketDispatcher {
 
         tokio::spawn(async move {
             let close_reason = association.run_reverse_loop(idle_timeout).await;
-            remove_association_from_map(&associations, &association.key, association.id);
-            if let Err(err) = association.session.close().await {
+            remove_association_from_map(&associations, association.key(), association.id());
+            if let Err(err) = association.session().close().await {
                 warn!(
                     event = "packet_association_close_error",
-                    association_id = association.id,
-                    inbound = %sanitize_field(&association.key.inbound_tag),
-                    destination = %sanitize_field(&association.key.destination.to_string()),
+                    association_id = association.id(),
+                    inbound = %sanitize_field(&association.key().inbound_tag),
+                    destination = %sanitize_field(&association.key().destination.to_string()),
                     error_kind = ?err.kind(),
                     error = %err,
                     "packet association close failed"
                 );
             }
-            log_packet_association_close(
-                &PacketAssociationTrace::from_association(&association),
-                &close_reason,
-            );
+            log_packet_association_close(&association, &close_reason);
         });
     }
 
@@ -294,7 +199,7 @@ impl PacketDispatcher {
         let association_key = packet.metadata.association_key();
         let association = match self.association(&association_key) {
             Some(existing) => {
-                log_packet_association_hit(&PacketAssociationTrace::from_association(&existing));
+                log_packet_association_hit(&existing);
                 existing
             }
             None => {
@@ -328,9 +233,7 @@ impl PacketDispatcher {
                             created
                         }
                         Err(existing) => {
-                            log_packet_association_hit(&PacketAssociationTrace::from_association(
-                                &existing,
-                            ));
+                            log_packet_association_hit(&existing);
                             existing
                         }
                     },
@@ -343,8 +246,8 @@ impl PacketDispatcher {
 
         if let Err(err) = association.send(packet.payload).await {
             association.shutdown();
-            self.remove_association(&association.key, association.id);
-            let _ = association.session.close().await;
+            self.remove_association(association.key(), association.id());
+            let _ = association.session().close().await;
             return Err(err);
         }
 
@@ -362,123 +265,13 @@ impl PacketSink for PacketDispatcher {
     }
 }
 
-impl PacketAssociation {
-    async fn send(&self, payload: Vec<u8>) -> crate::Result<()> {
-        self.touch();
-        let result = self.session.send_packet(payload).await;
-        if result.is_ok() {
-            self.touch();
-        }
-        result
-    }
-
-    async fn run_reverse_loop(&self, idle_timeout: Duration) -> PacketAssociationCloseReason {
-        loop {
-            if self.is_closed() {
-                return PacketAssociationCloseReason::Shutdown;
-            }
-
-            let idle_wait = tokio::time::sleep(self.remaining_idle(idle_timeout));
-            let close_wait = self.close_notify.notified();
-            tokio::pin!(idle_wait);
-            tokio::pin!(close_wait);
-
-            tokio::select! {
-                _ = &mut close_wait => {
-                    if self.is_closed() {
-                        return PacketAssociationCloseReason::Shutdown;
-                    }
-                }
-                _ = self.activity.notified() => {}
-                recv_result = self.session.recv_packet() => {
-                    match recv_result {
-                        Ok(payload) => {
-                            self.touch();
-                            let trace = PacketAssociationTrace::from_association(self);
-                            log_packet_reverse(&trace, payload.len());
-                            if let Err(err) = self.writer.send_to(self.key.peer, payload).await {
-                                return PacketAssociationCloseReason::ClientWriteError(err);
-                            }
-                        }
-                        Err(err) => return PacketAssociationCloseReason::UpstreamError(err),
-                    }
-                }
-                _ = &mut idle_wait => {
-                    if self.is_idle(idle_timeout) {
-                        return PacketAssociationCloseReason::Idle;
-                    }
-                }
-            }
-        }
-    }
-
-    fn remaining_idle(&self, idle_timeout: Duration) -> Duration {
-        idle_timeout.saturating_sub(self.last_activity().elapsed())
-    }
-
-    fn is_idle(&self, idle_timeout: Duration) -> bool {
-        self.last_activity().elapsed() >= idle_timeout
-    }
-
-    fn touch(&self) {
-        *lock_unpoisoned(&self.last_activity) = Instant::now();
-        self.activity.notify_waiters();
-    }
-
-    fn shutdown(&self) {
-        self.closed.store(true, Ordering::Relaxed);
-        self.close_notify.notify_waiters();
-    }
-
-    fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::Relaxed)
-    }
-
-    fn last_activity(&self) -> Instant {
-        *lock_unpoisoned(&self.last_activity)
-    }
-}
-
-impl PacketAssociationTrace {
-    fn from_association(association: &PacketAssociation) -> Self {
-        Self {
-            association_id: association.id,
-            inbound_field: sanitize_field(&association.key.inbound_tag).into_owned(),
-            outbound_field: sanitize_field(&association.outbound_tag).into_owned(),
-            peer_field: sanitize_field(&association.key.peer.to_string()).into_owned(),
-            destination_field: sanitize_field(&association.key.destination.to_string())
-                .into_owned(),
-            route_reason: association.route_reason,
-        }
-    }
-}
-
-impl PacketAssociationCloseReason {
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::UpstreamError(_) => "upstream_error",
-            Self::ClientWriteError(_) => "client_write_error",
-            Self::Shutdown => "shutdown",
-        }
-    }
-
-    fn error(&self) -> Option<&ProxyError> {
-        match self {
-            Self::Idle => None,
-            Self::Shutdown => None,
-            Self::UpstreamError(err) | Self::ClientWriteError(err) => Some(err),
-        }
-    }
-}
-
 fn remove_association_from_map(
     associations: &Mutex<HashMap<PacketAssociationKey, Arc<PacketAssociation>>>,
     key: &PacketAssociationKey,
     association_id: u64,
 ) {
     let mut associations = lock_unpoisoned(associations);
-    if matches!(associations.get(key), Some(existing) if existing.id == association_id) {
+    if matches!(associations.get(key), Some(existing) if existing.id() == association_id) {
         associations.remove(key);
     }
 }
@@ -487,83 +280,6 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn log_packet_association_create(trace: &PacketAssociationTrace) {
-    info!(
-        event = "packet_association_create",
-        association_id = trace.association_id,
-        inbound = %trace.inbound_field,
-        outbound = %trace.outbound_field,
-        peer = %trace.peer_field,
-        destination = %trace.destination_field,
-        route_reason = %trace.route_reason.as_str(),
-        "packet association created"
-    );
-}
-
-fn log_packet_association_hit(trace: &PacketAssociationTrace) {
-    debug!(
-        event = "packet_association_hit",
-        association_id = trace.association_id,
-        inbound = %trace.inbound_field,
-        outbound = %trace.outbound_field,
-        peer = %trace.peer_field,
-        destination = %trace.destination_field,
-        "packet association hit"
-    );
-}
-
-fn log_packet_reverse(trace: &PacketAssociationTrace, payload_len: usize) {
-    debug!(
-        event = "packet_reverse_write",
-        association_id = trace.association_id,
-        inbound = %trace.inbound_field,
-        outbound = %trace.outbound_field,
-        peer = %trace.peer_field,
-        destination = %trace.destination_field,
-        payload_len = payload_len as u64,
-        "packet reverse write"
-    );
-}
-
-fn log_packet_association_close(
-    trace: &PacketAssociationTrace,
-    close_reason: &PacketAssociationCloseReason,
-) {
-    if let Some(err) = close_reason.error() {
-        log_packet_association_close_error(trace, close_reason.label(), err);
-    } else {
-        info!(
-            event = "packet_association_close",
-            association_id = trace.association_id,
-            inbound = %trace.inbound_field,
-            outbound = %trace.outbound_field,
-            peer = %trace.peer_field,
-            destination = %trace.destination_field,
-            close_reason = close_reason.label(),
-            "packet association closed"
-        );
-    }
-}
-
-fn log_packet_association_close_error(
-    trace: &PacketAssociationTrace,
-    close_reason: &str,
-    err: &ProxyError,
-) {
-    warn!(
-        event = "packet_association_close",
-        association_id = trace.association_id,
-        inbound = %trace.inbound_field,
-        outbound = %trace.outbound_field,
-        peer = %trace.peer_field,
-        destination = %trace.destination_field,
-        close_reason,
-        error_kind = ?err.kind(),
-        error = %err,
-        "packet association closed"
-    );
 }
 
 #[cfg(test)]
@@ -585,9 +301,9 @@ mod tests {
         logging::Logger,
         router::{RouteAction, RouteFinalAction, RouteRule},
         types::Host,
-        BoxFuture, BoxedAsyncStream, Destination, DispatchOutbound, Network, Outbound,
-        OutboundMeta, OutboundRegistry, PacketFrame, PacketMetadata, PacketSession,
-        PacketSessionHandle, ProxyError, SessionContext,
+        BoxFuture, BoxedAsyncStream, Destination, Network, Outbound, OutboundMeta,
+        OutboundRegistry, PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle,
+        PlaneOutbound, ProxyError, SessionContext,
     };
 
     use super::{PacketDispatcher, PacketSink, PacketWriter};
@@ -668,12 +384,12 @@ mod tests {
         }
     }
 
-    impl DispatchOutbound for TestDispatchOutbound {
-        fn connect(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+    impl PlaneOutbound for TestDispatchOutbound {
+        fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("stream path is not used in this test")) })
         }
 
-        fn connect_packet(&self, _ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
+        fn open_packet(&self, _ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
             self.connect_count.fetch_add(1, Ordering::Relaxed);
             let session = Arc::clone(&self.session);
             Box::pin(async move { Ok(session) })
@@ -711,7 +427,7 @@ mod tests {
         let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
         let mut registry = OutboundRegistry::default();
         registry
-            .register(outbound.clone() as Arc<dyn DispatchOutbound>)
+            .register(outbound.clone() as Arc<dyn PlaneOutbound>)
             .expect("registry should accept outbound");
         let dispatcher = PacketDispatcher::with_idle_timeout(
             crate::Router::with_default_outbound("direct"),
@@ -797,7 +513,7 @@ mod tests {
         let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
         let mut registry = OutboundRegistry::default();
         registry
-            .register(outbound as Arc<dyn DispatchOutbound>)
+            .register(outbound as Arc<dyn PlaneOutbound>)
             .expect("registry should accept outbound");
         let dispatcher = PacketDispatcher::with_idle_timeout(
             crate::Router::with_default_outbound("direct"),

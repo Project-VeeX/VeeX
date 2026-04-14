@@ -1,16 +1,16 @@
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{error::ProxyError, plane::shared::outbound::DispatchOutbound};
+use crate::{error::ProxyError, plane::outbound::PlaneOutbound};
 
 /// Registry of dispatch-capable outbounds indexed by tag.
 #[derive(Default)]
 pub struct OutboundRegistry {
-    outbounds: Vec<Arc<dyn DispatchOutbound>>,
+    outbounds: Vec<Arc<dyn PlaneOutbound>>,
     index_by_tag: HashMap<String, usize>,
 }
 
 impl OutboundRegistry {
-    pub fn register(&mut self, outbound: Arc<dyn DispatchOutbound>) -> crate::Result<()> {
+    pub fn register(&mut self, outbound: Arc<dyn PlaneOutbound>) -> crate::Result<()> {
         let tag = outbound.meta().tag.clone();
         if self.index_by_tag.contains_key(&tag) {
             return Err(ProxyError::config(format!(
@@ -24,7 +24,7 @@ impl OutboundRegistry {
         Ok(())
     }
 
-    pub fn get(&self, tag: &str) -> Option<Arc<dyn DispatchOutbound>> {
+    pub fn get(&self, tag: &str) -> Option<Arc<dyn PlaneOutbound>> {
         self.index_by_tag
             .get(tag)
             .and_then(|index| self.outbounds.get(*index))
@@ -43,7 +43,7 @@ impl OutboundRegistry {
         self.outbounds.is_empty()
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &Arc<dyn DispatchOutbound>> + '_ {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &Arc<dyn PlaneOutbound>> + '_ {
         self.outbounds.iter()
     }
 }

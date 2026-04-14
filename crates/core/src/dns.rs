@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{
-    plane::packet::forward::PacketFrame,
+    plane::packet::io::PacketFrame,
     portal::traits::BoxFuture,
     types::{Destination, Host, Network},
     ProxyError, Result,

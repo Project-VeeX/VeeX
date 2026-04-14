@@ -4,23 +4,20 @@ use tracing::{info, warn};
 use veex_observability::{emit_session_finish, SessionSummary};
 
 use crate::{
-    dns::{read_dns_tcp_message, write_dns_tcp_message, DnsExecutorHandle, DnsRequest},
+    dns::DnsExecutorHandle,
     error::ProxyError,
     logging::sanitize_field,
-    plane::{
-        shared::{
-            context::{RouteReason, SessionContext},
-            registry::OutboundRegistry,
-        },
-        stream::io::BoxedAsyncStream,
-    },
+    plane::{registry::OutboundRegistry, session::SessionContext, stream::io::BoxedAsyncStream},
     portal::traits::BoxFuture,
-    router::{RouteFinalAction, Router},
+    router::{RouteFinalAction, RouteReason, Router},
 };
 
-use super::relay::{relay_bidirectional_with_trace, RelayTraceContext};
+use super::{
+    dns::{hijack_stream_dns, missing_dns_executor_error},
+    relay::{relay_bidirectional_with_trace, RelayErrorWithStats, RelayTraceContext},
+};
 
-pub trait InboundSink: Send + Sync {
+pub trait StreamSink: Send + Sync {
     fn submit(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()>;
 }
 
@@ -72,8 +69,11 @@ impl StreamDispatcher {
                     target.outbound_tag.clone()
                 }
                 RouteFinalAction::HijackDns => {
-                    return self
-                        .hijack_dns_stream(execution.stream, ctx, decision.reason)
+                    let executor = self
+                        .dns_executor
+                        .as_ref()
+                        .ok_or_else(missing_dns_executor_error)?;
+                    return hijack_stream_dns(executor, execution.stream, ctx, decision.reason)
                         .await;
                 }
             };
@@ -89,7 +89,7 @@ impl StreamDispatcher {
                 ProxyError::config(format!("missing outbound tag: {outbound_tag}"))
             })?;
 
-            let (summary, result) = match outbound.connect(&ctx).await {
+            let (summary, result) = match outbound.open_stream(&ctx).await {
                 Ok(outbound_stream) => {
                     log_relay_start(&trace);
                     match relay_bidirectional_with_trace(
@@ -157,107 +157,9 @@ impl StreamDispatcher {
             result
         })
     }
-
-    async fn hijack_dns_stream(
-        &self,
-        mut inbound_stream: BoxedAsyncStream,
-        ctx: SessionContext,
-        route_reason: RouteReason,
-    ) -> crate::Result<()> {
-        let executor = self.dns_executor.as_ref().ok_or_else(|| {
-            ProxyError::config("route selected 'hijack-dns' but dns executor is not configured")
-        })?;
-        let inbound = sanitize_field(ctx.meta.inbound_tag.as_str()).into_owned();
-        let peer = sanitize_field(&ctx.meta.peer.to_string()).into_owned();
-        let destination = sanitize_field(&ctx.meta.destination.to_string()).into_owned();
-
-        info!(
-            event = "stream_hijack_dns",
-            session_id = ctx.meta.id,
-            inbound = %inbound,
-            peer = %peer,
-            destination = %destination,
-            route_reason = %route_reason.as_str(),
-            "stream handed off to dns executor"
-        );
-
-        loop {
-            let query = match read_dns_tcp_message(&mut *inbound_stream).await {
-                Ok(Some(query)) => query,
-                Ok(None) => break,
-                Err(err) => {
-                    warn!(
-                        event = "stream_hijack_dns_failed",
-                        session_id = ctx.meta.id,
-                        inbound = %inbound,
-                        peer = %peer,
-                        destination = %destination,
-                        route_reason = %route_reason.as_str(),
-                        error_kind = ?err.kind(),
-                        error = %err,
-                        "dns over tcp ingress read failed"
-                    );
-                    return Err(err);
-                }
-            };
-
-            let request = DnsRequest::new(
-                query,
-                ctx.meta.network,
-                ctx.meta.inbound_tag.clone(),
-                ctx.meta.peer,
-                ctx.meta.destination.clone(),
-            );
-            let response = match executor.execute_query(request).await {
-                Ok(response) => response,
-                Err(err) => {
-                    warn!(
-                        event = "stream_hijack_dns_failed",
-                        session_id = ctx.meta.id,
-                        inbound = %inbound,
-                        peer = %peer,
-                        destination = %destination,
-                        route_reason = %route_reason.as_str(),
-                        error_kind = ?err.kind(),
-                        error = %err,
-                        "dns executor failed for stream ingress"
-                    );
-                    return Err(err);
-                }
-            };
-
-            if let Err(err) =
-                write_dns_tcp_message(&mut *inbound_stream, &response.raw_message).await
-            {
-                warn!(
-                    event = "stream_hijack_dns_write_failed",
-                    session_id = ctx.meta.id,
-                    inbound = %inbound,
-                    peer = %peer,
-                    destination = %destination,
-                    route_reason = %route_reason.as_str(),
-                    error_kind = ?err.kind(),
-                    error = %err,
-                    "dns over tcp response write failed"
-                );
-                return Err(err);
-            }
-        }
-
-        info!(
-            event = "stream_hijack_dns_complete",
-            session_id = ctx.meta.id,
-            inbound = %inbound,
-            peer = %peer,
-            destination = %destination,
-            route_reason = %route_reason.as_str(),
-            "stream dns handoff completed"
-        );
-        Ok(())
-    }
 }
 
-impl InboundSink for StreamDispatcher {
+impl StreamSink for StreamDispatcher {
     fn submit(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()> {
         self.submit_impl(inbound_stream, ctx)
     }
@@ -307,10 +209,7 @@ fn log_relay_start(trace: &DispatchTraceContext) {
     );
 }
 
-fn log_relay_failed(
-    trace: &DispatchTraceContext,
-    relay_err: &crate::plane::stream::relay::RelayErrorWithStats,
-) {
+fn log_relay_failed(trace: &DispatchTraceContext, relay_err: &RelayErrorWithStats) {
     warn!(
         event = "relay_failed",
         session_id = trace.session_id,
@@ -340,10 +239,10 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-    use super::{InboundSink, StreamDispatcher};
+    use super::{StreamDispatcher, StreamSink};
     use crate::{
-        BoxFuture, BoxedAsyncStream, Destination, DispatchOutbound, DnsExecutorHandle, DnsRequest,
-        DnsResponse, ErrorKind, Logger, Network, Outbound, OutboundMeta, OutboundRegistry,
+        BoxFuture, BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DnsResponse,
+        ErrorKind, Logger, Network, Outbound, OutboundMeta, OutboundRegistry, PlaneOutbound,
         RouteAction, RouteFinalAction, RouteReason, RouteRule, Router, SessionContext, SessionMeta,
         SessionRoute, SessionState, StreamOutbound,
     };
@@ -542,9 +441,9 @@ mod tests {
         }
     }
 
-    impl DispatchOutbound for CaptureOutbound {
-        fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
-            self.connect_stream(ctx)
+    impl PlaneOutbound for CaptureOutbound {
+        fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+            StreamOutbound::connect_stream(self, ctx)
         }
     }
 
@@ -592,9 +491,9 @@ mod tests {
         }
     }
 
-    impl DispatchOutbound for ScriptedOutbound {
-        fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
-            self.connect_stream(ctx)
+    impl PlaneOutbound for ScriptedOutbound {
+        fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+            StreamOutbound::connect_stream(self, ctx)
         }
     }
 

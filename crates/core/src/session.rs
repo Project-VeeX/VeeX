@@ -2,7 +2,7 @@ use std::{net::SocketAddr, time::Instant};
 
 use crate::{
     logging::sanitize_field,
-    plane::shared::context::{SessionContext, SessionMeta},
+    plane::session::{SessionContext, SessionMeta},
     types::{Destination, Network},
 };
 

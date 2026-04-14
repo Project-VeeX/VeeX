@@ -1,114 +1,276 @@
-use std::{fmt, net::SocketAddr, sync::Arc};
-
-use crate::{
-    portal::traits::BoxFuture,
-    types::{Destination, Network},
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
+    time::{Duration, Instant},
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PacketFrame {
-    pub metadata: PacketMetadata,
-    pub payload: Vec<u8>,
-}
+use tokio::sync::Notify;
+use tracing::{debug, info, warn};
 
-impl PacketFrame {
-    pub fn new(metadata: PacketMetadata, payload: Vec<u8>) -> Self {
-        Self { metadata, payload }
-    }
-}
+use crate::{error::ProxyError, logging::sanitize_field, router::RouteReason};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PacketMetadata {
-    pub inbound_tag: String,
-    pub peer: SocketAddr,
-    pub destination: Destination,
-    pub network: Network,
-}
+use super::io::{PacketAssociationKey, PacketSessionHandle, PacketWriter};
 
-impl PacketMetadata {
-    pub fn new(
-        inbound_tag: impl Into<String>,
-        peer: SocketAddr,
-        destination: Destination,
-        network: Network,
-    ) -> Self {
-        Self {
-            inbound_tag: inbound_tag.into(),
-            peer,
-            destination,
-            network,
-        }
-    }
-
-    pub fn association_key(&self) -> PacketAssociationKey {
-        PacketAssociationKey {
-            inbound_tag: self.inbound_tag.clone(),
-            peer: self.peer,
-            destination: self.destination.clone(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct PacketAssociationKey {
-    pub inbound_tag: String,
-    pub peer: SocketAddr,
-    pub destination: Destination,
-}
-
-impl fmt::Display for PacketAssociationKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "inbound={} peer={} destination={}",
-            self.inbound_tag, self.peer, self.destination
-        )
-    }
-}
-
-pub trait PacketSession: Send + Sync {
-    fn send_packet(&self, payload: Vec<u8>) -> BoxFuture<'_, ()>;
-    fn recv_packet(&self) -> BoxFuture<'_, Vec<u8>>;
-
-    fn close(&self) -> BoxFuture<'_, ()> {
-        Box::pin(async { Ok(()) })
-    }
-}
-
-pub type PacketSessionHandle = Arc<dyn PacketSession>;
-
-/// Thin reverse-path writer view.
+/// Packet-side forwarding state, roughly parallel to stream relay state.
 ///
-/// The direct UDP inbound implementation backs this with `Arc<UdpSocket>` and plain `send_to`.
-/// Packet dispatch owns association/session logic; the writer only sends bytes back to a client peer.
-pub trait PacketWriter: Send + Sync {
-    fn send_to(&self, peer: SocketAddr, payload: Vec<u8>) -> BoxFuture<'_, ()>;
+/// A packet association binds one client flow key to one outbound packet session and owns
+/// reverse-path forwarding, activity tracking, and close tracing.
+pub(crate) struct PacketAssociation {
+    id: u64,
+    key: PacketAssociationKey,
+    outbound_tag: String,
+    route_reason: RouteReason,
+    session: PacketSessionHandle,
+    writer: Arc<dyn PacketWriter>,
+    last_activity: Mutex<Instant>,
+    activity: Notify,
+    closed: AtomicBool,
+    close_notify: Notify,
 }
 
-#[cfg(test)]
-mod tests {
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+#[derive(Debug)]
+pub(crate) enum PacketAssociationCloseReason {
+    Idle,
+    UpstreamError(ProxyError),
+    ClientWriteError(ProxyError),
+    Shutdown,
+}
 
-    use crate::types::{Destination, Host, Network};
+#[derive(Clone, Debug)]
+struct PacketAssociationTrace {
+    association_id: u64,
+    inbound_field: String,
+    outbound_field: String,
+    peer_field: String,
+    destination_field: String,
+    route_reason: RouteReason,
+}
 
-    use super::{PacketAssociationKey, PacketMetadata};
+impl PacketAssociation {
+    pub(crate) fn new(
+        id: u64,
+        key: PacketAssociationKey,
+        outbound_tag: String,
+        route_reason: RouteReason,
+        session: PacketSessionHandle,
+        writer: Arc<dyn PacketWriter>,
+    ) -> Arc<Self> {
+        let association = Arc::new(Self {
+            id,
+            key,
+            outbound_tag,
+            route_reason,
+            session,
+            writer,
+            last_activity: Mutex::new(Instant::now()),
+            activity: Notify::new(),
+            closed: AtomicBool::new(false),
+            close_notify: Notify::new(),
+        });
+        log_packet_association_create(&association);
+        association
+    }
 
-    #[test]
-    fn metadata_builds_association_key_without_losing_destination() {
-        let metadata = PacketMetadata::new(
-            "direct-in",
-            SocketAddr::from(([127, 0, 0, 1], 50000)),
-            Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
-            Network::Udp,
-        );
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
 
-        assert_eq!(
-            metadata.association_key(),
-            PacketAssociationKey {
-                inbound_tag: "direct-in".into(),
-                peer: SocketAddr::from(([127, 0, 0, 1], 50000)),
-                destination: Destination::from_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), 53),
+    pub(crate) fn key(&self) -> &PacketAssociationKey {
+        &self.key
+    }
+
+    pub(crate) fn session(&self) -> &PacketSessionHandle {
+        &self.session
+    }
+
+    pub(crate) async fn send(&self, payload: Vec<u8>) -> crate::Result<()> {
+        self.touch();
+        let result = self.session.send_packet(payload).await;
+        if result.is_ok() {
+            self.touch();
+        }
+        result
+    }
+
+    pub(crate) async fn run_reverse_loop(
+        &self,
+        idle_timeout: Duration,
+    ) -> PacketAssociationCloseReason {
+        loop {
+            if self.is_closed() {
+                return PacketAssociationCloseReason::Shutdown;
             }
+
+            let idle_wait = tokio::time::sleep(self.remaining_idle(idle_timeout));
+            let close_wait = self.close_notify.notified();
+            tokio::pin!(idle_wait);
+            tokio::pin!(close_wait);
+
+            tokio::select! {
+                _ = &mut close_wait => {
+                    if self.is_closed() {
+                        return PacketAssociationCloseReason::Shutdown;
+                    }
+                }
+                _ = self.activity.notified() => {}
+                recv_result = self.session.recv_packet() => {
+                    match recv_result {
+                        Ok(payload) => {
+                            self.touch();
+                            log_packet_reverse(self, payload.len());
+                            if let Err(err) = self.writer.send_to(self.key.peer, payload).await {
+                                return PacketAssociationCloseReason::ClientWriteError(err);
+                            }
+                        }
+                        Err(err) => return PacketAssociationCloseReason::UpstreamError(err),
+                    }
+                }
+                _ = &mut idle_wait => {
+                    if self.is_idle(idle_timeout) {
+                        return PacketAssociationCloseReason::Idle;
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn shutdown(&self) {
+        self.closed.store(true, Ordering::Relaxed);
+        self.close_notify.notify_waiters();
+    }
+
+    fn remaining_idle(&self, idle_timeout: Duration) -> Duration {
+        idle_timeout.saturating_sub(self.last_activity().elapsed())
+    }
+
+    fn is_idle(&self, idle_timeout: Duration) -> bool {
+        self.last_activity().elapsed() >= idle_timeout
+    }
+
+    fn touch(&self) {
+        *lock_unpoisoned(&self.last_activity) = Instant::now();
+        self.activity.notify_waiters();
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Relaxed)
+    }
+
+    fn last_activity(&self) -> Instant {
+        *lock_unpoisoned(&self.last_activity)
+    }
+}
+
+pub(crate) fn log_packet_association_hit(association: &PacketAssociation) {
+    let trace = PacketAssociationTrace::from_association(association);
+    debug!(
+        event = "packet_association_hit",
+        association_id = trace.association_id,
+        inbound = %trace.inbound_field,
+        outbound = %trace.outbound_field,
+        peer = %trace.peer_field,
+        destination = %trace.destination_field,
+        "packet association hit"
+    );
+}
+
+pub(crate) fn log_packet_association_close(
+    association: &PacketAssociation,
+    close_reason: &PacketAssociationCloseReason,
+) {
+    let trace = PacketAssociationTrace::from_association(association);
+    if let Some(err) = close_reason.error() {
+        warn!(
+            event = "packet_association_close",
+            association_id = trace.association_id,
+            inbound = %trace.inbound_field,
+            outbound = %trace.outbound_field,
+            peer = %trace.peer_field,
+            destination = %trace.destination_field,
+            close_reason = close_reason.label(),
+            error_kind = ?err.kind(),
+            error = %err,
+            "packet association closed"
+        );
+    } else {
+        info!(
+            event = "packet_association_close",
+            association_id = trace.association_id,
+            inbound = %trace.inbound_field,
+            outbound = %trace.outbound_field,
+            peer = %trace.peer_field,
+            destination = %trace.destination_field,
+            close_reason = close_reason.label(),
+            "packet association closed"
         );
     }
+}
+
+impl PacketAssociationTrace {
+    fn from_association(association: &PacketAssociation) -> Self {
+        Self {
+            association_id: association.id,
+            inbound_field: sanitize_field(&association.key.inbound_tag).into_owned(),
+            outbound_field: sanitize_field(&association.outbound_tag).into_owned(),
+            peer_field: sanitize_field(&association.key.peer.to_string()).into_owned(),
+            destination_field: sanitize_field(&association.key.destination.to_string())
+                .into_owned(),
+            route_reason: association.route_reason,
+        }
+    }
+}
+
+impl PacketAssociationCloseReason {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::UpstreamError(_) => "upstream_error",
+            Self::ClientWriteError(_) => "client_write_error",
+            Self::Shutdown => "shutdown",
+        }
+    }
+
+    fn error(&self) -> Option<&ProxyError> {
+        match self {
+            Self::Idle => None,
+            Self::Shutdown => None,
+            Self::UpstreamError(err) | Self::ClientWriteError(err) => Some(err),
+        }
+    }
+}
+
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn log_packet_association_create(association: &PacketAssociation) {
+    let trace = PacketAssociationTrace::from_association(association);
+    info!(
+        event = "packet_association_create",
+        association_id = trace.association_id,
+        inbound = %trace.inbound_field,
+        outbound = %trace.outbound_field,
+        peer = %trace.peer_field,
+        destination = %trace.destination_field,
+        route_reason = %trace.route_reason.as_str(),
+        "packet association created"
+    );
+}
+
+fn log_packet_reverse(association: &PacketAssociation, payload_len: usize) {
+    let trace = PacketAssociationTrace::from_association(association);
+    debug!(
+        event = "packet_reverse_write",
+        association_id = trace.association_id,
+        inbound = %trace.inbound_field,
+        outbound = %trace.outbound_field,
+        peer = %trace.peer_field,
+        destination = %trace.destination_field,
+        payload_len = payload_len as u64,
+        "packet reverse write"
+    );
 }

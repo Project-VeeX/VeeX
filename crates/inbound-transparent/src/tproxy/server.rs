@@ -10,8 +10,8 @@ use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
     build_session_bootstrap, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound,
-    InboundMeta, InboundSink, Listener, ListenerAcceptHandler, Logger, Network, ProxyError, Result,
-    SessionBootstrap, TransparentInbound,
+    InboundMeta, Listener, ListenerAcceptHandler, Logger, Network, ProxyError, Result,
+    SessionBootstrap, StreamSink, TransparentInbound,
 };
 
 use crate::shared::resolver::{SocketTProxyDestinationResolver, TProxyDestinationResolver};
@@ -23,7 +23,7 @@ struct TProxyInboundState {
 pub struct TProxyInbound {
     meta: InboundMeta,
     logger: Logger,
-    sink: Arc<dyn InboundSink>,
+    sink: Arc<dyn StreamSink>,
     listener: Listener,
     network: Network,
     resolver: Arc<dyn TProxyDestinationResolver>,
@@ -34,7 +34,7 @@ impl TProxyInbound {
     pub fn new(
         meta: InboundMeta,
         logger: Logger,
-        sink: Arc<dyn InboundSink>,
+        sink: Arc<dyn StreamSink>,
         listener: Listener,
         network: Network,
     ) -> Result<Arc<Self>> {
@@ -51,7 +51,7 @@ impl TProxyInbound {
     fn new_with_resolver(
         meta: InboundMeta,
         logger: Logger,
-        sink: Arc<dyn InboundSink>,
+        sink: Arc<dyn StreamSink>,
         listener: Listener,
         network: Network,
         resolver: Arc<dyn TProxyDestinationResolver>,
@@ -221,8 +221,8 @@ mod tests {
 
     use tokio::{net::TcpListener, net::TcpStream, sync::oneshot};
     use veex_core::{
-        BoxFuture, Destination, Inbound, InboundMeta, InboundSink, Listener, ListenerFactory,
-        Logger, Network,
+        BoxFuture, Destination, Inbound, InboundMeta, Listener, ListenerFactory, Logger, Network,
+        StreamSink,
     };
 
     use super::TProxyInbound;
@@ -232,7 +232,7 @@ mod tests {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,
     }
 
-    impl InboundSink for RecordingSink {
+    impl StreamSink for RecordingSink {
         fn submit(
             &self,
             _inbound_stream: veex_core::BoxedAsyncStream,
@@ -255,7 +255,7 @@ mod tests {
         let expected = Destination::from_ip(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5)), 443);
         let resolver = fixed_resolver(expected.clone());
         let (tx, rx) = oneshot::channel();
-        let sink: Arc<dyn InboundSink> = Arc::new(RecordingSink {
+        let sink: Arc<dyn StreamSink> = Arc::new(RecordingSink {
             tx: Mutex::new(Some(tx)),
         });
         let inbound = TProxyInbound::new_with_resolver(

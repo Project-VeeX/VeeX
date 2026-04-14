@@ -1,8 +1,7 @@
 use crate::{
     error::ProxyError,
     plane::{
-        packet::forward::PacketSessionHandle, shared::context::SessionContext,
-        stream::io::BoxedAsyncStream,
+        packet::io::PacketSessionHandle, session::SessionContext, stream::io::BoxedAsyncStream,
     },
     portal::traits::{BoxFuture, Outbound},
 };
@@ -11,10 +10,10 @@ use crate::{
 ///
 /// Stream execution is required. Packet execution remains optional and
 /// defaults to a protocol error for outbounds that do not implement it.
-pub trait DispatchOutbound: Outbound {
-    fn connect(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream>;
+pub trait PlaneOutbound: Outbound {
+    fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream>;
 
-    fn connect_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
+    fn open_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
         let outbound_tag = self.meta().tag.clone();
         let network = ctx.meta.network;
         Box::pin(async move {
