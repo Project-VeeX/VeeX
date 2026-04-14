@@ -52,6 +52,7 @@ Do not trigger this skill for:
    - Phase-by-phase delivery, milestone, or evolution questions: read `docs/roadmap.md` and `CHANGELOG.md`
    - Doc-system, doc-boundary, or cross-doc alignment questions: read `references/source-map.md`, then open the specific public docs or internal references involved
    - Code changes, crate ownership, dependency direction, or implementation landing zones: read `references/repo-map.md`
+   - Cross-compilation the repo for `aarch64-unknown-linux-musl`: read `references/aarch64-musl-cross-compile.md`
    - Error-model closure, tracing event shape, or observability-boundary questions: read `references/observability-errors.md`
    - Stable repo sources, examples, and internal persistent references: read `references/source-map.md`, then open only the relevant files
    - Internal architecture constraints, anti-patterns, or design-review questions: read `references/internal-architecture.md` and `references/architecture-closure.md`
@@ -98,6 +99,7 @@ Do not trigger this skill for:
 - `references/source-map.md`: stable sources, examples, and internal persistent references.
 - `references/internal-architecture.md`: internal model, design constraints, anti-patterns, and review checklist.
 - `references/architecture-closure.md`: internal boundary decisions that should keep guiding code changes.
+- `references/aarch64-musl-cross-compile.md`: concise cross-compilation reference for `aarch64-unknown-linux-musl` with the OpenWrt musl toolchain.
 - `references/config-contract.md`: exact compatibility rules and accepted config forms.
 - `references/validation-contract.md`: event shapes, evidence expectations, and minimal diagnostics.
 - `references/validation-status.md`: latest recorded validation coverage and still-open device-closure items.

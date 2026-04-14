@@ -17,6 +17,7 @@ After the above, open only the topic-specific sources you need:
 - `docs/roadmap.md` — for phase, milestone, and evolution questions
 - `references/observability-errors.md` — for tracing/event questions
 - `references/architecture-closure.md` — for lower-level engineering closure questions
+- `references/aarch64-musl-cross-compile.md` — for Rust `aarch64-unknown-linux-musl` builds with the OpenWrt musl toolchain
 - `references/validation-status.md` — before claiming device validation is complete
 - `references/validation-contract.md` — before writing validation evidence
 - `references/trigger-examples.md` — to check whether this skill is the right trigger
@@ -56,6 +57,8 @@ After the above, open only the topic-specific sources you need:
   - distilled skill-facing summary of current error-model and tracing contracts
 - `references/architecture-closure.md`
   - internal boundary decisions that should remain stable
+- `references/aarch64-musl-cross-compile.md`
+  - concise cross-compilation reference for `aarch64-unknown-linux-musl` with the OpenWrt musl toolchain
 - `references/config-contract.md`
   - exact config-compatibility rules
 - `references/validation-contract.md`
