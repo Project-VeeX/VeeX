@@ -52,8 +52,6 @@ impl Default for TlsClientOptions {
 pub enum TlsError {
     #[error("disable_sni=true requires an explicit server_name or insecure=true")]
     DisableSniRequiresServerName,
-    #[error("tls server_name is required when using an IP address with certificate verification")]
-    MissingServerNameForIp,
     #[error("tls verifier configuration failed: {0}")]
     Verifier(#[from] VerifierError),
     #[error("invalid tls server_name `{server_name}`: {message}")]
@@ -87,9 +85,9 @@ pub enum TlsError {
 impl From<TlsError> for ProxyError {
     fn from(value: TlsError) -> Self {
         match value {
-            TlsError::DisableSniRequiresServerName
-            | TlsError::MissingServerNameForIp
-            | TlsError::InvalidServerName { .. } => ProxyError::config(value.to_string()),
+            TlsError::DisableSniRequiresServerName | TlsError::InvalidServerName { .. } => {
+                ProxyError::config(value.to_string())
+            }
             TlsError::Verifier(_) | TlsError::Handshake { .. } => {
                 ProxyError::tls(value.to_string())
             }
@@ -125,13 +123,7 @@ pub fn server_name_for_tls(
 
     match host {
         Host::Domain(domain) => Ok(domain.clone()),
-        Host::Ip(ip) => {
-            if options.insecure {
-                Ok(ip.to_string())
-            } else {
-                Err(TlsError::MissingServerNameForIp)
-            }
-        }
+        Host::Ip(ip) => Ok(ip.to_string()),
     }
 }
 
@@ -495,14 +487,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ip_without_explicit_server_name_when_verifying() {
-        let err = server_name_for_tls(
+    fn derives_server_name_from_ip() {
+        let name = server_name_for_tls(
             &Host::Ip(IpAddr::from([127, 0, 0, 1])),
             &TlsClientOptions::default(),
         )
-        .expect_err("ip host without insecure mode should fail");
+        .expect("ip host should derive server name");
 
-        assert!(err.to_string().contains("server_name"));
+        assert_eq!(name, "127.0.0.1");
     }
 
     #[tokio::test]
