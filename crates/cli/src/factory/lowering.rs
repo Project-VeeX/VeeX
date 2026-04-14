@@ -21,10 +21,17 @@ pub(crate) struct LoweredSocksInbound {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum LoweredDirectNetwork {
+    Tcp,
+    Udp,
+    Both,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LoweredDirectInbound {
     pub(crate) meta: InboundMeta,
     pub(crate) listen: Listen,
-    pub(crate) network: Network,
+    pub(crate) network: LoweredDirectNetwork,
     pub(crate) override_host: Option<Host>,
     pub(crate) override_port: Option<u16>,
 }
@@ -232,10 +239,12 @@ fn normalize_tproxy_network(_network: Option<&str>) -> Network {
     Network::Tcp
 }
 
-fn normalize_direct_network(network: Option<&str>) -> Network {
+fn normalize_direct_network(network: Option<&str>) -> LoweredDirectNetwork {
     match network {
-        Some("udp") => Network::Udp,
-        _ => Network::Tcp,
+        Some("tcp") => LoweredDirectNetwork::Tcp,
+        Some("udp") => LoweredDirectNetwork::Udp,
+        None => LoweredDirectNetwork::Both,
+        Some(_) => unreachable!("config validation should reject unsupported direct networks"),
     }
 }
 
