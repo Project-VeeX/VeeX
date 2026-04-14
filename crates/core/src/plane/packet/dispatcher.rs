@@ -7,22 +7,21 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tracing::warn;
-
 use crate::{
     dns::DnsExecutorHandle,
     error::ProxyError,
-    logging::sanitize_field,
     plane::{
         packet::{
             dns::hijack_packet_dns,
             forward::{
-                log_packet_association_close, log_packet_association_hit, PacketAssociation,
+                log_packet_association_close, log_packet_association_close_error,
+                log_packet_association_hit, PacketAssociation,
             },
             io::{PacketAssociationKey, PacketFrame, PacketMetadata, PacketWriter},
         },
-        registry::OutboundRegistry,
-        session::{SessionContext, SessionMeta},
+        support::lookup_outbound,
+        traits::{DnsHijack, PacketSink},
+        types::{OutboundRegistry, SessionContext, SessionMeta},
     },
     portal::traits::BoxFuture,
     router::{RouteFinalAction, RouteReason, Router},
@@ -30,14 +29,6 @@ use crate::{
 };
 
 const DEFAULT_PACKET_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-
-pub trait PacketSink: Send + Sync {
-    fn submit_packet(
-        &self,
-        packet: PacketFrame,
-        writer: Arc<dyn PacketWriter>,
-    ) -> BoxFuture<'_, ()>;
-}
 
 /// Dispatcher for packet/UDP execution.
 ///
@@ -132,10 +123,7 @@ impl PacketDispatcher {
         route_reason: RouteReason,
     ) -> crate::Result<Arc<PacketAssociation>> {
         ctx.set_route(outbound_tag.clone(), route_reason);
-        let outbound = self
-            .outbounds
-            .get(&outbound_tag)
-            .ok_or_else(|| ProxyError::config(format!("missing outbound tag: {outbound_tag}")))?;
+        let outbound = lookup_outbound(&self.outbounds, &outbound_tag)?;
         let session = outbound.open_packet(&ctx).await?;
         Ok(PacketAssociation::new(
             ctx.meta.id,
@@ -147,18 +135,6 @@ impl PacketDispatcher {
         ))
     }
 
-    async fn hijack_dns(
-        &self,
-        packet: PacketFrame,
-        writer: Arc<dyn PacketWriter>,
-        route_reason: RouteReason,
-    ) -> crate::Result<()> {
-        let executor = self.dns_executor.as_ref().ok_or_else(|| {
-            ProxyError::config("route selected 'hijack-dns' but dns executor is not configured")
-        })?;
-        hijack_packet_dns(executor, packet, writer, route_reason).await
-    }
-
     fn spawn_reverse_loop(&self, association: Arc<PacketAssociation>) {
         let idle_timeout = self.idle_timeout;
         let associations = Arc::clone(&self.associations);
@@ -167,15 +143,7 @@ impl PacketDispatcher {
             let close_reason = association.run_reverse_loop(idle_timeout).await;
             remove_association_from_map(&associations, association.key(), association.id());
             if let Err(err) = association.session().close().await {
-                warn!(
-                    event = "packet_association_close_error",
-                    association_id = association.id(),
-                    inbound = %sanitize_field(&association.key().inbound_tag),
-                    destination = %sanitize_field(&association.key().destination.to_string()),
-                    error_kind = ?err.kind(),
-                    error = %err,
-                    "packet association close failed"
-                );
+                log_packet_association_close_error(&association, &err);
             }
             log_packet_association_close(&association, &close_reason);
         });
@@ -218,27 +186,32 @@ impl PacketDispatcher {
                 let decision = self.router.select(&ctx);
 
                 match &decision.final_action {
-                    RouteFinalAction::Route(target) => match self.insert_association(
-                        self.create_association(
-                            ctx,
-                            &packet.metadata,
-                            writer,
-                            target.outbound_tag.clone(),
-                            decision.reason,
-                        )
-                        .await?,
-                    ) {
-                        Ok(created) => {
-                            self.spawn_reverse_loop(Arc::clone(&created));
-                            created
+                    RouteFinalAction::Route(target) => {
+                        log_route_select(&ctx, &target.outbound_tag, decision.reason);
+                        match self.insert_association(
+                            self.create_association(
+                                ctx,
+                                &packet.metadata,
+                                writer,
+                                target.outbound_tag.clone(),
+                                decision.reason,
+                            )
+                            .await?,
+                        ) {
+                            Ok(created) => {
+                                self.spawn_reverse_loop(Arc::clone(&created));
+                                created
+                            }
+                            Err(existing) => {
+                                log_packet_association_hit(&existing);
+                                existing
+                            }
                         }
-                        Err(existing) => {
-                            log_packet_association_hit(&existing);
-                            existing
-                        }
-                    },
+                    }
                     RouteFinalAction::HijackDns => {
-                        return self.hijack_dns(packet, writer, decision.reason).await;
+                        return self
+                            .hijack((ctx.meta.id, packet, writer), decision.reason)
+                            .await;
                     }
                 }
             }
@@ -263,6 +236,40 @@ impl PacketSink for PacketDispatcher {
     ) -> BoxFuture<'_, ()> {
         Box::pin(async move { self.submit_packet_impl(packet, writer).await })
     }
+}
+
+impl DnsHijack for PacketDispatcher {
+    type Input = (u64, PacketFrame, Arc<dyn PacketWriter>);
+
+    fn dns_executor(&self) -> Option<&Arc<dyn DnsExecutorHandle>> {
+        self.dns_executor.as_ref()
+    }
+
+    fn hijack_with_executor(
+        &self,
+        executor: Arc<dyn DnsExecutorHandle>,
+        (session_id, packet, writer): Self::Input,
+        route_reason: RouteReason,
+    ) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            hijack_packet_dns(&executor, session_id, packet, writer, route_reason).await
+        })
+    }
+}
+
+fn log_route_select(ctx: &SessionContext, outbound_tag: &str, route_reason: RouteReason) {
+    tracing::info!(
+        event = "route_select",
+        session_id = ctx.meta.id,
+        inbound = %crate::logging::sanitize_field(ctx.meta.inbound_tag.as_str()),
+        peer = %crate::logging::sanitize_field(&ctx.meta.peer.to_string()),
+        destination = %crate::logging::sanitize_field(&ctx.meta.destination.to_string()),
+        outbound = %crate::logging::sanitize_field(outbound_tag),
+        route_reason = %route_reason.as_str(),
+        default_final = matches!(route_reason, RouteReason::Final),
+        network = ctx.meta.network.as_str(),
+        "route selected"
+    );
 }
 
 fn remove_association_from_map(
@@ -484,6 +491,17 @@ mod tests {
         let events = captured_events(&trace_buffer);
         assert_has_event(
             &events,
+            "route_select",
+            &[
+                ("session_id", "1"),
+                ("inbound", "direct-in"),
+                ("outbound", "direct"),
+                ("network", "udp"),
+                ("level", "INFO"),
+            ],
+        );
+        assert_has_event(
+            &events,
             "packet_association_create",
             &[
                 ("inbound", "direct-in"),
@@ -497,6 +515,7 @@ mod tests {
             &[
                 ("inbound", "direct-in"),
                 ("outbound", "direct"),
+                ("route_reason", "final"),
                 ("level", "DEBUG"),
             ],
         );
@@ -545,7 +564,11 @@ mod tests {
         assert_has_event(
             &events,
             "packet_association_close",
-            &[("close_reason", "idle"), ("level", "INFO")],
+            &[
+                ("close_reason", "idle"),
+                ("route_reason", "final"),
+                ("level", "INFO"),
+            ],
         );
     }
 
@@ -600,12 +623,20 @@ mod tests {
         assert_has_event(
             &events,
             "packet_hijack_dns",
-            &[("inbound", "dns-in"), ("level", "INFO")],
+            &[
+                ("session_id", "1"),
+                ("inbound", "dns-in"),
+                ("level", "INFO"),
+            ],
         );
         assert_has_event(
             &events,
             "packet_hijack_dns_complete",
-            &[("inbound", "dns-in"), ("level", "INFO")],
+            &[
+                ("session_id", "1"),
+                ("inbound", "dns-in"),
+                ("level", "INFO"),
+            ],
         );
         assert!(
             !events.iter().any(|event| {

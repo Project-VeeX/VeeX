@@ -5,21 +5,21 @@ use veex_observability::{emit_session_finish, SessionSummary};
 
 use crate::{
     dns::DnsExecutorHandle,
-    error::ProxyError,
     logging::sanitize_field,
-    plane::{registry::OutboundRegistry, session::SessionContext, stream::io::BoxedAsyncStream},
+    plane::{
+        stream::io::BoxedAsyncStream,
+        support::lookup_outbound,
+        traits::{DnsHijack, StreamSink},
+        types::{OutboundRegistry, SessionContext},
+    },
     portal::traits::BoxFuture,
     router::{RouteFinalAction, RouteReason, Router},
 };
 
 use super::{
-    dns::{hijack_stream_dns, missing_dns_executor_error},
+    dns::hijack_stream_dns,
     relay::{relay_bidirectional_with_trace, RelayErrorWithStats, RelayTraceContext},
 };
-
-pub trait StreamSink: Send + Sync {
-    fn submit(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()>;
-}
 
 pub struct StreamDispatcher {
     router: Router,
@@ -69,12 +69,7 @@ impl StreamDispatcher {
                     target.outbound_tag.clone()
                 }
                 RouteFinalAction::HijackDns => {
-                    let executor = self
-                        .dns_executor
-                        .as_ref()
-                        .ok_or_else(missing_dns_executor_error)?;
-                    return hijack_stream_dns(executor, execution.stream, ctx, decision.reason)
-                        .await;
+                    return self.hijack((execution.stream, ctx), decision.reason).await;
                 }
             };
 
@@ -85,9 +80,7 @@ impl StreamDispatcher {
             // Stream dispatcher owns session-scoped lifecycle events. Lower-level transport,
             // outbound, and relay details stay in their respective modules.
             log_route_select(&trace, ctx.meta.network.as_str());
-            let outbound = self.outbounds.get(&outbound_tag).ok_or_else(|| {
-                ProxyError::config(format!("missing outbound tag: {outbound_tag}"))
-            })?;
+            let outbound = lookup_outbound(&self.outbounds, &outbound_tag)?;
 
             let (summary, result) = match outbound.open_stream(&ctx).await {
                 Ok(outbound_stream) => {
@@ -162,6 +155,25 @@ impl StreamDispatcher {
 impl StreamSink for StreamDispatcher {
     fn submit(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()> {
         self.submit_impl(inbound_stream, ctx)
+    }
+}
+
+impl DnsHijack for StreamDispatcher {
+    type Input = (BoxedAsyncStream, SessionContext);
+
+    fn dns_executor(&self) -> Option<&Arc<dyn DnsExecutorHandle>> {
+        self.dns_executor.as_ref()
+    }
+
+    fn hijack_with_executor(
+        &self,
+        executor: Arc<dyn DnsExecutorHandle>,
+        (inbound_stream, ctx): Self::Input,
+        route_reason: RouteReason,
+    ) -> BoxFuture<'_, ()> {
+        Box::pin(
+            async move { hijack_stream_dns(&executor, inbound_stream, ctx, route_reason).await },
+        )
     }
 }
 

@@ -4,9 +4,8 @@ use tracing::{info, warn};
 
 use crate::{
     dns::{read_dns_tcp_message, write_dns_tcp_message, DnsExecutorHandle, DnsRequest},
-    error::ProxyError,
     logging::sanitize_field,
-    plane::{session::SessionContext, stream::io::BoxedAsyncStream},
+    plane::{stream::io::BoxedAsyncStream, types::SessionContext},
     router::RouteReason,
 };
 
@@ -101,8 +100,4 @@ pub(crate) async fn hijack_stream_dns(
         "stream dns handoff completed"
     );
     Ok(())
-}
-
-pub(crate) fn missing_dns_executor_error() -> ProxyError {
-    ProxyError::config("route selected 'hijack-dns' but dns executor is not configured")
 }

@@ -11,6 +11,7 @@ use crate::{
 
 pub(crate) async fn hijack_packet_dns(
     executor: &Arc<dyn DnsExecutorHandle>,
+    session_id: u64,
     packet: PacketFrame,
     writer: Arc<dyn PacketWriter>,
     route_reason: RouteReason,
@@ -21,6 +22,7 @@ pub(crate) async fn hijack_packet_dns(
 
     info!(
         event = "packet_hijack_dns",
+        session_id,
         inbound = %inbound,
         peer = %peer,
         destination = %destination,
@@ -37,6 +39,7 @@ pub(crate) async fn hijack_packet_dns(
         Err(err) => {
             warn!(
                 event = "packet_hijack_dns_failed",
+                session_id,
                 inbound = %inbound,
                 peer = %peer,
                 destination = %destination,
@@ -52,6 +55,7 @@ pub(crate) async fn hijack_packet_dns(
     if let Err(err) = writer.send_to(peer_addr, response.raw_message).await {
         warn!(
             event = "packet_hijack_dns_write_failed",
+            session_id,
             inbound = %inbound,
             peer = %peer,
             destination = %destination,
@@ -65,6 +69,7 @@ pub(crate) async fn hijack_packet_dns(
 
     info!(
         event = "packet_hijack_dns_complete",
+        session_id,
         inbound = %inbound,
         peer = %peer,
         destination = %destination,

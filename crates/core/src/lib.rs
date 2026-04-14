@@ -20,17 +20,10 @@ pub use error::{ErrorKind, ProxyError, Result};
 pub use listen::{format_listen_addr, parse_listen_addr};
 pub use logging::{sanitize_field, Logger};
 pub use plane::{
-    outbound::PlaneOutbound,
-    packet::dispatcher::{PacketDispatcher, PacketSink},
-    packet::io::{
-        PacketAssociationKey, PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle,
-        PacketWriter,
-    },
-    registry::OutboundRegistry,
-    session::{SessionContext, SessionMeta, SessionRoute, SessionState},
-    stream::dispatcher::{StreamDispatcher, StreamSink},
-    stream::io::{AsyncStream, BoxedAsyncStream},
-    stream::relay::{relay_bidirectional, RelayErrorWithStats, RelayStats},
+    relay_bidirectional, AsyncStream, BoxedAsyncStream, OutboundRegistry, PacketAssociationKey,
+    PacketDispatcher, PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle, PacketSink,
+    PacketWriter, PlaneOutbound, RelayErrorWithStats, RelayStats, SessionContext, SessionMeta,
+    SessionRoute, SessionState, StreamDispatcher, StreamSink,
 };
 pub use portal::{
     dialer::{Dial, DialConnect, DialContext, Dialer, PacketConnect, PacketDialer},

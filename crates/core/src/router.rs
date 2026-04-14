@@ -5,7 +5,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     logging::sanitize_field,
-    plane::{session::SessionContext, stream::io::BoxedAsyncStream},
+    plane::{stream::io::BoxedAsyncStream, types::SessionContext},
     sniff::{sniff_stream_internal, SniffExecution, SniffResult},
     types::{Destination, Host},
 };

@@ -172,7 +172,27 @@ pub(crate) fn log_packet_association_hit(association: &PacketAssociation) {
         outbound = %trace.outbound_field,
         peer = %trace.peer_field,
         destination = %trace.destination_field,
+        route_reason = %trace.route_reason.as_str(),
         "packet association hit"
+    );
+}
+
+pub(crate) fn log_packet_association_close_error(
+    association: &PacketAssociation,
+    err: &ProxyError,
+) {
+    let trace = PacketAssociationTrace::from_association(association);
+    warn!(
+        event = "packet_association_close_error",
+        association_id = trace.association_id,
+        inbound = %trace.inbound_field,
+        outbound = %trace.outbound_field,
+        peer = %trace.peer_field,
+        destination = %trace.destination_field,
+        route_reason = %trace.route_reason.as_str(),
+        error_kind = ?err.kind(),
+        error = %err,
+        "packet association close failed"
     );
 }
 
@@ -190,6 +210,7 @@ pub(crate) fn log_packet_association_close(
             peer = %trace.peer_field,
             destination = %trace.destination_field,
             close_reason = close_reason.label(),
+            route_reason = %trace.route_reason.as_str(),
             error_kind = ?err.kind(),
             error = %err,
             "packet association closed"
@@ -203,6 +224,7 @@ pub(crate) fn log_packet_association_close(
             peer = %trace.peer_field,
             destination = %trace.destination_field,
             close_reason = close_reason.label(),
+            route_reason = %trace.route_reason.as_str(),
             "packet association closed"
         );
     }
