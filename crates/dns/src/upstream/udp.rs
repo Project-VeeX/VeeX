@@ -1,28 +1,24 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::time::timeout;
-use veex_core::{Destination, DnsRequest, DnsResponse, ExecutionOutbound, Network, ProxyError};
+use veex_core::{Destination, DnsRequest, DnsResponse, Network, ProxyError};
 
-use crate::traits::DnsUpstream;
+use crate::{dialer::DnsDialer, traits::DnsUpstream};
 
-use super::{log_close_result, open_detour_packet};
+use super::log_close_result;
 
 pub struct UdpUpstream {
     destination: Destination,
-    outbound: Arc<dyn ExecutionOutbound>,
+    dialer: DnsDialer,
     query_timeout: Duration,
 }
 
 impl UdpUpstream {
-    pub fn new(
-        destination: Destination,
-        outbound: Arc<dyn ExecutionOutbound>,
-        query_timeout: Duration,
-    ) -> Self {
+    pub fn new(destination: Destination, dialer: DnsDialer, query_timeout: Duration) -> Self {
         Self {
             destination,
-            outbound,
+            dialer,
             query_timeout,
         }
     }
@@ -31,8 +27,10 @@ impl UdpUpstream {
 #[async_trait]
 impl DnsUpstream for UdpUpstream {
     async fn exchange(&self, req: DnsRequest) -> veex_core::Result<DnsResponse> {
-        let session =
-            open_detour_packet(&self.outbound, &req, &self.destination, Network::Udp).await?;
+        let session = self
+            .dialer
+            .open_packet(&req, &self.destination, Network::Udp)
+            .await?;
 
         if let Err(err) = session.send_packet(req.raw_message.clone()).await {
             log_close_result(req.session_id.unwrap_or_default(), session.close().await);

@@ -111,7 +111,7 @@ async fn connect_destination(
         resolve_context,
         resolver,
         TcpConnectOptions {
-            timeout: dial.timeout,
+            timeout: dial.connect_timeout,
             trace: Some(ConnectTraceContext {
                 session_id: ctx.session_id,
                 outbound: ctx.outbound_tag,
@@ -150,10 +150,17 @@ async fn connect_packet_destination(
             address,
             dial.routing_mark,
             attempt_index,
-            dial.timeout,
+            dial.connect_timeout,
         );
 
-        match connect_udp_socket(address, dial.timeout, dial.routing_mark, marked_connector).await {
+        match connect_udp_socket(
+            address,
+            dial.connect_timeout,
+            dial.routing_mark,
+            marked_connector,
+        )
+        .await
+        {
             Ok(socket) => {
                 log_udp_connect_success(
                     &ctx,

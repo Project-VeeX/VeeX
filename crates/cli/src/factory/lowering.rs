@@ -114,7 +114,8 @@ pub(crate) fn lower_outbound(outbound: &OutboundConfig) -> LoweredOutbound {
         OutboundConfig::Direct(config) => LoweredOutbound::Direct(LoweredDirectOutbound {
             meta: OutboundMeta::new(config.tag.clone(), "direct"),
             dial: Dial {
-                timeout: Some(config.connect_timeout),
+                detour: None,
+                connect_timeout: Some(config.connect_timeout),
                 routing_mark: config.routing_mark,
                 domain_resolver: config
                     .domain_resolver
@@ -125,7 +126,8 @@ pub(crate) fn lower_outbound(outbound: &OutboundConfig) -> LoweredOutbound {
         OutboundConfig::Trojan(config) => LoweredOutbound::Trojan(LoweredTrojanOutbound {
             meta: OutboundMeta::new(config.tag.clone(), "trojan"),
             dial: Dial {
-                timeout: Some(config.connect_timeout),
+                detour: None,
+                connect_timeout: Some(config.connect_timeout),
                 routing_mark: None,
                 domain_resolver: config
                     .domain_resolver
@@ -208,11 +210,15 @@ fn lower_dns_server(server: &veex_config::DnsServerConfig) -> DnsServer {
             DnsServerTypeConfig::Local => Destination::new(Host::Domain("local".into()), 53),
             _ => Destination::new(parse_host(&server.server), server.server_port),
         },
-        detour: server.detour.clone(),
-        domain_resolver: server
-            .domain_resolver
-            .as_ref()
-            .map(|resolver| resolver.server.clone()),
+        dial: Dial {
+            detour: (!server.detour.is_empty()).then(|| server.detour.clone()),
+            connect_timeout: None,
+            routing_mark: None,
+            domain_resolver: server
+                .domain_resolver
+                .as_ref()
+                .map(|resolver| resolver.server.clone()),
+        },
     }
 }
 

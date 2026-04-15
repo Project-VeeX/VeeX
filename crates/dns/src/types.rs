@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use veex_core::{Destination, Network};
+use veex_core::{Destination, Dial, Network};
 use veex_transport::TlsClientOptions;
 
 use crate::traits::DnsUpstream;
@@ -17,8 +17,13 @@ pub struct DnsServer {
     pub tag: String,
     pub transport: DnsServerTransport,
     pub destination: Destination,
-    pub detour: String,
-    pub domain_resolver: Option<String>,
+    pub dial: Dial,
+}
+
+impl DnsServer {
+    pub fn detour_tag(&self) -> &str {
+        self.dial.detour.as_deref().unwrap_or("")
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

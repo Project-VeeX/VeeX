@@ -37,7 +37,7 @@ pub fn build_dialer_with_connector(
                     build_resolve_context(&dial, &ctx),
                     resolver.as_ref(),
                     TcpConnectOptions {
-                        timeout: dial.timeout,
+                        timeout: dial.connect_timeout,
                         trace: Some(ConnectTraceContext {
                             session_id: ctx.session_id,
                             outbound: ctx.outbound_tag,

@@ -1,3 +1,4 @@
+mod dialer;
 mod executor;
 mod http;
 mod router;

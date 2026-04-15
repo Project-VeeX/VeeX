@@ -1,21 +1,17 @@
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use async_trait::async_trait;
 use tokio::{net::UdpSocket, time::timeout};
 use tracing::warn;
-use veex_core::{
-    read_dns_tcp_message, write_dns_tcp_message, BoxedAsyncStream, Destination, DnsRequest,
-    DnsResponse, ExecutionOutbound, Network, OutboundRegistry, PacketSessionHandle, ProxyError,
-    SessionContext, SessionMeta,
-};
+use veex_core::{read_dns_tcp_message, write_dns_tcp_message, DnsRequest, DnsResponse, ProxyError};
 use veex_infra_linux::load_system_dns_servers;
-use veex_transport::{connect_tls_stream, ConnectTraceContext, TlsClientOptions};
 
 use crate::{
+    dialer::DnsDialer,
     traits::DnsUpstream,
     types::{DnsServer, DnsServerTransport},
 };
@@ -32,7 +28,7 @@ pub use udp::UdpUpstream;
 
 pub(crate) fn build_upstream(
     server: &DnsServer,
-    outbounds: &Arc<OutboundRegistry>,
+    dialer: Option<DnsDialer>,
     query_timeout: Duration,
 ) -> veex_core::Result<Arc<dyn DnsUpstream>> {
     match &server.transport {
@@ -41,26 +37,24 @@ pub(crate) fn build_upstream(
         }
         DnsServerTransport::Udp => Ok(Arc::new(UdpUpstream::new(
             server.destination.clone(),
-            require_outbound(outbounds, &server.detour)?,
+            require_dns_dialer(server, dialer)?,
             query_timeout,
         )) as Arc<dyn DnsUpstream>),
         DnsServerTransport::Tcp => Ok(Arc::new(TcpUpstream::new(
             server.destination.clone(),
-            require_outbound(outbounds, &server.detour)?,
+            require_dns_dialer(server, dialer)?,
             query_timeout,
         )) as Arc<dyn DnsUpstream>),
         DnsServerTransport::Tls(tls) => Ok(Arc::new(TlsUpstream::new(
             server.destination.clone(),
-            server.detour.clone(),
-            require_outbound(outbounds, &server.detour)?,
+            require_dns_dialer(server, dialer)?,
             tls.clone(),
             query_timeout,
         )) as Arc<dyn DnsUpstream>),
         DnsServerTransport::Https(options) => Ok(Arc::new(HttpsUpstream::new(
             server.tag.clone(),
             server.destination.clone(),
-            server.detour.clone(),
-            require_outbound(outbounds, &server.detour)?,
+            require_dns_dialer(server, dialer)?,
             options.clone(),
             query_timeout,
         )) as Arc<dyn DnsUpstream>),
@@ -71,55 +65,17 @@ pub(crate) fn build_upstream(
     }
 }
 
-fn require_outbound(
-    outbounds: &Arc<OutboundRegistry>,
-    detour: &str,
-) -> veex_core::Result<Arc<dyn ExecutionOutbound>> {
-    outbounds
-        .get(detour)
-        .ok_or_else(|| ProxyError::config(format!("missing outbound tag for dns detour: {detour}")))
-}
-
-pub(crate) async fn open_detour_packet(
-    outbound: &Arc<dyn ExecutionOutbound>,
-    request: &DnsRequest,
-    destination: &Destination,
-    network: Network,
-) -> veex_core::Result<PacketSessionHandle> {
-    let ctx = build_request_context(request, destination.clone(), network);
-    outbound.open_packet(&ctx).await
-}
-
-pub(crate) async fn connect_detour_stream(
-    outbound: &Arc<dyn ExecutionOutbound>,
-    request: &DnsRequest,
-    destination: &Destination,
-    network: Network,
-) -> veex_core::Result<BoxedAsyncStream> {
-    let ctx = build_request_context(request, destination.clone(), network);
-    outbound.open_stream(&ctx).await
-}
-
-pub(crate) async fn connect_tls_for_dns(
-    stream: BoxedAsyncStream,
-    destination: &Destination,
-    detour: &str,
-    tls: &TlsClientOptions,
-    request: &DnsRequest,
-) -> veex_core::Result<BoxedAsyncStream> {
-    let trace = ConnectTraceContext {
-        session_id: request_query_id(request),
-        outbound: detour.to_string(),
-        routing_mark: None,
-    };
-    connect_tls_stream(
-        stream,
-        &destination.host,
-        destination.port,
-        tls,
-        Some(&trace),
-    )
-    .await
+fn require_dns_dialer(
+    server: &DnsServer,
+    dialer: Option<DnsDialer>,
+) -> veex_core::Result<DnsDialer> {
+    dialer.ok_or_else(|| {
+        ProxyError::config(format!(
+            "missing dns dialer for server '{}' with transport '{}'",
+            server.tag,
+            server.transport.as_str()
+        ))
+    })
 }
 
 pub(crate) async fn exchange_dns_over_stream(
@@ -193,30 +149,6 @@ pub(crate) fn log_close_result(query_id: u64, result: veex_core::Result<()>) {
             "dns upstream session close failed"
         );
     }
-}
-
-fn build_request_context(
-    request: &DnsRequest,
-    destination: Destination,
-    network: Network,
-) -> SessionContext {
-    let mut ctx = SessionContext::new(
-        SessionMeta {
-            id: request_query_id(request),
-            network,
-            inbound_tag: request.inbound_tag.clone(),
-            peer: request.peer,
-            destination,
-            start: Instant::now(),
-        },
-        request.buffered_payload.clone(),
-    );
-    ctx.set_resolve_context(request.resolve_context.clone());
-    ctx
-}
-
-fn request_query_id(request: &DnsRequest) -> u64 {
-    request.session_id.unwrap_or_default()
 }
 
 struct LocalUpstream {

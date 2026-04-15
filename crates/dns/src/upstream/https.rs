@@ -1,21 +1,16 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::time::timeout;
 use tracing::info;
-use veex_core::{
-    sanitize_field, Destination, DnsRequest, DnsResponse, ExecutionOutbound, Network, ProxyError,
-};
+use veex_core::{sanitize_field, Destination, DnsRequest, DnsResponse, Network, ProxyError};
 
-use crate::{http, traits::DnsUpstream, types::DnsHttpsOptions};
-
-use super::{connect_detour_stream, connect_tls_for_dns};
+use crate::{dialer::DnsDialer, http, traits::DnsUpstream, types::DnsHttpsOptions};
 
 pub struct HttpsUpstream {
     server_tag: String,
     destination: Destination,
-    detour: String,
-    outbound: Arc<dyn ExecutionOutbound>,
+    dialer: DnsDialer,
     options: DnsHttpsOptions,
     query_timeout: Duration,
 }
@@ -24,16 +19,14 @@ impl HttpsUpstream {
     pub fn new(
         server_tag: String,
         destination: Destination,
-        detour: String,
-        outbound: Arc<dyn ExecutionOutbound>,
+        dialer: DnsDialer,
         options: DnsHttpsOptions,
         query_timeout: Duration,
     ) -> Self {
         Self {
             server_tag,
             destination,
-            detour,
-            outbound,
+            dialer,
             options,
             query_timeout,
         }
@@ -43,16 +36,14 @@ impl HttpsUpstream {
 #[async_trait]
 impl DnsUpstream for HttpsUpstream {
     async fn exchange(&self, req: DnsRequest) -> veex_core::Result<DnsResponse> {
-        let stream =
-            connect_detour_stream(&self.outbound, &req, &self.destination, Network::Tcp).await?;
-        let mut stream = connect_tls_for_dns(
-            stream,
-            &self.destination,
-            &self.detour,
-            &self.options.tls,
-            &req,
-        )
-        .await?;
+        let stream = self
+            .dialer
+            .connect_stream(&req, &self.destination, Network::Tcp)
+            .await?;
+        let mut stream = self
+            .dialer
+            .connect_tls(stream, &self.destination, &self.options.tls, &req)
+            .await?;
 
         let host_header = self
             .options
@@ -66,7 +57,7 @@ impl DnsUpstream for HttpsUpstream {
             event = "dns_https_exchange_start",
             query_id,
             server = %sanitize_field(&self.server_tag),
-            detour = %sanitize_field(&self.detour),
+            detour = %sanitize_field(self.dialer.detour_tag()),
             path = %path_field,
             "dns https exchange started"
         );
@@ -96,7 +87,7 @@ impl DnsUpstream for HttpsUpstream {
             event = "dns_https_exchange_success",
             query_id,
             server = %sanitize_field(&self.server_tag),
-            detour = %sanitize_field(&self.detour),
+            detour = %sanitize_field(self.dialer.detour_tag()),
             path = %path_field,
             response_bytes = response.len() as u64,
             "dns https exchange succeeded"

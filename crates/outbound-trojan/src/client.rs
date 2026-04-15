@@ -8,8 +8,8 @@ use std::{
 
 use tokio::io::AsyncWriteExt;
 use veex_core::{
-    BoxFuture, BoxedAsyncStream, Destination, DialContext, Dialer, ExecutionOutbound, Logger,
-    Outbound, OutboundMeta, ProxyError, ProxyOutbound, ResolveContext, Result, SessionContext,
+    BoxFuture, BoxedAsyncStream, Destination, Dialer, ExecutionOutbound, Logger, Outbound,
+    OutboundMeta, ProxyError, ProxyOutbound, Result, SessionContext,
 };
 use veex_transport::{connect_tls, ConnectTraceContext, TlsClientOptions};
 
@@ -28,7 +28,6 @@ struct TrojanOutboundState {
 pub struct TrojanOutbound {
     meta: OutboundMeta,
     logger: Logger,
-    resolver_policy: Option<String>,
     dialer: Dialer,
     upstream_addr: UpstreamAddr,
     key: String,
@@ -41,7 +40,6 @@ impl fmt::Debug for TrojanOutbound {
         f.debug_struct("TrojanOutbound")
             .field("meta", &self.meta)
             .field("logger", &self.logger)
-            .field("resolver_policy", &self.resolver_policy)
             .field("dialer", &self.dialer)
             .field("upstream_addr", &self.upstream_addr)
             .field("tls", &self.tls)
@@ -53,7 +51,6 @@ impl TrojanOutbound {
     pub fn new(
         meta: OutboundMeta,
         logger: Logger,
-        resolver_policy: Option<String>,
         dialer: Dialer,
         upstream_addr: UpstreamAddr,
         key: impl Into<String>,
@@ -62,7 +59,6 @@ impl TrojanOutbound {
         let outbound = Self {
             meta,
             logger,
-            resolver_policy,
             dialer,
             upstream_addr,
             key: key.into(),
@@ -85,18 +81,6 @@ impl TrojanOutbound {
 
     fn is_closed(&self) -> bool {
         self.state.closed.load(Ordering::Relaxed)
-    }
-
-    fn build_dial_context(&self, ctx: &SessionContext) -> DialContext {
-        DialContext {
-            session_id: ctx.meta.id,
-            outbound_tag: self.meta.tag.clone(),
-            resolve_context: Some(ResolveContext::from_outbound_policy(
-                ctx.state.resolve_context.as_ref(),
-                self.meta.tag.clone(),
-                self.resolver_policy.clone(),
-            )),
-        }
     }
 }
 
@@ -129,11 +113,11 @@ impl ProxyOutbound for TrojanOutbound {
         let key = self.key.clone();
         let tls = self.tls.clone();
         let closed = self.is_closed();
-        let tcp_trace = self.build_dial_context(ctx);
+        let tcp_trace = self.dialer.context(ctx, self.meta.tag.clone());
         let tls_trace = ConnectTraceContext {
             session_id: ctx.meta.id,
             outbound: self.meta.tag.clone(),
-            routing_mark: self.dialer.dial().routing_mark,
+            routing_mark: self.dialer.routing_mark(),
         };
 
         Box::pin(async move {
@@ -215,7 +199,8 @@ mod tests {
         let good_addr = server.addr;
         let dialer = build_dialer_with_connector(
             Dial {
-                timeout: Some(Duration::from_secs(1)),
+                detour: None,
+                connect_timeout: Some(Duration::from_secs(1)),
                 routing_mark: None,
                 domain_resolver: None,
             },
@@ -227,7 +212,6 @@ mod tests {
         let outbound = TrojanOutbound::new(
             OutboundMeta::new("proxy", "trojan"),
             Logger::new("proxy", "trojan"),
-            None,
             dialer,
             Destination::new(Host::Domain("fallback.test".into()), server.addr.port()),
             "secret",
@@ -319,7 +303,8 @@ mod tests {
         let second = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)), 18443);
         let dialer = build_dialer_with_connector(
             Dial {
-                timeout: Some(Duration::from_millis(200)),
+                detour: None,
+                connect_timeout: Some(Duration::from_millis(200)),
                 routing_mark: None,
                 domain_resolver: None,
             },
@@ -331,7 +316,6 @@ mod tests {
         let outbound = TrojanOutbound::new(
             OutboundMeta::new("proxy", "trojan"),
             Logger::new("proxy", "trojan"),
-            None,
             dialer,
             Destination::new(Host::Domain("fallback.test".into()), 18443),
             "secret",

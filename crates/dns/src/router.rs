@@ -10,7 +10,7 @@ use crate::{
 #[derive(Clone)]
 pub(crate) struct DnsServerRoute<'a> {
     pub tag: &'a str,
-    pub detour: &'a str,
+    pub detour: Option<&'a str>,
     pub upstream: Arc<dyn DnsUpstream>,
 }
 
@@ -79,7 +79,7 @@ impl DnsRouter {
 
         let selection = servers
             .iter()
-            .find(|server| server.detour == "direct" && is_safe_for_context(server, context))
+            .find(|server| server.detour == Some("direct") && is_safe_for_context(server, context))
             .or_else(|| {
                 servers
                     .iter()
@@ -130,7 +130,7 @@ fn is_safe_for_context(server: &DnsServerRoute<'_>, context: &ResolveContext) ->
     if context
         .caller_outbound_tag
         .as_deref()
-        .is_some_and(|tag| tag == server.detour)
+        .is_some_and(|tag| server.detour.is_some_and(|detour| tag == detour))
     {
         return false;
     }
@@ -178,12 +178,12 @@ mod tests {
         let servers = [
             DnsServerRoute {
                 tag: "direct",
-                detour: "direct",
+                detour: Some("direct"),
                 upstream: Arc::new(TestUpstream),
             },
             DnsServerRoute {
                 tag: "remote",
-                detour: "proxy",
+                detour: Some("proxy"),
                 upstream: Arc::new(TestUpstream),
             },
         ];
@@ -206,7 +206,7 @@ mod tests {
         let router = DnsRouter::new("remote", Vec::new());
         let servers = [DnsServerRoute {
             tag: "bootstrap",
-            detour: "direct",
+            detour: Some("direct"),
             upstream: Arc::new(TestUpstream),
         }];
 
@@ -228,12 +228,12 @@ mod tests {
         let servers = [
             DnsServerRoute {
                 tag: "remote",
-                detour: "proxy",
+                detour: Some("proxy"),
                 upstream: Arc::new(TestUpstream),
             },
             DnsServerRoute {
                 tag: "bootstrap",
-                detour: "direct",
+                detour: Some("direct"),
                 upstream: Arc::new(TestUpstream),
             },
         ];

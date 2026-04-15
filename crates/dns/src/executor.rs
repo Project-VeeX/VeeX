@@ -15,10 +15,12 @@ use veex_core::{
 };
 
 use crate::{
-    build_a_query, parse_query_domain, parse_response_ips,
+    build_a_query,
+    dialer::DnsDialer,
+    parse_query_domain, parse_response_ips,
     router::{DnsRouter, DnsServerRoute},
     traits::DnsUpstream,
-    types::{upstream_network, DnsRuntimeConfig, DnsSelection, DnsServer},
+    types::{DnsRuntimeConfig, DnsSelection, DnsServer, DnsServerTransport},
     upstream::build_upstream,
 };
 
@@ -27,6 +29,7 @@ const MAX_DNS_RECURSION_DEPTH: u8 = 4;
 
 struct DnsServerRuntime {
     server: DnsServer,
+    dialer: Option<DnsDialer>,
     upstream: Arc<dyn DnsUpstream>,
 }
 
@@ -36,8 +39,20 @@ impl DnsServerRuntime {
         outbounds: &Arc<OutboundRegistry>,
         query_timeout: Duration,
     ) -> veex_core::Result<Self> {
-        let upstream = build_upstream(&server, outbounds, query_timeout)?;
-        Ok(Self { server, upstream })
+        let dialer = match &server.transport {
+            DnsServerTransport::Local | DnsServerTransport::Unsupported(_) => None,
+            _ => Some(DnsDialer::new(
+                server.tag.clone(),
+                server.dial.clone(),
+                outbounds,
+            )?),
+        };
+        let upstream = build_upstream(&server, dialer.clone(), query_timeout)?;
+        Ok(Self {
+            server,
+            dialer,
+            upstream,
+        })
     }
 }
 
@@ -85,7 +100,7 @@ impl DnsExecutor {
 
         let response = selection
             .upstream
-            .exchange(self.build_client_upstream_request(&request, &server.server, query_id))
+            .exchange(self.build_client_upstream_request(&request, server, query_id))
             .await;
 
         match response {
@@ -161,20 +176,11 @@ impl DnsExecutor {
         );
 
         let query = build_a_query(&domain, query_id as u16)?;
-        let upstream_context = context.for_dns_upstream_dial(
-            server.server.detour.clone(),
-            server.server.tag.clone(),
-            server.server.domain_resolver.clone(),
-        );
         let response = selection
             .upstream
-            .exchange(self.build_resolution_upstream_request(
-                &domain,
-                &server.server,
-                &query,
-                query_id,
-                upstream_context,
-            ))
+            .exchange(
+                self.build_resolution_upstream_request(&domain, server, &query, query_id, &context),
+            )
             .await;
 
         match response {
@@ -214,7 +220,7 @@ impl DnsExecutor {
             .values()
             .map(|server| DnsServerRoute {
                 tag: server.server.tag.as_str(),
-                detour: server.server.detour.as_str(),
+                detour: server.server.dial.detour.as_deref(),
                 upstream: Arc::clone(&server.upstream),
             })
             .collect()
@@ -229,37 +235,42 @@ impl DnsExecutor {
     fn build_client_upstream_request(
         &self,
         request: &DnsRequest,
-        server: &DnsServer,
+        server: &DnsServerRuntime,
         query_id: u64,
     ) -> DnsRequest {
-        request
-            .clone()
-            .with_session_id(query_id)
-            .with_resolve_context(ResolveContext::client_query().for_dns_upstream_dial(
-                server.detour.clone(),
-                server.tag.clone(),
-                server.domain_resolver.clone(),
-            ))
+        match &server.dialer {
+            Some(dialer) => dialer.bind_client_request(request, query_id),
+            None => request.clone().with_session_id(query_id),
+        }
     }
 
     fn build_resolution_upstream_request(
         &self,
         domain: &str,
-        server: &DnsServer,
+        server: &DnsServerRuntime,
         query: &[u8],
         query_id: u64,
-        resolve_context: ResolveContext,
+        resolve_context: &ResolveContext,
     ) -> DnsRequest {
-        DnsRequest::new(
-            query.to_vec(),
-            upstream_network(&server.transport),
-            "dns-resolver",
-            SocketAddr::from(([127, 0, 0, 1], 0)),
-            server.destination.clone(),
-        )
-        .with_session_id(query_id)
-        .with_resolve_context(resolve_context)
-        .with_buffered_payload(domain.as_bytes().to_vec())
+        match &server.dialer {
+            Some(dialer) => dialer.bind_resolution_request(
+                domain,
+                &server.server,
+                query,
+                query_id,
+                resolve_context,
+            ),
+            None => DnsRequest::new(
+                query.to_vec(),
+                crate::types::upstream_network(&server.server.transport),
+                "dns-resolver",
+                SocketAddr::from(([127, 0, 0, 1], 0)),
+                server.server.destination.clone(),
+            )
+            .with_session_id(query_id)
+            .with_resolve_context(resolve_context.clone())
+            .with_buffered_payload(domain.as_bytes().to_vec()),
+        }
     }
 
     fn log_query_start(
@@ -277,7 +288,7 @@ impl DnsExecutor {
             ingress_protocol = %request.protocol.as_str(),
             query_name = %sanitize_field(query_name),
             server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(&server.detour),
+            detour = %sanitize_field(server.detour_tag()),
             destination = %sanitize_field(&server.destination.to_string()),
             route_reason = %selection.reason.as_str(),
             transport = %server.transport.as_str(),
@@ -306,7 +317,7 @@ impl DnsExecutor {
             ingress_protocol = %request.protocol.as_str(),
             query_name = %sanitize_field(query_name),
             server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(&server.detour),
+            detour = %sanitize_field(server.detour_tag()),
             destination = %sanitize_field(&server.destination.to_string()),
             route_reason = %selection.reason.as_str(),
             transport = %server.transport.as_str(),
@@ -331,7 +342,7 @@ impl DnsExecutor {
             ingress_protocol = %request.protocol.as_str(),
             query_name = %sanitize_field(query_name),
             server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(&server.detour),
+            detour = %sanitize_field(server.detour_tag()),
             destination = %sanitize_field(&server.destination.to_string()),
             route_reason = %selection.reason.as_str(),
             transport = %server.transport.as_str(),
@@ -361,7 +372,7 @@ impl DnsExecutor {
             caller_dns_server = %sanitize_field(context.caller_dns_server_tag.as_deref().unwrap_or("")),
             explicit_server = %sanitize_field(context.explicit_server_tag.as_deref().unwrap_or("")),
             server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(&server.detour),
+            detour = %sanitize_field(server.detour_tag()),
             route_reason = %selection.reason.as_str(),
             transport = %server.transport.as_str(),
             "dial-side domain resolution started"
@@ -394,7 +405,7 @@ impl DnsExecutor {
             caller_dns_server = %sanitize_field(context.caller_dns_server_tag.as_deref().unwrap_or("")),
             explicit_server = %sanitize_field(context.explicit_server_tag.as_deref().unwrap_or("")),
             server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(&server.detour),
+            detour = %sanitize_field(server.detour_tag()),
             route_reason = %selection.reason.as_str(),
             transport = %server.transport.as_str(),
             resolved_addrs = %sanitize_field(&addresses_field),
@@ -423,7 +434,7 @@ impl DnsExecutor {
             caller_dns_server = %sanitize_field(context.caller_dns_server_tag.as_deref().unwrap_or("")),
             explicit_server = %sanitize_field(context.explicit_server_tag.as_deref().unwrap_or("")),
             server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(&server.detour),
+            detour = %sanitize_field(server.detour_tag()),
             route_reason = %selection.reason.as_str(),
             transport = %server.transport.as_str(),
             error_kind = ?err.kind(),
@@ -596,8 +607,12 @@ mod tests {
                             Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                             53,
                         ),
-                        detour: "direct".into(),
-                        domain_resolver: None,
+                        dial: veex_core::Dial {
+                            detour: Some("direct".into()),
+                            connect_timeout: None,
+                            routing_mark: None,
+                            domain_resolver: None,
+                        },
                     },
                     DnsServer {
                         tag: "fallback".into(),
@@ -606,8 +621,12 @@ mod tests {
                             Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                             54,
                         ),
-                        detour: "direct".into(),
-                        domain_resolver: None,
+                        dial: veex_core::Dial {
+                            detour: Some("direct".into()),
+                            connect_timeout: None,
+                            routing_mark: None,
+                            domain_resolver: None,
+                        },
                     },
                 ],
                 rules: vec![DnsRule {
@@ -672,8 +691,12 @@ mod tests {
                             Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                             53,
                         ),
-                        detour: "direct".into(),
-                        domain_resolver: None,
+                        dial: veex_core::Dial {
+                            detour: Some("direct".into()),
+                            connect_timeout: None,
+                            routing_mark: None,
+                            domain_resolver: None,
+                        },
                     },
                     DnsServer {
                         tag: "remote".into(),
@@ -682,8 +705,12 @@ mod tests {
                             Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                             54,
                         ),
-                        detour: "proxy".into(),
-                        domain_resolver: None,
+                        dial: veex_core::Dial {
+                            detour: Some("proxy".into()),
+                            connect_timeout: None,
+                            routing_mark: None,
+                            domain_resolver: None,
+                        },
                     },
                 ],
                 rules: vec![DnsRule {
@@ -730,8 +757,12 @@ mod tests {
                     tag: "remote".into(),
                     transport: DnsServerTransport::Udp,
                     destination: Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
-                    detour: "proxy".into(),
-                    domain_resolver: None,
+                    dial: veex_core::Dial {
+                        detour: Some("proxy".into()),
+                        connect_timeout: None,
+                        routing_mark: None,
+                        domain_resolver: None,
+                    },
                 }],
                 rules: Vec::new(),
             },
@@ -767,8 +798,12 @@ mod tests {
                     tag: "direct".into(),
                     transport: DnsServerTransport::Udp,
                     destination: Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
-                    detour: "direct".into(),
-                    domain_resolver: None,
+                    dial: veex_core::Dial {
+                        detour: Some("direct".into()),
+                        connect_timeout: None,
+                        routing_mark: None,
+                        domain_resolver: None,
+                    },
                 }],
                 rules: Vec::new(),
             },

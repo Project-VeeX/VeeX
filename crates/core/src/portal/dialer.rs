@@ -3,12 +3,16 @@ use std::{fmt, future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::net::TcpStream;
 
 use crate::{
-    dns::ResolveContext, error::Result, execution::packet::io::PacketSessionHandle, types::Host,
+    dns::ResolveContext,
+    error::Result,
+    execution::{packet::io::PacketSessionHandle, types::SessionContext},
+    types::Host,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Dial {
-    pub timeout: Option<Duration>,
+    pub detour: Option<String>,
+    pub connect_timeout: Option<Duration>,
     pub routing_mark: Option<u32>,
     pub domain_resolver: Option<String>,
 }
@@ -47,6 +51,18 @@ impl Dialer {
         &self.dial
     }
 
+    pub fn routing_mark(&self) -> Option<u32> {
+        self.dial.routing_mark
+    }
+
+    pub fn context(
+        &self,
+        session: &SessionContext,
+        outbound_tag: impl Into<String>,
+    ) -> DialContext {
+        build_dial_context(&self.dial, session, outbound_tag.into())
+    }
+
     pub async fn connect(&self, host: &Host, port: u16, ctx: DialContext) -> Result<TcpStream> {
         (self.connector)(host.clone(), port, self.dial.clone(), ctx).await
     }
@@ -75,6 +91,14 @@ impl PacketDialer {
         &self.dial
     }
 
+    pub fn context(
+        &self,
+        session: &SessionContext,
+        outbound_tag: impl Into<String>,
+    ) -> DialContext {
+        build_dial_context(&self.dial, session, outbound_tag.into())
+    }
+
     pub async fn connect(
         &self,
         host: &Host,
@@ -82,5 +106,17 @@ impl PacketDialer {
         ctx: DialContext,
     ) -> Result<PacketSessionHandle> {
         (self.connector)(host.clone(), port, self.dial.clone(), ctx).await
+    }
+}
+
+fn build_dial_context(dial: &Dial, session: &SessionContext, outbound_tag: String) -> DialContext {
+    DialContext {
+        session_id: session.meta.id,
+        outbound_tag: outbound_tag.clone(),
+        resolve_context: Some(ResolveContext::from_outbound_policy(
+            session.state.resolve_context.as_ref(),
+            outbound_tag,
+            dial.domain_resolver.clone(),
+        )),
     }
 }
