@@ -38,7 +38,7 @@ impl DnsServerRuntime {
         query_timeout: Duration,
     ) -> veex_core::Result<Self> {
         let dialer = match &server.transport {
-            DnsServerTransport::Local | DnsServerTransport::Unsupported(_) => None,
+            DnsServerTransport::Unsupported(_) => None,
             _ => Some(crate::dialer::DnsDialer::new(
                 server.tag.clone(),
                 server.dial.clone(),
@@ -222,7 +222,7 @@ impl DnsExecutor {
             .values()
             .map(|server| DnsServerRoute {
                 tag: server.server.tag.as_str(),
-                detour: server.server.dial.detour.as_deref(),
+                detour: server.server.outbound_tag(),
                 upstream: Arc::clone(&server.upstream),
             })
             .collect()
@@ -432,21 +432,19 @@ mod tests {
         },
     };
 
-    use tokio::net::UdpSocket;
     use tokio::sync::{mpsc, Mutex};
     use veex_core::{
         BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DomainResolverHandle,
-        ExecutionOutbound, Host, Logger, Network, Outbound, OutboundMeta, PacketSessionHandle,
-        ProxyError, ResolveContext, SessionContext,
+        ExecutionOutbound, Host, Logger, Network, Outbound, OutboundMeta, OutboundRegistry,
+        OutboundRegistryBuilder, PacketSessionHandle, ProxyError, ResolveContext, SessionContext,
     };
 
     use crate::{
         build_a_query,
         types::{DnsRule, DnsRuntimeConfig, DnsServer, DnsServerTransport},
-        upstream::{execute_local_udp_query, udp_bind_addr},
     };
 
-    use super::{DnsExecutor, DEFAULT_DNS_QUERY_TIMEOUT, MAX_DNS_RECURSION_DEPTH};
+    use super::{DnsExecutor, MAX_DNS_RECURSION_DEPTH};
 
     struct TestPacketSession {
         recv: Mutex<mpsc::UnboundedReceiver<Vec<u8>>>,
@@ -526,19 +524,37 @@ mod tests {
     }
 
     fn register_test_outbound(
-        registry: &mut veex_core::OutboundRegistry,
+        registry: &mut OutboundRegistryBuilder,
         tag: &str,
         session: PacketSessionHandle,
         connected_destinations: Arc<Mutex<Vec<Destination>>>,
-    ) {
+    ) -> Arc<dyn ExecutionOutbound> {
+        let outbound = Arc::new(TestOutbound {
+            meta: OutboundMeta::new(tag, "test"),
+            logger: Logger::new(tag, "test"),
+            session,
+            connected_destinations,
+        }) as Arc<dyn ExecutionOutbound>;
         registry
-            .register(Arc::new(TestOutbound {
-                meta: OutboundMeta::new(tag, "test"),
-                logger: Logger::new(tag, "test"),
-                session,
-                connected_destinations,
-            }) as Arc<dyn ExecutionOutbound>)
+            .register(Arc::clone(&outbound))
             .expect("test outbound should register");
+        outbound
+    }
+
+    fn finalize_builder(
+        builder: OutboundRegistryBuilder,
+        default_outbound: Arc<dyn ExecutionOutbound>,
+    ) -> Arc<OutboundRegistry> {
+        Arc::new(builder.finalize(default_outbound))
+    }
+
+    fn register_default_test_outbound(
+        registry: &mut OutboundRegistryBuilder,
+        tag: &str,
+        session: PacketSessionHandle,
+        connected_destinations: Arc<Mutex<Vec<Destination>>>,
+    ) -> Arc<dyn ExecutionOutbound> {
+        register_test_outbound(registry, tag, session, connected_destinations)
     }
 
     #[tokio::test]
@@ -550,8 +566,8 @@ mod tests {
             sent_count: AtomicUsize::new(0),
             sent_payloads: Arc::new(Mutex::new(Vec::new())),
         });
-        let mut registry = veex_core::OutboundRegistry::default();
-        register_test_outbound(
+        let mut registry = OutboundRegistryBuilder::default();
+        let default_outbound = register_default_test_outbound(
             &mut registry,
             "direct",
             session,
@@ -595,7 +611,7 @@ mod tests {
                     server_tag: "direct".into(),
                 }],
             },
-            Arc::new(registry),
+            finalize_builder(registry, default_outbound),
         )
         .expect("dns executor should build");
 
@@ -628,8 +644,8 @@ mod tests {
             sent_count: AtomicUsize::new(0),
             sent_payloads: Arc::new(Mutex::new(Vec::new())),
         });
-        let mut registry = veex_core::OutboundRegistry::default();
-        register_test_outbound(
+        let mut registry = OutboundRegistryBuilder::default();
+        let default_outbound = register_default_test_outbound(
             &mut registry,
             "direct",
             session,
@@ -679,7 +695,7 @@ mod tests {
                     server_tag: "remote".into(),
                 }],
             },
-            Arc::new(registry),
+            finalize_builder(registry, default_outbound),
         )
         .expect("dns executor should build");
 
@@ -704,8 +720,8 @@ mod tests {
 
     #[tokio::test]
     async fn domain_resolver_rejects_recursive_default_path_without_safe_server() {
-        let mut registry = veex_core::OutboundRegistry::default();
-        register_test_outbound(
+        let mut registry = OutboundRegistryBuilder::default();
+        let default_outbound = register_default_test_outbound(
             &mut registry,
             "proxy",
             empty_test_session(),
@@ -727,7 +743,7 @@ mod tests {
                 }],
                 rules: Vec::new(),
             },
-            Arc::new(registry),
+            finalize_builder(registry, default_outbound),
         )
         .expect("dns executor should build");
 
@@ -745,8 +761,8 @@ mod tests {
 
     #[tokio::test]
     async fn domain_resolver_rejects_excessive_recursion_depth() {
-        let mut registry = veex_core::OutboundRegistry::default();
-        register_test_outbound(
+        let mut registry = OutboundRegistryBuilder::default();
+        let default_outbound = register_default_test_outbound(
             &mut registry,
             "direct",
             empty_test_session(),
@@ -768,7 +784,7 @@ mod tests {
                 }],
                 rules: Vec::new(),
             },
-            Arc::new(registry),
+            finalize_builder(registry, default_outbound),
         )
         .expect("dns executor should build");
 
@@ -784,47 +800,29 @@ mod tests {
         assert!(err.to_string().contains("recursion depth exceeded"));
     }
 
-    #[tokio::test]
-    async fn local_udp_query_exchanges_standard_dns_payload() {
-        let query = vec![0x12, 0x34, 0x56];
-        let response = vec![0xab, 0xcd, 0xef];
-        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-            .await
-            .expect("udp server should bind");
-        let addr = socket.local_addr().expect("udp server addr should resolve");
-        let expected_query = query.clone();
-        let expected_response = response.clone();
-        let server = tokio::spawn(async move {
-            let mut buffer = [0u8; 2048];
-            let (size, peer) = socket
-                .recv_from(&mut buffer)
-                .await
-                .expect("udp server should receive");
-            assert_eq!(&buffer[..size], expected_query.as_slice());
-            socket
-                .send_to(&expected_response, peer)
-                .await
-                .expect("udp server should respond");
-        });
-
-        let result = execute_local_udp_query(addr, &query, DEFAULT_DNS_QUERY_TIMEOUT)
-            .await
-            .expect("local udp query should succeed");
-
-        server.await.expect("udp server task should join");
-        assert_eq!(result, response);
-    }
-
     #[test]
-    fn udp_bind_addr_matches_destination_family() {
-        assert_eq!(
-            udp_bind_addr(IpAddr::V4(Ipv4Addr::LOCALHOST)),
-            SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
+    fn local_dns_executor_builds_with_default_outbound() {
+        let default_outbound = Arc::new(TestOutbound {
+            meta: OutboundMeta::new("direct", "test"),
+            logger: Logger::new("direct", "test"),
+            session: empty_test_session(),
+            connected_destinations: Arc::new(Mutex::new(Vec::new())),
+        }) as Arc<dyn ExecutionOutbound>;
+        let executor = DnsExecutor::new(
+            DnsRuntimeConfig {
+                final_server_tag: "local".into(),
+                servers: vec![DnsServer {
+                    tag: "local".into(),
+                    transport: DnsServerTransport::Local,
+                    destination: Destination::new(Host::Domain("local".into()), 53),
+                    dial: veex_core::Dial::default(),
+                }],
+                rules: Vec::new(),
+            },
+            Arc::new(OutboundRegistryBuilder::default().finalize(default_outbound)),
         );
-        assert_eq!(
-            udp_bind_addr(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)),
-            SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, 0))
-        );
+
+        assert!(executor.is_ok());
     }
 
     fn build_dns_answer_response(domain: &str, ip: [u8; 4]) -> Vec<u8> {

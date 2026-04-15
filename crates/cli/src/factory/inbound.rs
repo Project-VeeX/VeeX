@@ -132,11 +132,57 @@ pub fn build_inbounds(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use veex_config::{
         DirectInboundConfig, DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig,
         ProxyConfig, RouteConfig, TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT,
     };
+    use veex_core::{
+        BoxFuture, BoxedAsyncStream, Logger, Outbound, OutboundMeta, OutboundRegistry,
+        OutboundRegistryBuilder, ProxyError, SessionContext,
+    };
+
+    struct UnusedExecutionOutbound {
+        meta: OutboundMeta,
+        logger: Logger,
+    }
+
+    impl UnusedExecutionOutbound {
+        fn new() -> Self {
+            Self {
+                meta: OutboundMeta::new("direct", "direct"),
+                logger: Logger::new("direct", "direct"),
+            }
+        }
+    }
+
+    impl Outbound for UnusedExecutionOutbound {
+        fn meta(&self) -> &OutboundMeta {
+            &self.meta
+        }
+
+        fn logger(&self) -> &Logger {
+            &self.logger
+        }
+
+        fn close(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl veex_core::ExecutionOutbound for UnusedExecutionOutbound {
+        fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+            Box::pin(async { Err(ProxyError::protocol("unused")) })
+        }
+    }
+
+    fn test_outbounds() -> Arc<OutboundRegistry> {
+        Arc::new(
+            OutboundRegistryBuilder::default().finalize(Arc::new(UnusedExecutionOutbound::new())),
+        )
+    }
 
     #[test]
     fn builds_direct_inbound_from_config() {
@@ -168,11 +214,11 @@ mod tests {
         };
         let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::StreamDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
-            Arc::new(veex_core::OutboundRegistry::default()),
+            test_outbounds(),
         ));
         let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::PacketDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
-            Arc::new(veex_core::OutboundRegistry::default()),
+            test_outbounds(),
         ));
 
         let inbounds = build_inbounds(&config, sink, packet_sink).expect("inbounds should build");
@@ -211,11 +257,11 @@ mod tests {
         };
         let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::StreamDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
-            Arc::new(veex_core::OutboundRegistry::default()),
+            test_outbounds(),
         ));
         let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::PacketDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
-            Arc::new(veex_core::OutboundRegistry::default()),
+            test_outbounds(),
         ));
 
         let inbounds = build_inbounds(&config, sink, packet_sink).expect("inbounds should build");
@@ -254,11 +300,11 @@ mod tests {
         };
         let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::StreamDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
-            Arc::new(veex_core::OutboundRegistry::default()),
+            test_outbounds(),
         ));
         let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::PacketDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
-            Arc::new(veex_core::OutboundRegistry::default()),
+            test_outbounds(),
         ));
 
         let inbounds = build_inbounds(&config, sink, packet_sink).expect("inbounds should build");

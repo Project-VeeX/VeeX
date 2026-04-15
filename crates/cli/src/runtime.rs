@@ -114,7 +114,7 @@ async fn start_inbounds(
 }
 
 async fn start_outbounds(outbounds: &OutboundRegistry) -> Result<(), RuntimeError> {
-    for outbound in outbounds.iter() {
+    for outbound in outbounds.lifecycle_iter() {
         let outbound_tag = outbound.meta().tag.clone();
         let outbound_field = sanitize_field(&outbound_tag).into_owned();
         info!(
@@ -159,7 +159,7 @@ async fn close_inbounds(
 }
 
 async fn close_outbounds(outbounds: &OutboundRegistry) -> Result<(), RuntimeError> {
-    for outbound in outbounds.iter() {
+    for outbound in outbounds.lifecycle_iter() {
         let outbound_tag = outbound.meta().tag.clone();
         let outbound_field = sanitize_field(&outbound_tag).into_owned();
         if let Err(err) = outbound.close().await {
@@ -190,7 +190,8 @@ mod tests {
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use veex_core::{
         BoxFuture, BoxedAsyncStream, Destination, ErrorKind, ExecutionOutbound, Host, Logger,
-        Network, Outbound, OutboundMeta, OutboundRegistry, ProxyError, SessionContext, SessionMeta,
+        Network, Outbound, OutboundMeta, OutboundRegistry, OutboundRegistryBuilder, ProxyError,
+        SessionContext, SessionMeta,
     };
 
     use super::{close_outbounds, start_outbounds};
@@ -289,12 +290,17 @@ mod tests {
         )
     }
 
+    fn finalized_registry(outbound: Arc<dyn ExecutionOutbound>) -> OutboundRegistry {
+        let mut builder = OutboundRegistryBuilder::default();
+        builder
+            .register(Arc::clone(&outbound))
+            .expect("outbound should register");
+        builder.finalize(outbound)
+    }
+
     #[tokio::test]
     async fn runtime_close_outbounds_is_visible_to_dispatch_view() {
-        let mut registry = OutboundRegistry::default();
-        registry
-            .register(Arc::new(TestDispatchOutbound::new("direct")))
-            .expect("outbound should register");
+        let registry = finalized_registry(Arc::new(TestDispatchOutbound::new("direct")));
 
         close_outbounds(&registry)
             .await
@@ -312,10 +318,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_start_outbounds_reopens_dispatch_view() {
-        let mut registry = OutboundRegistry::default();
-        registry
-            .register(Arc::new(TestDispatchOutbound::new("direct")))
-            .expect("outbound should register");
+        let registry = finalized_registry(Arc::new(TestDispatchOutbound::new("direct")));
 
         close_outbounds(&registry)
             .await
@@ -335,10 +338,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_close_outbounds_is_idempotent() {
-        let mut registry = OutboundRegistry::default();
-        registry
-            .register(Arc::new(TestDispatchOutbound::new("direct")))
-            .expect("outbound should register");
+        let registry = finalized_registry(Arc::new(TestDispatchOutbound::new("direct")));
 
         close_outbounds(&registry)
             .await

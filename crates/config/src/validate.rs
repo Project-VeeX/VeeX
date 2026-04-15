@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    defaults::DEFAULT_DIRECT_OUTBOUND_TAG,
     error::ConfigError,
     schema::{
         DirectInboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig, DnsServerTypeConfig,
@@ -147,16 +146,6 @@ fn validate_route(
         ));
     }
 
-    if !outbound_tags.contains(DEFAULT_DIRECT_OUTBOUND_TAG) {
-        return Err(ConfigError::semantic(
-            "$.outbounds",
-            format!(
-                "required direct outbound tag '{}' is missing",
-                DEFAULT_DIRECT_OUTBOUND_TAG
-            ),
-        ));
-    }
-
     for (index, rule) in config.route.rules.iter().enumerate() {
         if matches!(
             rule.action,
@@ -278,14 +267,7 @@ fn validate_dns_server(
         ));
     }
 
-    if server.detour.trim().is_empty() {
-        return Err(ConfigError::semantic(
-            format!("$.dns.servers[{index}].detour"),
-            "dns server detour must not be empty",
-        ));
-    }
-
-    if !outbound_tags.contains(&server.detour) {
+    if !server.detour.trim().is_empty() && !outbound_tags.contains(&server.detour) {
         return Err(ConfigError::semantic(
             format!("$.dns.servers[{index}].detour"),
             format!(
@@ -744,6 +726,61 @@ mod tests {
         });
 
         validate_config(&config).expect("local dns section should validate");
+    }
+
+    #[test]
+    fn accepts_dns_section_with_remote_server_without_detour() {
+        let mut config = valid_config();
+        config.dns = Some(DnsConfig {
+            final_server: "remote".into(),
+            servers: vec![DnsServerConfig {
+                tag: "remote".into(),
+                kind: DnsServerTypeConfig::Udp,
+                server: "223.5.5.5".into(),
+                server_port: 53,
+                path: None,
+                headers: Default::default(),
+                detour: String::new(),
+                domain_resolver: None,
+                tls: crate::TrojanTlsConfig {
+                    enabled: false,
+                    server_name: None,
+                    disable_sni: false,
+                    insecure: false,
+                    certificate_path: None,
+                    ca_path: None,
+                    handshake_timeout: crate::DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+                },
+            }],
+            rules: vec![],
+        });
+
+        validate_config(&config).expect("remote dns section without detour should validate");
+    }
+
+    #[test]
+    fn accepts_config_without_explicit_direct_outbound_tag() {
+        let mut config = valid_config();
+        config.outbounds = vec![OutboundConfig::Trojan(crate::TrojanOutboundConfig {
+            tag: "proxy".into(),
+            server: "trojan.example.com".into(),
+            server_port: 443,
+            password: "secret".into(),
+            domain_resolver: None,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            tls: crate::TrojanTlsConfig {
+                enabled: true,
+                server_name: Some("trojan.example.com".into()),
+                disable_sni: false,
+                insecure: false,
+                certificate_path: None,
+                ca_path: None,
+                handshake_timeout: crate::DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+            },
+        })];
+        config.route.final_outbound = "proxy".into();
+
+        validate_config(&config).expect("config should validate without explicit direct outbound");
     }
 
     #[test]

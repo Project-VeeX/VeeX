@@ -1,15 +1,11 @@
-use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use tokio::{net::UdpSocket, time::timeout};
+use tokio::time::timeout;
 use tracing::warn;
 use veex_core::{
     read_dns_tcp_message, write_dns_tcp_message, BoxedAsyncStream, Destination, DnsRequest,
-    DnsResponse, ProxyError,
+    DnsResponse, Host, Network, PacketSessionHandle, ProxyError,
 };
 use veex_infra_linux::load_system_dns_servers;
 use veex_transport::{connect_tls_stream, ConnectTraceContext, TlsClientOptions};
@@ -36,9 +32,10 @@ pub(crate) fn build_upstream(
     query_timeout: Duration,
 ) -> veex_core::Result<Arc<dyn DnsUpstream>> {
     match &server.transport {
-        DnsServerTransport::Local => {
-            Ok(Arc::new(LocalUpstream::new(query_timeout)) as Arc<dyn DnsUpstream>)
-        }
+        DnsServerTransport::Local => Ok(Arc::new(LocalUpstream::new(
+            require_dns_dialer(server, dialer)?,
+            query_timeout,
+        )) as Arc<dyn DnsUpstream>),
         DnsServerTransport::Udp => Ok(Arc::new(UdpUpstream::new(
             server.destination.clone(),
             require_dns_dialer(server, dialer)?,
@@ -104,6 +101,34 @@ pub(crate) async fn exchange_dns_over_stream(
     Ok(DnsResponse::new(response))
 }
 
+pub(crate) async fn exchange_dns_over_packet(
+    session: PacketSessionHandle,
+    request: &DnsRequest,
+    query_timeout: Duration,
+) -> veex_core::Result<DnsResponse> {
+    if let Err(err) = session.send_packet(request.raw_message.clone()).await {
+        log_close_result(
+            request.session_id.unwrap_or_default(),
+            session.close().await,
+        );
+        return Err(err);
+    }
+
+    let response = match timeout(query_timeout, session.recv_packet()).await {
+        Ok(result) => result,
+        Err(_) => Err(ProxyError::timeout(format!(
+            "dns upstream response timeout after {} ms",
+            query_timeout.as_millis()
+        ))),
+    };
+    log_close_result(
+        request.session_id.unwrap_or_default(),
+        session.close().await,
+    );
+
+    response.map(DnsResponse::new)
+}
+
 pub(crate) async fn connect_tls_for_dns(
     stream: BoxedAsyncStream,
     destination: &Destination,
@@ -126,45 +151,6 @@ pub(crate) async fn connect_tls_for_dns(
     .await
 }
 
-pub(crate) async fn execute_local_udp_query(
-    destination: SocketAddr,
-    query: &[u8],
-    query_timeout: Duration,
-) -> veex_core::Result<Vec<u8>> {
-    let socket = UdpSocket::bind(udp_bind_addr(destination.ip()))
-        .await
-        .map_err(|err| ProxyError::resolve_ctx("failed to bind local dns udp socket", err))?;
-    socket
-        .connect(destination)
-        .await
-        .map_err(|err| ProxyError::resolve_ctx("failed to connect local dns udp socket", err))?;
-    socket
-        .send(query)
-        .await
-        .map_err(|err| ProxyError::resolve_ctx("failed to send local dns query", err))?;
-
-    let mut buffer = vec![0; 2048];
-    let size = match timeout(query_timeout, socket.recv(&mut buffer)).await {
-        Ok(result) => result
-            .map_err(|err| ProxyError::resolve_ctx("failed to receive local dns response", err))?,
-        Err(_) => {
-            return Err(ProxyError::timeout(format!(
-                "dns upstream response timeout after {} ms",
-                query_timeout.as_millis()
-            )));
-        }
-    };
-    buffer.truncate(size);
-    Ok(buffer)
-}
-
-pub(crate) fn udp_bind_addr(destination: IpAddr) -> SocketAddr {
-    match destination {
-        IpAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
-        IpAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
-    }
-}
-
 pub(crate) fn log_close_result(query_id: u64, result: veex_core::Result<()>) {
     if let Err(err) = result {
         warn!(
@@ -178,12 +164,16 @@ pub(crate) fn log_close_result(query_id: u64, result: veex_core::Result<()>) {
 }
 
 struct LocalUpstream {
+    dialer: DnsDialer,
     query_timeout: Duration,
 }
 
 impl LocalUpstream {
-    fn new(query_timeout: Duration) -> Self {
-        Self { query_timeout }
+    fn new(dialer: DnsDialer, query_timeout: Duration) -> Self {
+        Self {
+            dialer,
+            query_timeout,
+        }
     }
 }
 
@@ -201,9 +191,17 @@ impl DnsUpstream for LocalUpstream {
 
         let mut last_error = None;
         for nameserver in nameservers {
-            let destination = SocketAddr::new(nameserver, 53);
-            match execute_local_udp_query(destination, &req.raw_message, self.query_timeout).await {
-                Ok(response) => return Ok(DnsResponse::new(response)),
+            let destination = Destination::new(Host::Ip(nameserver), 53);
+            let response = async {
+                let session = self
+                    .dialer
+                    .open_packet(&req, &destination, Network::Udp)
+                    .await?;
+                exchange_dns_over_packet(session, &req, self.query_timeout).await
+            }
+            .await;
+            match response {
+                Ok(response) => return Ok(response),
                 Err(err) => last_error = Some(err),
             }
         }

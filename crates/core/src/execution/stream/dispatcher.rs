@@ -258,8 +258,8 @@ mod tests {
     use crate::{
         BoxFuture, BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DnsResponse,
         ErrorKind, ExecutionOutbound, Logger, Network, Outbound, OutboundMeta, OutboundRegistry,
-        RouteAction, RouteFinalAction, RouteReason, RouteRule, Router, SessionContext, SessionMeta,
-        SessionRoute, SessionState, StreamDispatch, StreamOutbound,
+        OutboundRegistryBuilder, RouteAction, RouteFinalAction, RouteReason, RouteRule, Router,
+        SessionContext, SessionMeta, SessionRoute, SessionState, StreamDispatch, StreamOutbound,
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
@@ -512,15 +512,29 @@ mod tests {
         }
     }
 
+    fn finalized_registry(outbound: Arc<dyn ExecutionOutbound>) -> Arc<OutboundRegistry> {
+        let mut builder = OutboundRegistryBuilder::default();
+        builder
+            .register(Arc::clone(&outbound))
+            .expect("outbound should register");
+        Arc::new(builder.finalize(outbound))
+    }
+
+    fn empty_registry() -> Arc<OutboundRegistry> {
+        finalized_registry(Arc::new(CaptureOutbound {
+            meta: OutboundMeta::new("direct", "capture"),
+            logger: Logger::new("direct", "capture"),
+            captured: Arc::new(Mutex::new(None)),
+        }) as Arc<dyn ExecutionOutbound>)
+    }
+
     #[tokio::test]
     async fn dispatcher_writes_route_and_passes_state_to_outbound() {
         let (outbound, captured) = CaptureOutbound::new("proxy");
-        let mut outbounds = OutboundRegistry::default();
-        outbounds
-            .register(Arc::new(outbound))
-            .expect("outbound should register");
-        let dispatcher =
-            StreamDispatcher::new(Router::with_default_outbound("proxy"), Arc::new(outbounds));
+        let dispatcher = StreamDispatcher::new(
+            Router::with_default_outbound("proxy"),
+            finalized_registry(Arc::new(outbound)),
+        );
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 7,
@@ -551,18 +565,16 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_preserves_partial_relay_stats_on_failure() {
         let (_guard, events) = install_test_subscriber();
-        let mut outbounds = OutboundRegistry::default();
-        outbounds
-            .register(Arc::new(ScriptedOutbound::new(
+        let dispatcher = StreamDispatcher::new(
+            Router::with_default_outbound("proxy"),
+            finalized_registry(Arc::new(ScriptedOutbound::new(
                 "proxy",
                 Box::new(ScriptedStream::new([
                     ReadStep::Data(b"pong"),
                     ReadStep::Eof,
                 ])),
-            )))
-            .expect("outbound should register");
-        let dispatcher =
-            StreamDispatcher::new(Router::with_default_outbound("proxy"), Arc::new(outbounds));
+            ))),
+        );
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 9,
@@ -631,7 +643,7 @@ mod tests {
                 action: RouteAction::Final(RouteFinalAction::HijackDns),
                 ..RouteRule::new("unused")
             }),
-            Arc::new(OutboundRegistry::default()),
+            empty_registry(),
             Some(Arc::new(TestDnsExecutor {
                 requests: Arc::clone(&requests),
                 responses,

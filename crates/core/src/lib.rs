@@ -19,9 +19,10 @@ pub use dns::{
 pub use error::{ErrorKind, ProxyError, Result};
 pub use execution::{
     relay_bidirectional, AsyncStream, BoxedAsyncStream, ExecutionOutbound, OutboundRegistry,
-    PacketAssociationKey, PacketDispatch, PacketDispatcher, PacketFrame, PacketMetadata,
-    PacketSession, PacketSessionHandle, PacketWriter, RelayErrorWithStats, RelayStats,
-    SessionContext, SessionMeta, SessionRoute, SessionState, StreamDispatch, StreamDispatcher,
+    OutboundRegistryBuilder, PacketAssociationKey, PacketDispatch, PacketDispatcher, PacketFrame,
+    PacketMetadata, PacketSession, PacketSessionHandle, PacketWriter, RelayErrorWithStats,
+    RelayStats, SessionContext, SessionMeta, SessionRoute, SessionState, StreamDispatch,
+    StreamDispatcher,
 };
 pub use listen::{format_listen_addr, parse_listen_addr};
 pub use logging::{sanitize_field, Logger};

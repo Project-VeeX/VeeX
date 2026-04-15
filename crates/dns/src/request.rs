@@ -44,9 +44,9 @@ pub(crate) fn build_upstream_resolve_context(
     server: &DnsServer,
     parent_context: &ResolveContext,
 ) -> Option<ResolveContext> {
-    server.dial.detour.as_ref().map(|detour| {
+    server.outbound_tag().map(|detour| {
         parent_context.for_dns_upstream_dial(
-            detour.clone(),
+            detour.to_string(),
             server.tag.clone(),
             server.dial.domain_resolver.clone(),
         )
@@ -70,7 +70,7 @@ mod tests {
             transport: DnsServerTransport::Udp,
             destination: Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
             dial: Dial {
-                detour: Some("direct".into()),
+                detour: None,
                 connect_timeout: None,
                 routing_mark: None,
                 domain_resolver: None,
@@ -88,6 +88,13 @@ mod tests {
         assert_eq!(
             request.resolution_domain.as_deref(),
             Some("resolver.example.com")
+        );
+        assert_eq!(
+            request
+                .resolve_context
+                .as_ref()
+                .and_then(|context| context.caller_outbound_tag.as_deref()),
+            Some("direct")
         );
         assert!(request.buffered_payload.is_empty());
     }

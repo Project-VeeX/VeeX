@@ -21,8 +21,15 @@ pub struct DnsServer {
 }
 
 impl DnsServer {
+    pub fn outbound_tag(&self) -> Option<&str> {
+        match self.transport {
+            DnsServerTransport::Unsupported(_) => None,
+            _ => Some(self.dial.detour.as_deref().unwrap_or("direct")),
+        }
+    }
+
     pub fn detour_tag(&self) -> &str {
-        self.dial.detour.as_deref().unwrap_or("")
+        self.outbound_tag().unwrap_or("")
     }
 }
 

@@ -308,8 +308,9 @@ mod tests {
         router::{RouteAction, RouteFinalAction, RouteRule},
         types::Host,
         BoxFuture, BoxedAsyncStream, Destination, ExecutionOutbound, Network, Outbound,
-        OutboundMeta, OutboundRegistry, PacketDispatch, PacketFrame, PacketMetadata, PacketSession,
-        PacketSessionHandle, PacketWriter, ProxyError, SessionContext,
+        OutboundMeta, OutboundRegistry, OutboundRegistryBuilder, PacketDispatch, PacketFrame,
+        PacketMetadata, PacketSession, PacketSessionHandle, PacketWriter, ProxyError,
+        SessionContext,
     };
 
     use super::PacketDispatcher;
@@ -421,6 +422,29 @@ mod tests {
         }
     }
 
+    fn empty_test_session() -> PacketSessionHandle {
+        let (_upstream_tx, upstream_rx) = mpsc::unbounded_channel();
+        Arc::new(TestPacketSession {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            recv: AsyncMutex::new(upstream_rx),
+        })
+    }
+
+    fn finalized_registry(outbound: Arc<dyn ExecutionOutbound>) -> Arc<OutboundRegistry> {
+        let mut builder = OutboundRegistryBuilder::default();
+        builder
+            .register(Arc::clone(&outbound))
+            .expect("registry should accept outbound");
+        Arc::new(builder.finalize(outbound))
+    }
+
+    fn empty_registry() -> Arc<OutboundRegistry> {
+        finalized_registry(
+            Arc::new(TestDispatchOutbound::new("direct", empty_test_session()))
+                as Arc<dyn ExecutionOutbound>,
+        )
+    }
+
     #[tokio::test]
     async fn packet_dispatcher_reuses_association_and_reverses_packets() {
         let (_guard, trace_buffer) = install_test_subscriber();
@@ -431,13 +455,9 @@ mod tests {
             recv: AsyncMutex::new(upstream_rx),
         });
         let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
-        let mut registry = OutboundRegistry::default();
-        registry
-            .register(outbound.clone() as Arc<dyn ExecutionOutbound>)
-            .expect("registry should accept outbound");
         let dispatcher = PacketDispatcher::with_idle_timeout(
             crate::Router::with_default_outbound("direct"),
-            Arc::new(registry),
+            finalized_registry(outbound.clone() as Arc<dyn ExecutionOutbound>),
             Duration::from_secs(1),
         );
         let writer_sent = Arc::new(Mutex::new(Vec::new()));
@@ -529,13 +549,9 @@ mod tests {
             recv: AsyncMutex::new(upstream_rx),
         });
         let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
-        let mut registry = OutboundRegistry::default();
-        registry
-            .register(outbound as Arc<dyn ExecutionOutbound>)
-            .expect("registry should accept outbound");
         let dispatcher = PacketDispatcher::with_idle_timeout(
             crate::Router::with_default_outbound("direct"),
-            Arc::new(registry),
+            finalized_registry(outbound as Arc<dyn ExecutionOutbound>),
             Duration::from_millis(50),
         );
         let writer: Arc<dyn PacketWriter> = Arc::new(RecordingWriter {
@@ -580,7 +596,7 @@ mod tests {
                 action: RouteAction::Final(RouteFinalAction::HijackDns),
                 ..RouteRule::new("unused")
             }),
-            Arc::new(OutboundRegistry::default()),
+            empty_registry(),
             Some(Arc::new(TestDnsExecutor {
                 responses: Arc::new(Mutex::new(vec![b"dns-response".to_vec()])),
                 query_count: AtomicUsize::new(0),

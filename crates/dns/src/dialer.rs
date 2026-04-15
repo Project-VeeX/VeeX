@@ -1,8 +1,9 @@
 use std::{fmt, sync::Arc, time::Instant};
 
+use tracing::debug;
 use veex_core::{
-    BoxedAsyncStream, Destination, Dial, DnsRequest, ExecutionOutbound, Network, OutboundRegistry,
-    PacketSessionHandle, ProxyError, SessionContext, SessionMeta,
+    sanitize_field, BoxedAsyncStream, Destination, Dial, DnsRequest, ExecutionOutbound, Network,
+    OutboundRegistry, PacketSessionHandle, SessionContext, SessionMeta,
 };
 
 #[derive(Clone)]
@@ -27,10 +28,17 @@ impl DnsDialer {
         dial: Dial,
         outbounds: &Arc<OutboundRegistry>,
     ) -> veex_core::Result<Self> {
-        let detour = dial.detour.as_deref().ok_or_else(|| {
-            ProxyError::config(format!("missing dns detour for server: {server_tag}"))
-        })?;
-        let outbound = outbounds.require(detour)?;
+        let outbound = match dial.detour.as_deref() {
+            Some(tag) => outbounds.require(tag)?,
+            None => {
+                debug!(
+                    event = "dialer_default_outbound_fallback",
+                    component = %sanitize_field(&server_tag),
+                    "detour not set, fallback to default direct outbound"
+                );
+                outbounds.default_outbound()
+            }
+        };
 
         Ok(Self {
             server_tag,
@@ -40,7 +48,7 @@ impl DnsDialer {
     }
 
     pub(crate) fn detour_tag(&self) -> &str {
-        self.dial.detour.as_deref().unwrap_or("")
+        self.dial.detour.as_deref().unwrap_or("direct")
     }
 
     pub(crate) fn routing_mark(&self) -> Option<u32> {
@@ -169,5 +177,25 @@ mod tests {
             request.resolution_domain.as_deref(),
             Some("resolver.example.com")
         );
+    }
+
+    #[test]
+    fn dns_dialer_uses_default_outbound_when_detour_is_missing() {
+        let default_outbound = Arc::new(UnusedExecutionOutbound::new());
+        let registry = veex_core::OutboundRegistryBuilder::default().finalize(default_outbound);
+
+        let dialer = DnsDialer::new(
+            "bootstrap".into(),
+            Dial {
+                detour: None,
+                connect_timeout: None,
+                routing_mark: None,
+                domain_resolver: None,
+            },
+            &Arc::new(registry),
+        )
+        .expect("dns dialer should use default outbound");
+
+        assert_eq!(dialer.detour_tag(), "direct");
     }
 }

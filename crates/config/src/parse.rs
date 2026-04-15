@@ -318,18 +318,11 @@ fn input_dns_server_into_config(
             format!("$.dns.servers[{index}].server"),
         )?
     };
-    let detour = if matches!(kind, DnsServerTypeConfig::Local) {
-        optional_nested_string(
-            input_server.detour,
-            format!("$.dns.servers[{index}].detour"),
-        )?
-        .unwrap_or_default()
-    } else {
-        required_nested_string(
-            input_server.detour,
-            format!("$.dns.servers[{index}].detour"),
-        )?
-    };
+    let detour = optional_nested_string(
+        input_server.detour,
+        format!("$.dns.servers[{index}].detour"),
+    )?
+    .unwrap_or_default();
 
     Ok(DnsServerConfig {
         tag: input_server.tag,
@@ -1544,6 +1537,39 @@ mod tests {
         assert!(dns.servers[0].server.is_empty());
         assert!(dns.servers[0].detour.is_empty());
         assert_eq!(dns.servers[0].server_port, DEFAULT_DNS_SERVER_PORT);
+    }
+
+    #[test]
+    fn parses_dns_udp_server_type_without_detour() {
+        let input = r#"
+        {
+          "dns": {
+            "final": "remote-dns",
+            "servers": [
+              {
+                "tag": "remote-dns",
+                "type": "udp",
+                "server": "223.5.5.5"
+              }
+            ]
+          },
+          "inbounds": [
+            { "type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": 15353, "network": "udp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct"
+          }
+        }
+        "#;
+
+        let config = parse_config(input).expect("dns udp config without detour should parse");
+        let dns = config.dns.expect("dns config should exist");
+
+        assert!(matches!(dns.servers[0].kind, DnsServerTypeConfig::Udp));
+        assert!(dns.servers[0].detour.is_empty());
     }
 
     #[test]

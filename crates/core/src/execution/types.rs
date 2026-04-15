@@ -98,14 +98,14 @@ impl SessionContext {
     }
 }
 
-/// Registry of dispatch-capable outbounds indexed by tag.
+/// Builder for a finalized outbound registry.
 #[derive(Default)]
-pub struct OutboundRegistry {
+pub struct OutboundRegistryBuilder {
     outbounds: Vec<Arc<dyn ExecutionOutbound>>,
     index_by_tag: HashMap<String, usize>,
 }
 
-impl OutboundRegistry {
+impl OutboundRegistryBuilder {
     pub fn register(&mut self, outbound: Arc<dyn ExecutionOutbound>) -> crate::Result<()> {
         let tag = outbound.meta().tag.clone();
         if self.index_by_tag.contains_key(&tag) {
@@ -120,11 +120,32 @@ impl OutboundRegistry {
         Ok(())
     }
 
+    pub fn finalize(self, default_outbound: Arc<dyn ExecutionOutbound>) -> OutboundRegistry {
+        OutboundRegistry {
+            outbounds: self.outbounds,
+            index_by_tag: self.index_by_tag,
+            default_outbound,
+        }
+    }
+}
+
+/// Registry of dispatch-capable outbounds indexed by tag.
+pub struct OutboundRegistry {
+    outbounds: Vec<Arc<dyn ExecutionOutbound>>,
+    index_by_tag: HashMap<String, usize>,
+    default_outbound: Arc<dyn ExecutionOutbound>,
+}
+
+impl OutboundRegistry {
     pub fn get(&self, tag: &str) -> Option<Arc<dyn ExecutionOutbound>> {
         self.index_by_tag
             .get(tag)
             .and_then(|index| self.outbounds.get(*index))
             .map(Arc::clone)
+    }
+
+    pub fn default_outbound(&self) -> Arc<dyn ExecutionOutbound> {
+        Arc::clone(&self.default_outbound)
     }
 
     pub fn require(&self, tag: &str) -> crate::Result<Arc<dyn ExecutionOutbound>> {
@@ -147,19 +168,70 @@ impl OutboundRegistry {
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &Arc<dyn ExecutionOutbound>> + '_ {
         self.outbounds.iter()
     }
+
+    pub fn lifecycle_iter(&self) -> impl Iterator<Item = &Arc<dyn ExecutionOutbound>> + '_ {
+        let default_outbound = (!self
+            .outbounds
+            .iter()
+            .any(|outbound| Arc::ptr_eq(outbound, &self.default_outbound)))
+        .then_some(&self.default_outbound);
+
+        self.outbounds.iter().chain(default_outbound)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
         net::{IpAddr, Ipv4Addr, SocketAddr},
+        sync::Arc,
         time::Instant,
     };
 
-    use crate::types::{Destination, Host, Network};
+    use crate::{
+        execution::stream::io::BoxedAsyncStream,
+        logging::Logger,
+        portal::{meta::OutboundMeta, traits::BoxFuture},
+        types::{Destination, Host, Network},
+        ExecutionOutbound, Outbound, ProxyError,
+    };
 
-    use super::{SessionContext, SessionMeta};
+    use super::{OutboundRegistryBuilder, SessionContext, SessionMeta};
     use crate::router::RouteReason;
+
+    struct TestOutbound {
+        meta: OutboundMeta,
+        logger: Logger,
+    }
+
+    impl TestOutbound {
+        fn new(tag: &str) -> Self {
+            Self {
+                meta: OutboundMeta::new(tag, "direct"),
+                logger: Logger::new(tag, "direct"),
+            }
+        }
+    }
+
+    impl Outbound for TestOutbound {
+        fn meta(&self) -> &OutboundMeta {
+            &self.meta
+        }
+
+        fn logger(&self) -> &Logger {
+            &self.logger
+        }
+
+        fn close(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl ExecutionOutbound for TestOutbound {
+        fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+            Box::pin(async { Err(ProxyError::protocol("unused")) })
+        }
+    }
 
     #[test]
     fn session_context_starts_with_empty_route_and_buffered_payload_state() {
@@ -198,5 +270,56 @@ mod tests {
 
         assert_eq!(ctx.route.selected_outbound.as_deref(), Some("proxy"));
         assert_eq!(ctx.route.reason, Some(RouteReason::Final));
+    }
+
+    #[test]
+    fn registry_resolves_missing_detour_to_default_outbound() {
+        let default_outbound: Arc<dyn ExecutionOutbound> = Arc::new(TestOutbound::new("direct"));
+        let registry = OutboundRegistryBuilder::default().finalize(Arc::clone(&default_outbound));
+
+        let resolved = registry.default_outbound();
+
+        assert!(Arc::ptr_eq(&resolved, &default_outbound));
+    }
+
+    #[test]
+    fn registry_resolves_explicit_detour_without_using_default() {
+        let explicit_outbound: Arc<dyn ExecutionOutbound> = Arc::new(TestOutbound::new("proxy"));
+        let mut registry = OutboundRegistryBuilder::default();
+        registry
+            .register(Arc::clone(&explicit_outbound))
+            .expect("explicit outbound should register");
+        let registry = registry.finalize(Arc::new(TestOutbound::new("direct")));
+
+        let resolved = registry
+            .require("proxy")
+            .expect("explicit detour should resolve");
+
+        assert!(Arc::ptr_eq(&resolved, &explicit_outbound));
+    }
+
+    #[test]
+    fn registry_rejects_missing_explicit_detour() {
+        let registry =
+            OutboundRegistryBuilder::default().finalize(Arc::new(TestOutbound::new("direct")));
+
+        let err = match registry.require("missing") {
+            Ok(_) => panic!("missing explicit detour should remain an error"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("missing outbound tag: missing"));
+    }
+
+    #[test]
+    fn lifecycle_iter_does_not_duplicate_registered_default_outbound() {
+        let default_outbound: Arc<dyn ExecutionOutbound> = Arc::new(TestOutbound::new("direct"));
+        let mut registry = OutboundRegistryBuilder::default();
+        registry
+            .register(Arc::clone(&default_outbound))
+            .expect("default outbound should register");
+        let registry = registry.finalize(default_outbound);
+
+        assert_eq!(registry.lifecycle_iter().count(), 1);
     }
 }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use thiserror::Error;
-use veex_config::{ProxyConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
+use veex_config::ProxyConfig;
 use veex_core::{
     Inbound, OutboundRegistry, PacketDispatch, PacketDispatcher, ProxyError, StreamDispatch,
     StreamDispatcher,
@@ -26,8 +26,6 @@ pub enum BootstrapError {
     OutboundBuild(#[source] ProxyError),
     #[error("runtime references missing final outbound `{0}`")]
     MissingFinalOutbound(String),
-    #[error("runtime requires direct outbound `{0}`")]
-    MissingDirectOutbound(String),
 }
 
 pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, BootstrapError> {
@@ -73,12 +71,6 @@ fn ensure_required_outbounds_built(
     if !outbounds.contains(&config.route.final_outbound) {
         return Err(BootstrapError::MissingFinalOutbound(
             config.route.final_outbound.clone(),
-        ));
-    }
-
-    if !outbounds.contains(DEFAULT_DIRECT_OUTBOUND_TAG) {
-        return Err(BootstrapError::MissingDirectOutbound(
-            DEFAULT_DIRECT_OUTBOUND_TAG.to_string(),
         ));
     }
 

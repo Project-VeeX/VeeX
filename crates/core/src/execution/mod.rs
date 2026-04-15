@@ -21,4 +21,7 @@ pub use stream::dispatcher::StreamDispatcher;
 pub use stream::io::{AsyncStream, BoxedAsyncStream};
 pub use stream::relay::{relay_bidirectional, RelayErrorWithStats, RelayStats};
 pub use traits::{ExecutionOutbound, PacketDispatch, StreamDispatch};
-pub use types::{OutboundRegistry, SessionContext, SessionMeta, SessionRoute, SessionState};
+pub use types::{
+    OutboundRegistry, OutboundRegistryBuilder, SessionContext, SessionMeta, SessionRoute,
+    SessionState,
+};
