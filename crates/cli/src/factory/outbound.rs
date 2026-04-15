@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use veex_config::ProxyConfig;
-use veex_core::{OutboundRegistry, PlaneOutbound, ProxyError};
+use veex_core::{ExecutionOutbound, OutboundRegistry, ProxyError};
 use veex_outbound_direct::{
     build_dialer as build_direct_dialer, build_packet_dialer as build_direct_packet_dialer,
     DirectOutbound,
@@ -26,7 +26,7 @@ pub fn build_outbounds(
                     build_direct_dialer(direct.dial.clone(), Arc::clone(&services.host_resolver))?;
                 let packet_dialer =
                     build_direct_packet_dialer(direct.dial, Arc::clone(&services.host_resolver))?;
-                let instance: Arc<dyn PlaneOutbound> = Arc::new(DirectOutbound::new(
+                let instance: Arc<dyn ExecutionOutbound> = Arc::new(DirectOutbound::new(
                     direct.meta,
                     logger,
                     resolver_policy,
@@ -40,7 +40,7 @@ pub fn build_outbounds(
                 let logger =
                     veex_core::Logger::new(trojan.meta.tag.clone(), trojan.meta.r#type.clone());
                 let dialer = build_trojan_dialer(trojan.dial, Arc::clone(&services.host_resolver));
-                let instance: Arc<dyn PlaneOutbound> = Arc::new(TrojanOutbound::new(
+                let instance: Arc<dyn ExecutionOutbound> = Arc::new(TrojanOutbound::new(
                     trojan.meta,
                     logger,
                     resolver_policy,

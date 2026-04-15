@@ -10,7 +10,7 @@ use std::{
 use crate::{
     dns::DnsExecutorHandle,
     error::ProxyError,
-    plane::{
+    execution::{
         packet::{
             dns::hijack_packet_dns,
             forward::{
@@ -19,8 +19,7 @@ use crate::{
             },
             io::{PacketAssociationKey, PacketFrame, PacketMetadata, PacketWriter},
         },
-        support::lookup_outbound,
-        traits::{DnsHijack, PacketSink},
+        traits::{DnsHijack, PacketDispatch},
         types::{OutboundRegistry, SessionContext, SessionMeta},
     },
     portal::traits::BoxFuture,
@@ -123,7 +122,7 @@ impl PacketDispatcher {
         route_reason: RouteReason,
     ) -> crate::Result<Arc<PacketAssociation>> {
         ctx.set_route(outbound_tag.clone(), route_reason);
-        let outbound = lookup_outbound(&self.outbounds, &outbound_tag)?;
+        let outbound = self.outbounds.require(&outbound_tag)?;
         let session = outbound.open_packet(&ctx).await?;
         Ok(PacketAssociation::new(
             ctx.meta.id,
@@ -149,7 +148,7 @@ impl PacketDispatcher {
         });
     }
 
-    async fn submit_packet_impl(
+    async fn dispatch_packet_impl(
         &self,
         packet: PacketFrame,
         writer: Arc<dyn PacketWriter>,
@@ -228,13 +227,13 @@ impl PacketDispatcher {
     }
 }
 
-impl PacketSink for PacketDispatcher {
-    fn submit_packet(
+impl PacketDispatch for PacketDispatcher {
+    fn dispatch_packet(
         &self,
         packet: PacketFrame,
         writer: Arc<dyn PacketWriter>,
     ) -> BoxFuture<'_, ()> {
-        Box::pin(async move { self.submit_packet_impl(packet, writer).await })
+        Box::pin(async move { self.dispatch_packet_impl(packet, writer).await })
     }
 }
 
@@ -308,12 +307,12 @@ mod tests {
         logging::Logger,
         router::{RouteAction, RouteFinalAction, RouteRule},
         types::Host,
-        BoxFuture, BoxedAsyncStream, Destination, Network, Outbound, OutboundMeta,
-        OutboundRegistry, PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle,
-        PlaneOutbound, ProxyError, SessionContext,
+        BoxFuture, BoxedAsyncStream, Destination, ExecutionOutbound, Network, Outbound,
+        OutboundMeta, OutboundRegistry, PacketDispatch, PacketFrame, PacketMetadata, PacketSession,
+        PacketSessionHandle, PacketWriter, ProxyError, SessionContext,
     };
 
-    use super::{PacketDispatcher, PacketSink, PacketWriter};
+    use super::PacketDispatcher;
 
     type RecordedPacketWrites = Arc<Mutex<Vec<(SocketAddr, Vec<u8>)>>>;
 
@@ -391,7 +390,7 @@ mod tests {
         }
     }
 
-    impl PlaneOutbound for TestDispatchOutbound {
+    impl ExecutionOutbound for TestDispatchOutbound {
         fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("stream path is not used in this test")) })
         }
@@ -434,7 +433,7 @@ mod tests {
         let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
         let mut registry = OutboundRegistry::default();
         registry
-            .register(outbound.clone() as Arc<dyn PlaneOutbound>)
+            .register(outbound.clone() as Arc<dyn ExecutionOutbound>)
             .expect("registry should accept outbound");
         let dispatcher = PacketDispatcher::with_idle_timeout(
             crate::Router::with_default_outbound("direct"),
@@ -453,7 +452,7 @@ mod tests {
         );
 
         dispatcher
-            .submit_packet(
+            .dispatch_packet(
                 PacketFrame::new(metadata.clone(), b"ping".to_vec()),
                 Arc::clone(&writer),
             )
@@ -471,7 +470,7 @@ mod tests {
         })
         .await;
         dispatcher
-            .submit_packet(PacketFrame::new(metadata, b"pang".to_vec()), writer)
+            .dispatch_packet(PacketFrame::new(metadata, b"pang".to_vec()), writer)
             .await
             .expect("second packet should reuse association");
 
@@ -532,7 +531,7 @@ mod tests {
         let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
         let mut registry = OutboundRegistry::default();
         registry
-            .register(outbound as Arc<dyn PlaneOutbound>)
+            .register(outbound as Arc<dyn ExecutionOutbound>)
             .expect("registry should accept outbound");
         let dispatcher = PacketDispatcher::with_idle_timeout(
             crate::Router::with_default_outbound("direct"),
@@ -544,7 +543,7 @@ mod tests {
         });
 
         dispatcher
-            .submit_packet(
+            .dispatch_packet(
                 PacketFrame::new(
                     PacketMetadata::new(
                         "direct-in",
@@ -593,7 +592,7 @@ mod tests {
         });
 
         dispatcher
-            .submit_packet(
+            .dispatch_packet(
                 PacketFrame::new(
                     PacketMetadata::new(
                         "dns-in",

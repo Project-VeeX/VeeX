@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use veex_config::ProxyConfig;
-use veex_core::{Inbound, Listener, ListenerFactory, PacketSink, ProxyError, StreamSink};
+use veex_core::{Inbound, Listener, ListenerFactory, PacketDispatch, ProxyError, StreamDispatch};
 use veex_inbound_direct::{create_direct_listener, DirectInbound, DirectUdpInbound};
 use veex_inbound_socks::SocksInbound;
 use veex_inbound_transparent::{
@@ -12,8 +12,8 @@ use crate::factory::{lower_inbound, LoweredDirectNetwork, LoweredInbound};
 
 pub fn build_inbounds(
     config: &ProxyConfig,
-    stream_sink: Arc<dyn StreamSink>,
-    packet_sink: Arc<dyn PacketSink>,
+    stream_sink: Arc<dyn StreamDispatch>,
+    packet_sink: Arc<dyn PacketDispatch>,
 ) -> Result<Vec<Arc<dyn Inbound>>, ProxyError> {
     let mut inbounds: Vec<Arc<dyn Inbound>> = Vec::new();
 
@@ -166,11 +166,11 @@ mod tests {
                 rules: vec![],
             },
         };
-        let sink: Arc<dyn StreamSink> = Arc::new(veex_core::StreamDispatcher::new(
+        let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::StreamDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
             Arc::new(veex_core::OutboundRegistry::default()),
         ));
-        let packet_sink: Arc<dyn PacketSink> = Arc::new(veex_core::PacketDispatcher::new(
+        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::PacketDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
             Arc::new(veex_core::OutboundRegistry::default()),
         ));
@@ -209,11 +209,11 @@ mod tests {
                 rules: vec![],
             },
         };
-        let sink: Arc<dyn StreamSink> = Arc::new(veex_core::StreamDispatcher::new(
+        let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::StreamDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
             Arc::new(veex_core::OutboundRegistry::default()),
         ));
-        let packet_sink: Arc<dyn PacketSink> = Arc::new(veex_core::PacketDispatcher::new(
+        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::PacketDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
             Arc::new(veex_core::OutboundRegistry::default()),
         ));
@@ -252,11 +252,11 @@ mod tests {
                 rules: vec![],
             },
         };
-        let sink: Arc<dyn StreamSink> = Arc::new(veex_core::StreamDispatcher::new(
+        let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::StreamDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
             Arc::new(veex_core::OutboundRegistry::default()),
         ));
-        let packet_sink: Arc<dyn PacketSink> = Arc::new(veex_core::PacketDispatcher::new(
+        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::PacketDispatcher::new(
             veex_core::Router::with_default_outbound("direct"),
             Arc::new(veex_core::OutboundRegistry::default()),
         ));

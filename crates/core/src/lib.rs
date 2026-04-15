@@ -2,9 +2,9 @@
 
 pub mod dns;
 pub mod error;
+pub mod execution;
 pub mod listen;
 pub mod logging;
-pub mod plane;
 pub mod portal;
 pub mod router;
 pub mod session;
@@ -17,14 +17,14 @@ pub use dns::{
     DomainResolverHandle, ResolveContext, ResolvePurpose,
 };
 pub use error::{ErrorKind, ProxyError, Result};
+pub use execution::{
+    relay_bidirectional, AsyncStream, BoxedAsyncStream, ExecutionOutbound, OutboundRegistry,
+    PacketAssociationKey, PacketDispatch, PacketDispatcher, PacketFrame, PacketMetadata,
+    PacketSession, PacketSessionHandle, PacketWriter, RelayErrorWithStats, RelayStats,
+    SessionContext, SessionMeta, SessionRoute, SessionState, StreamDispatch, StreamDispatcher,
+};
 pub use listen::{format_listen_addr, parse_listen_addr};
 pub use logging::{sanitize_field, Logger};
-pub use plane::{
-    relay_bidirectional, AsyncStream, BoxedAsyncStream, OutboundRegistry, PacketAssociationKey,
-    PacketDispatcher, PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle, PacketSink,
-    PacketWriter, PlaneOutbound, RelayErrorWithStats, RelayStats, SessionContext, SessionMeta,
-    SessionRoute, SessionState, StreamDispatcher, StreamSink,
-};
 pub use portal::{
     dialer::{Dial, DialConnect, DialContext, Dialer, PacketConnect, PacketDialer},
     listener::{Listener, ListenerAcceptHandler, ListenerFactory},

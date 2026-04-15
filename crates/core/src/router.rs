@@ -4,8 +4,8 @@ use ipnet::IpNet;
 use tracing::{debug, info, warn};
 
 use crate::{
+    execution::{stream::io::BoxedAsyncStream, types::SessionContext},
     logging::sanitize_field,
-    plane::{stream::io::BoxedAsyncStream, types::SessionContext},
     sniff::{sniff_stream_internal, SniffExecution, SniffResult},
     types::{Destination, Host},
 };

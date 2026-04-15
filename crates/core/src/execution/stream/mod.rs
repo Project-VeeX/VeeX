@@ -4,3 +4,5 @@ pub mod dispatcher;
 pub mod dns;
 pub mod io;
 pub mod relay;
+
+pub use dispatcher::StreamDispatcher;

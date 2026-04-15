@@ -775,9 +775,9 @@ mod tests {
     use tokio::net::UdpSocket;
     use tokio::sync::{mpsc, Mutex};
     use veex_core::{
-        BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DomainResolverHandle, Host,
-        Logger, Network, Outbound, OutboundMeta, PacketSessionHandle, PlaneOutbound, ProxyError,
-        ResolveContext, SessionContext,
+        BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DomainResolverHandle,
+        ExecutionOutbound, Host, Logger, Network, Outbound, OutboundMeta, PacketSessionHandle,
+        ProxyError, ResolveContext, SessionContext,
     };
 
     use super::{
@@ -834,7 +834,7 @@ mod tests {
         }
     }
 
-    impl PlaneOutbound for TestOutbound {
+    impl ExecutionOutbound for TestOutbound {
         fn open_stream(&self, _ctx: &SessionContext) -> veex_core::BoxFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("stream path unused")) })
         }
@@ -870,7 +870,7 @@ mod tests {
         });
         let mut registry = veex_core::OutboundRegistry::default();
         registry
-            .register(outbound as Arc<dyn PlaneOutbound>)
+            .register(outbound as Arc<dyn ExecutionOutbound>)
             .expect("test outbound should register");
         let executor = DnsExecutor::new(
             DnsRuntimeConfig {
@@ -943,7 +943,7 @@ mod tests {
         });
         let mut registry = veex_core::OutboundRegistry::default();
         registry
-            .register(outbound as Arc<dyn PlaneOutbound>)
+            .register(outbound as Arc<dyn ExecutionOutbound>)
             .expect("test outbound should register");
         let executor = DnsExecutor::new(
             DnsRuntimeConfig {

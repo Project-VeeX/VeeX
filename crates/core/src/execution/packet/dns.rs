@@ -4,8 +4,8 @@ use tracing::{info, warn};
 
 use crate::{
     dns::{DnsExecutorHandle, DnsRequest},
+    execution::packet::io::{PacketFrame, PacketWriter},
     logging::sanitize_field,
-    plane::packet::io::{PacketFrame, PacketWriter},
     router::RouteReason,
 };
 

@@ -10,9 +10,9 @@ use std::{
 };
 
 use veex_core::{
-    BoxFuture, BoxedAsyncStream, DialContext, Dialer, Logger, Outbound, OutboundMeta, PacketDialer,
-    PacketSessionHandle, PlaneOutbound, ProxyError, ResolveContext, Result, SessionContext,
-    StreamOutbound,
+    BoxFuture, BoxedAsyncStream, DialContext, Dialer, ExecutionOutbound, Logger, Outbound,
+    OutboundMeta, PacketDialer, PacketSessionHandle, ProxyError, ResolveContext, Result,
+    SessionContext, StreamOutbound,
 };
 
 #[derive(Debug)]
@@ -131,7 +131,7 @@ impl StreamOutbound for DirectOutbound {
     }
 }
 
-impl PlaneOutbound for DirectOutbound {
+impl ExecutionOutbound for DirectOutbound {
     fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
         StreamOutbound::connect_stream(self, ctx)
     }

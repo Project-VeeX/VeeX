@@ -5,13 +5,12 @@ use veex_observability::{emit_session_finish, SessionSummary};
 
 use crate::{
     dns::DnsExecutorHandle,
-    logging::sanitize_field,
-    plane::{
+    execution::{
         stream::io::BoxedAsyncStream,
-        support::lookup_outbound,
-        traits::{DnsHijack, StreamSink},
+        traits::{DnsHijack, StreamDispatch},
         types::{OutboundRegistry, SessionContext},
     },
+    logging::sanitize_field,
     portal::traits::BoxFuture,
     router::{RouteFinalAction, RouteReason, Router},
 };
@@ -54,7 +53,7 @@ impl StreamDispatcher {
         }
     }
 
-    fn submit_impl(
+    fn dispatch_stream_impl(
         &self,
         inbound_stream: BoxedAsyncStream,
         ctx: SessionContext,
@@ -80,7 +79,7 @@ impl StreamDispatcher {
             // Stream dispatcher owns session-scoped lifecycle events. Lower-level transport,
             // outbound, and relay details stay in their respective modules.
             log_route_select(&trace, ctx.meta.network.as_str());
-            let outbound = lookup_outbound(&self.outbounds, &outbound_tag)?;
+            let outbound = self.outbounds.require(&outbound_tag)?;
 
             let (summary, result) = match outbound.open_stream(&ctx).await {
                 Ok(outbound_stream) => {
@@ -152,9 +151,13 @@ impl StreamDispatcher {
     }
 }
 
-impl StreamSink for StreamDispatcher {
-    fn submit(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()> {
-        self.submit_impl(inbound_stream, ctx)
+impl StreamDispatch for StreamDispatcher {
+    fn dispatch_stream(
+        &self,
+        inbound_stream: BoxedAsyncStream,
+        ctx: SessionContext,
+    ) -> BoxFuture<'_, ()> {
+        self.dispatch_stream_impl(inbound_stream, ctx)
     }
 }
 
@@ -251,12 +254,12 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-    use super::{StreamDispatcher, StreamSink};
+    use super::StreamDispatcher;
     use crate::{
         BoxFuture, BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DnsResponse,
-        ErrorKind, Logger, Network, Outbound, OutboundMeta, OutboundRegistry, PlaneOutbound,
+        ErrorKind, ExecutionOutbound, Logger, Network, Outbound, OutboundMeta, OutboundRegistry,
         RouteAction, RouteFinalAction, RouteReason, RouteRule, Router, SessionContext, SessionMeta,
-        SessionRoute, SessionState, StreamOutbound,
+        SessionRoute, SessionState, StreamDispatch, StreamOutbound,
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
@@ -453,7 +456,7 @@ mod tests {
         }
     }
 
-    impl PlaneOutbound for CaptureOutbound {
+    impl ExecutionOutbound for CaptureOutbound {
         fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             StreamOutbound::connect_stream(self, ctx)
         }
@@ -503,7 +506,7 @@ mod tests {
         }
     }
 
-    impl PlaneOutbound for ScriptedOutbound {
+    impl ExecutionOutbound for ScriptedOutbound {
         fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             StreamOutbound::connect_stream(self, ctx)
         }
@@ -531,9 +534,9 @@ mod tests {
         );
 
         dispatcher
-            .submit(Box::new(ClosedStream), ctx)
+            .dispatch_stream(Box::new(ClosedStream), ctx)
             .await
-            .expect("submit should succeed");
+            .expect("dispatch_stream should succeed");
 
         let captured = captured
             .lock()
@@ -573,7 +576,7 @@ mod tests {
         );
 
         let err = dispatcher
-            .submit(
+            .dispatch_stream(
                 Box::new(ScriptedStream::new([
                     ReadStep::Data(b"ping"),
                     ReadStep::Error(io::Error::other("boom")),
@@ -581,7 +584,7 @@ mod tests {
                 ctx,
             )
             .await
-            .expect_err("submit should surface relay failure");
+            .expect_err("dispatch_stream should surface relay failure");
 
         assert_eq!(err.kind(), ErrorKind::Relay);
 
@@ -652,7 +655,7 @@ mod tests {
         );
 
         dispatcher
-            .submit(Box::new(stream), ctx)
+            .dispatch_stream(Box::new(stream), ctx)
             .await
             .expect("tcp dns hijack should succeed");
 

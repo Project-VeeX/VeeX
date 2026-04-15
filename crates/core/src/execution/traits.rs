@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     dns::DnsExecutorHandle,
     error::ProxyError,
-    plane::{
+    execution::{
         packet::io::{PacketFrame, PacketSessionHandle, PacketWriter},
         stream::io::BoxedAsyncStream,
         types::SessionContext,
@@ -12,13 +12,11 @@ use crate::{
     router::RouteReason,
 };
 
-use super::support::require_dns_executor;
-
-/// Dispatch-facing outbound capability used by execution planes.
+/// Dispatch-facing outbound capability used by the execution layer.
 ///
 /// Stream execution is required. Packet execution remains optional and
 /// defaults to a protocol error for outbounds that do not implement it.
-pub trait PlaneOutbound: Outbound {
+pub trait ExecutionOutbound: Outbound {
     fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream>;
 
     fn open_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
@@ -34,12 +32,16 @@ pub trait PlaneOutbound: Outbound {
     }
 }
 
-pub trait StreamSink: Send + Sync {
-    fn submit(&self, inbound_stream: BoxedAsyncStream, ctx: SessionContext) -> BoxFuture<'_, ()>;
+pub trait StreamDispatch: Send + Sync {
+    fn dispatch_stream(
+        &self,
+        inbound_stream: BoxedAsyncStream,
+        ctx: SessionContext,
+    ) -> BoxFuture<'_, ()>;
 }
 
-pub trait PacketSink: Send + Sync {
-    fn submit_packet(
+pub trait PacketDispatch: Send + Sync {
+    fn dispatch_packet(
         &self,
         packet: PacketFrame,
         writer: Arc<dyn PacketWriter>,
@@ -59,9 +61,13 @@ pub(crate) trait DnsHijack: Send + Sync {
     ) -> BoxFuture<'_, ()>;
 
     fn hijack(&self, input: Self::Input, route_reason: RouteReason) -> BoxFuture<'_, ()> {
-        match require_dns_executor(self.dns_executor()) {
-            Ok(executor) => self.hijack_with_executor(executor, input, route_reason),
-            Err(err) => Box::pin(async move { Err(err) }),
+        match self.dns_executor().cloned() {
+            Some(executor) => self.hijack_with_executor(executor, input, route_reason),
+            None => Box::pin(async move {
+                Err(ProxyError::config(
+                    "route selected 'hijack-dns' but dns executor is not configured",
+                ))
+            }),
         }
     }
 }

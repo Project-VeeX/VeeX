@@ -1,14 +1,13 @@
-//! Execution plane abstractions.
+//! Execution layer abstractions.
 //!
 //! ```text
-//! plane/
+//! execution/
 //!   stream/  — TCP stream execution via StreamDispatcher
 //!   packet/  — UDP packet execution via PacketDispatcher
 //! ```
 
 pub mod packet;
 pub mod stream;
-pub(crate) mod support;
 pub mod traits;
 pub mod types;
 
@@ -21,5 +20,5 @@ pub use packet::io::{
 pub use stream::dispatcher::StreamDispatcher;
 pub use stream::io::{AsyncStream, BoxedAsyncStream};
 pub use stream::relay::{relay_bidirectional, RelayErrorWithStats, RelayStats};
-pub use traits::{PacketSink, PlaneOutbound, StreamSink};
+pub use traits::{ExecutionOutbound, PacketDispatch, StreamDispatch};
 pub use types::{OutboundRegistry, SessionContext, SessionMeta, SessionRoute, SessionState};

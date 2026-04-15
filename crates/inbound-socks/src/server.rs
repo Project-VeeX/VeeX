@@ -14,7 +14,7 @@ use tracing::{info, warn};
 use veex_core::{
     build_session_bootstrap, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound,
     InboundMeta, Listener, ListenerAcceptHandler, Logger, ProxyError, Result, SessionBootstrap,
-    StreamInbound, StreamSink,
+    StreamDispatch, StreamInbound,
 };
 
 use crate::{
@@ -32,7 +32,7 @@ struct SocksInboundState {
 pub struct SocksInbound {
     meta: InboundMeta,
     logger: Logger,
-    sink: Arc<dyn StreamSink>,
+    sink: Arc<dyn StreamDispatch>,
     listener: Listener,
     state: Arc<SocksInboundState>,
 }
@@ -41,7 +41,7 @@ impl SocksInbound {
     pub fn new(
         meta: InboundMeta,
         logger: Logger,
-        sink: Arc<dyn StreamSink>,
+        sink: Arc<dyn StreamDispatch>,
         listener: Listener,
     ) -> Result<Arc<Self>> {
         let inbound = Arc::new(Self {
@@ -204,7 +204,7 @@ impl SocksInbound {
         );
 
         let stream: BoxedAsyncStream = Box::new(stream);
-        let result = self.sink.submit(stream, session.ctx).await;
+        let result = self.sink.dispatch_stream(stream, session.ctx).await;
         if let Err(err) = &result {
             warn!(
                 event = "session_failed",
@@ -323,7 +323,8 @@ mod tests {
         sync::oneshot,
     };
     use veex_core::{
-        BoxFuture, Destination, Inbound, InboundMeta, Listener, ListenerFactory, Logger, StreamSink,
+        BoxFuture, Destination, Inbound, InboundMeta, Listener, ListenerFactory, Logger,
+        StreamDispatch,
     };
 
     use super::SocksInbound;
@@ -332,8 +333,8 @@ mod tests {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,
     }
 
-    impl StreamSink for RecordingSink {
-        fn submit(
+    impl StreamDispatch for RecordingSink {
+        fn dispatch_stream(
             &self,
             _inbound_stream: veex_core::BoxedAsyncStream,
             ctx: veex_core::SessionContext,
@@ -354,7 +355,7 @@ mod tests {
         let listen_addr = reserve_local_port().await;
         let expected = Destination::from_domain("example.com", 443);
         let (tx, rx) = oneshot::channel();
-        let sink: Arc<dyn StreamSink> = Arc::new(RecordingSink {
+        let sink: Arc<dyn StreamDispatch> = Arc::new(RecordingSink {
             tx: Mutex::new(Some(tx)),
         });
         let inbound = SocksInbound::new(

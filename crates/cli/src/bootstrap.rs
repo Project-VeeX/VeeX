@@ -3,8 +3,8 @@ use std::sync::Arc;
 use thiserror::Error;
 use veex_config::{ProxyConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
 use veex_core::{
-    Inbound, OutboundRegistry, PacketDispatcher, PacketSink, ProxyError, StreamDispatcher,
-    StreamSink,
+    Inbound, OutboundRegistry, PacketDispatch, PacketDispatcher, ProxyError, StreamDispatch,
+    StreamDispatcher,
 };
 
 use crate::factory::{
@@ -47,12 +47,12 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
             .map_err(BootstrapError::OutboundBuild)?;
     }
     let dns_executor = dns_services.map(|services| services.executor);
-    let stream_sink: Arc<dyn StreamSink> = Arc::new(StreamDispatcher::with_dns_executor(
+    let stream_sink: Arc<dyn StreamDispatch> = Arc::new(StreamDispatcher::with_dns_executor(
         router.clone(),
         Arc::clone(&outbounds),
         dns_executor.clone(),
     ));
-    let packet_sink: Arc<dyn PacketSink> = Arc::new(PacketDispatcher::with_dns_executor(
+    let packet_sink: Arc<dyn PacketDispatch> = Arc::new(PacketDispatcher::with_dns_executor(
         router,
         Arc::clone(&outbounds),
         dns_executor,

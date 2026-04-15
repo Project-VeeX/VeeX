@@ -2,11 +2,12 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
 
 use crate::{
     dns::ResolveContext,
+    error::ProxyError,
     router::RouteReason,
     types::{Destination, Network},
 };
 
-use super::traits::PlaneOutbound;
+use super::traits::ExecutionOutbound;
 
 /// Immutable metadata for a session.
 ///
@@ -100,15 +101,15 @@ impl SessionContext {
 /// Registry of dispatch-capable outbounds indexed by tag.
 #[derive(Default)]
 pub struct OutboundRegistry {
-    outbounds: Vec<Arc<dyn PlaneOutbound>>,
+    outbounds: Vec<Arc<dyn ExecutionOutbound>>,
     index_by_tag: HashMap<String, usize>,
 }
 
 impl OutboundRegistry {
-    pub fn register(&mut self, outbound: Arc<dyn PlaneOutbound>) -> crate::Result<()> {
+    pub fn register(&mut self, outbound: Arc<dyn ExecutionOutbound>) -> crate::Result<()> {
         let tag = outbound.meta().tag.clone();
         if self.index_by_tag.contains_key(&tag) {
-            return Err(crate::error::ProxyError::config(format!(
+            return Err(ProxyError::config(format!(
                 "duplicate outbound tag in registry: {tag}"
             )));
         }
@@ -119,11 +120,16 @@ impl OutboundRegistry {
         Ok(())
     }
 
-    pub fn get(&self, tag: &str) -> Option<Arc<dyn PlaneOutbound>> {
+    pub fn get(&self, tag: &str) -> Option<Arc<dyn ExecutionOutbound>> {
         self.index_by_tag
             .get(tag)
             .and_then(|index| self.outbounds.get(*index))
             .map(Arc::clone)
+    }
+
+    pub fn require(&self, tag: &str) -> crate::Result<Arc<dyn ExecutionOutbound>> {
+        self.get(tag)
+            .ok_or_else(|| ProxyError::config(format!("missing outbound tag: {tag}")))
     }
 
     pub fn contains(&self, tag: &str) -> bool {
@@ -138,7 +144,7 @@ impl OutboundRegistry {
         self.outbounds.is_empty()
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &Arc<dyn PlaneOutbound>> + '_ {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &Arc<dyn ExecutionOutbound>> + '_ {
         self.outbounds.iter()
     }
 }

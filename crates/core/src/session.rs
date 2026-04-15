@@ -1,8 +1,8 @@
 use std::{net::SocketAddr, time::Instant};
 
 use crate::{
+    execution::types::{SessionContext, SessionMeta},
     logging::sanitize_field,
-    plane::types::{SessionContext, SessionMeta},
     types::{Destination, Network},
 };
 

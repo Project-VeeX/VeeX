@@ -189,8 +189,8 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use veex_core::{
-        BoxFuture, BoxedAsyncStream, Destination, ErrorKind, Host, Logger, Network, Outbound,
-        OutboundMeta, OutboundRegistry, PlaneOutbound, ProxyError, SessionContext, SessionMeta,
+        BoxFuture, BoxedAsyncStream, Destination, ErrorKind, ExecutionOutbound, Host, Logger,
+        Network, Outbound, OutboundMeta, OutboundRegistry, ProxyError, SessionContext, SessionMeta,
     };
 
     use super::{close_outbounds, start_outbounds};
@@ -262,7 +262,7 @@ mod tests {
         }
     }
 
-    impl PlaneOutbound for TestDispatchOutbound {
+    impl ExecutionOutbound for TestDispatchOutbound {
         fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             let closed = self.closed.load(Ordering::Relaxed);
             Box::pin(async move {

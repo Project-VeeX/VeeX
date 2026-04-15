@@ -8,7 +8,7 @@ use tokio::{
 use tracing::{debug, info, warn};
 use veex_core::{
     sanitize_field, BoxFuture, Destination, Host, Inbound, InboundMeta, Listen, Logger, Network,
-    PacketFrame, PacketMetadata, PacketSink, PacketWriter, ProxyError, Result,
+    PacketDispatch, PacketFrame, PacketMetadata, PacketWriter, ProxyError, Result,
 };
 
 use crate::{create_direct_udp_socket, DirectError};
@@ -22,7 +22,7 @@ struct DirectUdpInboundState {
 pub struct DirectUdpInbound {
     meta: InboundMeta,
     logger: Logger,
-    sink: Arc<dyn PacketSink>,
+    sink: Arc<dyn PacketDispatch>,
     listen: Listen,
     override_host: Option<Host>,
     override_port: Option<u16>,
@@ -33,7 +33,7 @@ impl DirectUdpInbound {
     pub fn new(
         meta: InboundMeta,
         logger: Logger,
-        sink: Arc<dyn PacketSink>,
+        sink: Arc<dyn PacketDispatch>,
         listen: Listen,
         override_host: Option<Host>,
         override_port: Option<u16>,
@@ -233,7 +233,7 @@ impl PacketWriter for DirectUdpWriter {
 }
 
 async fn handle_packet(
-    sink: Arc<dyn PacketSink>,
+    sink: Arc<dyn PacketDispatch>,
     writer: Arc<dyn PacketWriter>,
     inbound_tag: String,
     logger: Logger,
@@ -257,7 +257,7 @@ async fn handle_packet(
         PacketMetadata::new(inbound_tag, peer, destination, Network::Udp),
         payload,
     );
-    let result = sink.submit_packet(packet, writer).await;
+    let result = sink.dispatch_packet(packet, writer).await;
     if result.is_ok() {
         info!(
             event = "packet_forwarded",
@@ -294,8 +294,8 @@ mod tests {
 
     use tokio::{net::UdpSocket, sync::oneshot};
     use veex_core::{
-        BoxFuture, Destination, Host, Inbound, InboundMeta, Listen, Logger, PacketFrame,
-        PacketSink, PacketWriter,
+        BoxFuture, Destination, Host, Inbound, InboundMeta, Listen, Logger, PacketDispatch,
+        PacketFrame, PacketWriter,
     };
 
     use super::DirectUdpInbound;
@@ -304,8 +304,8 @@ mod tests {
         tx: Mutex<Option<oneshot::Sender<PacketFrame>>>,
     }
 
-    impl PacketSink for RecordingPacketSink {
-        fn submit_packet(
+    impl PacketDispatch for RecordingPacketSink {
+        fn dispatch_packet(
             &self,
             packet: PacketFrame,
             _writer: Arc<dyn PacketWriter>,
@@ -324,7 +324,7 @@ mod tests {
     async fn direct_udp_inbound_submits_listener_destination_without_override() {
         let listen_addr = reserve_udp_port().await;
         let (tx, rx) = oneshot::channel();
-        let sink: Arc<dyn PacketSink> = Arc::new(RecordingPacketSink {
+        let sink: Arc<dyn PacketDispatch> = Arc::new(RecordingPacketSink {
             tx: Mutex::new(Some(tx)),
         });
         let inbound = DirectUdpInbound::new(
@@ -369,7 +369,7 @@ mod tests {
     async fn direct_udp_inbound_applies_override_address_and_port() {
         let listen_addr = reserve_udp_port().await;
         let (tx, rx) = oneshot::channel();
-        let sink: Arc<dyn PacketSink> = Arc::new(RecordingPacketSink {
+        let sink: Arc<dyn PacketDispatch> = Arc::new(RecordingPacketSink {
             tx: Mutex::new(Some(tx)),
         });
         let inbound = DirectUdpInbound::new(
