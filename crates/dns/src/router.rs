@@ -2,42 +2,13 @@ use std::sync::Arc;
 
 use veex_core::{ProxyError, ResolveContext};
 
-use crate::upstream::DnsUpstream;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DnsRouteReason {
-    Rule,
-    Final,
-    ExplicitResolver,
-    SafeDefault,
-}
-
-impl DnsRouteReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Rule => "rule",
-            Self::Final => "final",
-            Self::ExplicitResolver => "explicit_resolver",
-            Self::SafeDefault => "safe_default",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DnsRule {
-    pub domain: Vec<String>,
-    pub server_tag: String,
-}
+use crate::{
+    traits::DnsUpstream,
+    types::{DnsRouteReason, DnsRule, DnsSelection},
+};
 
 #[derive(Clone)]
-pub struct DnsSelection {
-    pub server_tag: String,
-    pub reason: DnsRouteReason,
-    pub upstream: Arc<dyn DnsUpstream>,
-}
-
-#[derive(Clone)]
-pub struct DnsServerRoute<'a> {
+pub(crate) struct DnsServerRoute<'a> {
     pub tag: &'a str,
     pub detour: &'a str,
     pub upstream: Arc<dyn DnsUpstream>,
@@ -57,7 +28,7 @@ impl DnsRouter {
         }
     }
 
-    pub fn select_client_upstream<'a>(
+    pub(crate) fn select_client_upstream<'a>(
         &self,
         domain: &str,
         servers: &[DnsServerRoute<'a>],
@@ -81,7 +52,7 @@ impl DnsRouter {
         )
     }
 
-    pub fn select_resolution_upstream<'a>(
+    pub(crate) fn select_resolution_upstream<'a>(
         &self,
         context: &ResolveContext,
         servers: &[DnsServerRoute<'a>],
@@ -178,9 +149,9 @@ mod tests {
     use async_trait::async_trait;
     use veex_core::ResolveContext;
 
-    use crate::upstream::DnsUpstream;
+    use crate::{traits::DnsUpstream, types::DnsRouteReason};
 
-    use super::{DnsRouteReason, DnsRouter, DnsRule, DnsServerRoute};
+    use super::{DnsRouter, DnsRule, DnsServerRoute};
 
     struct TestUpstream;
 

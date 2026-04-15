@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use veex_core::{Destination, DnsRequest, DnsResponse, ExecutionOutbound, Network};
 use veex_transport::TlsClientOptions;
 
-use super::{connect_detour_stream, connect_tls_for_dns, exchange_dns_over_stream, DnsUpstream};
+use crate::traits::DnsUpstream;
+
+use super::{connect_detour_stream, connect_tls_for_dns, exchange_dns_over_stream};
 
 pub struct TlsUpstream {
     destination: Destination,

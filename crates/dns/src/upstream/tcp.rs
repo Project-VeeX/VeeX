@@ -3,7 +3,9 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use veex_core::{Destination, DnsRequest, DnsResponse, ExecutionOutbound, Network};
 
-use super::{connect_detour_stream, exchange_dns_over_stream, DnsUpstream};
+use crate::traits::DnsUpstream;
+
+use super::{connect_detour_stream, exchange_dns_over_stream};
 
 pub struct TcpUpstream {
     destination: Destination,

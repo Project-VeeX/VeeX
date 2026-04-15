@@ -15,7 +15,10 @@ use veex_core::{
 use veex_infra_linux::load_system_dns_servers;
 use veex_transport::{connect_tls_stream, ConnectTraceContext, TlsClientOptions};
 
-use crate::{DnsServer, DnsServerTransport};
+use crate::{
+    traits::DnsUpstream,
+    types::{DnsServer, DnsServerTransport},
+};
 
 pub mod https;
 pub mod tcp;
@@ -26,11 +29,6 @@ pub use https::HttpsUpstream;
 pub use tcp::TcpUpstream;
 pub use tls::TlsUpstream;
 pub use udp::UdpUpstream;
-
-#[async_trait]
-pub trait DnsUpstream: Send + Sync {
-    async fn exchange(&self, req: DnsRequest) -> veex_core::Result<DnsResponse>;
-}
 
 pub(crate) fn build_upstream(
     server: &DnsServer,

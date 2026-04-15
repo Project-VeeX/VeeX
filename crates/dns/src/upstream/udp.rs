@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use tokio::time::timeout;
 use veex_core::{Destination, DnsRequest, DnsResponse, ExecutionOutbound, Network, ProxyError};
 
-use super::{log_close_result, open_detour_packet, DnsUpstream};
+use crate::traits::DnsUpstream;
+
+use super::{log_close_result, open_detour_packet};
 
 pub struct UdpUpstream {
     destination: Destination,

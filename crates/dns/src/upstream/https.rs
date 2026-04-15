@@ -7,8 +7,9 @@ use veex_core::{
     sanitize_field, Destination, DnsRequest, DnsResponse, ExecutionOutbound, Network, ProxyError,
 };
 
-use super::{connect_detour_stream, connect_tls_for_dns, DnsUpstream};
-use crate::{http, DnsHttpsOptions};
+use crate::{http, traits::DnsUpstream, types::DnsHttpsOptions};
+
+use super::{connect_detour_stream, connect_tls_for_dns};
 
 pub struct HttpsUpstream {
     server_tag: String,
