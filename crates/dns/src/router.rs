@@ -1,4 +1,8 @@
-use veex_core::ResolveContext;
+use std::sync::Arc;
+
+use veex_core::{ProxyError, ResolveContext};
+
+use crate::upstream::DnsUpstream;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DnsRouteReason {
@@ -25,16 +29,18 @@ pub struct DnsRule {
     pub server_tag: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct DnsSelection {
     pub server_tag: String,
     pub reason: DnsRouteReason,
+    pub upstream: Arc<dyn DnsUpstream>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DnsServerRouteMeta<'a> {
+#[derive(Clone)]
+pub struct DnsServerRoute<'a> {
     pub tag: &'a str,
     pub detour: &'a str,
+    pub upstream: Arc<dyn DnsUpstream>,
 }
 
 #[derive(Clone, Debug)]
@@ -51,48 +57,56 @@ impl DnsRouter {
         }
     }
 
-    pub fn select_client_query(&self, domain: &str) -> DnsSelection {
+    pub fn select_client_upstream<'a>(
+        &self,
+        domain: &str,
+        servers: &[DnsServerRoute<'a>],
+    ) -> veex_core::Result<DnsSelection> {
         let domain = normalize_domain(domain);
 
         for rule in &self.rules {
             if rule.domain.iter().any(|candidate| candidate == &domain) {
-                return DnsSelection {
-                    server_tag: rule.server_tag.clone(),
-                    reason: DnsRouteReason::Rule,
-                };
+                return self.selection_for_tag(
+                    rule.server_tag.clone(),
+                    DnsRouteReason::Rule,
+                    servers,
+                );
             }
         }
 
-        DnsSelection {
-            server_tag: self.final_server_tag.clone(),
-            reason: DnsRouteReason::Final,
-        }
+        self.selection_for_tag(
+            self.final_server_tag.clone(),
+            DnsRouteReason::Final,
+            servers,
+        )
     }
 
-    pub fn select_resolution_server<'a>(
+    pub fn select_resolution_upstream<'a>(
         &self,
         context: &ResolveContext,
-        servers: &[DnsServerRouteMeta<'a>],
-    ) -> Option<DnsSelection> {
+        servers: &[DnsServerRoute<'a>],
+    ) -> veex_core::Result<Option<DnsSelection>> {
         if let Some(server_tag) = &context.explicit_server_tag {
-            return Some(DnsSelection {
-                server_tag: server_tag.clone(),
-                reason: DnsRouteReason::ExplicitResolver,
-            });
+            return self
+                .selection_for_tag(
+                    server_tag.clone(),
+                    DnsRouteReason::ExplicitResolver,
+                    servers,
+                )
+                .map(Some);
         }
 
         if let Some(selection) = self
             .find_server(servers, self.final_server_tag.as_str())
             .filter(|server| is_safe_for_context(server, context))
-            .map(|server| DnsSelection {
-                server_tag: server.tag.to_string(),
-                reason: DnsRouteReason::Final,
+            .map(|server| {
+                self.selection_for_tag(server.tag.to_string(), DnsRouteReason::Final, servers)
             })
         {
-            return Some(selection);
+            return selection.map(Some);
         }
 
-        servers
+        let selection = servers
             .iter()
             .find(|server| server.detour == "direct" && is_safe_for_context(server, context))
             .or_else(|| {
@@ -100,22 +114,40 @@ impl DnsRouter {
                     .iter()
                     .find(|server| is_safe_for_context(server, context))
             })
-            .map(|server| DnsSelection {
-                server_tag: server.tag.to_string(),
-                reason: DnsRouteReason::SafeDefault,
-            })
+            .map(|server| {
+                self.selection_for_tag(server.tag.to_string(), DnsRouteReason::SafeDefault, servers)
+            });
+
+        selection.transpose()
     }
 
     fn find_server<'a>(
         &self,
-        servers: &'a [DnsServerRouteMeta<'a>],
+        servers: &'a [DnsServerRoute<'a>],
         tag: &str,
-    ) -> Option<&'a DnsServerRouteMeta<'a>> {
+    ) -> Option<&'a DnsServerRoute<'a>> {
         servers.iter().find(|server| server.tag == tag)
+    }
+
+    fn selection_for_tag<'a>(
+        &self,
+        server_tag: String,
+        reason: DnsRouteReason,
+        servers: &[DnsServerRoute<'a>],
+    ) -> veex_core::Result<DnsSelection> {
+        let upstream = self
+            .find_server(servers, &server_tag)
+            .map(|server| Arc::clone(&server.upstream))
+            .ok_or_else(|| ProxyError::config(format!("missing dns server tag: {server_tag}")))?;
+        Ok(DnsSelection {
+            server_tag,
+            reason,
+            upstream,
+        })
     }
 }
 
-fn is_safe_for_context(server: &DnsServerRouteMeta<'_>, context: &ResolveContext) -> bool {
+fn is_safe_for_context(server: &DnsServerRoute<'_>, context: &ResolveContext) -> bool {
     if context
         .caller_dns_server_tag
         .as_deref()
@@ -141,9 +173,26 @@ fn normalize_domain(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
     use veex_core::ResolveContext;
 
-    use super::{DnsRouteReason, DnsRouter, DnsRule, DnsServerRouteMeta};
+    use crate::upstream::DnsUpstream;
+
+    use super::{DnsRouteReason, DnsRouter, DnsRule, DnsServerRoute};
+
+    struct TestUpstream;
+
+    #[async_trait]
+    impl DnsUpstream for TestUpstream {
+        async fn exchange(
+            &self,
+            _req: veex_core::DnsRequest,
+        ) -> veex_core::Result<veex_core::DnsResponse> {
+            Err(veex_core::ProxyError::protocol("unused"))
+        }
+    }
 
     #[test]
     fn dns_router_prefers_matching_rule_before_final() {
@@ -155,8 +204,25 @@ mod tests {
             }],
         );
 
-        let matched = router.select_client_query("Trojan.Example.Com.");
-        let fallback = router.select_client_query("www.example.com");
+        let servers = [
+            DnsServerRoute {
+                tag: "direct",
+                detour: "direct",
+                upstream: Arc::new(TestUpstream),
+            },
+            DnsServerRoute {
+                tag: "remote",
+                detour: "proxy",
+                upstream: Arc::new(TestUpstream),
+            },
+        ];
+
+        let matched = router
+            .select_client_upstream("Trojan.Example.Com.", &servers)
+            .expect("matching rule should select an upstream");
+        let fallback = router
+            .select_client_upstream("www.example.com", &servers)
+            .expect("final server should select an upstream");
 
         assert_eq!(matched.server_tag, "direct");
         assert_eq!(matched.reason, DnsRouteReason::Rule);
@@ -167,16 +233,18 @@ mod tests {
     #[test]
     fn resolution_selection_bypasses_rules_for_explicit_resolver() {
         let router = DnsRouter::new("remote", Vec::new());
-        let servers = [DnsServerRouteMeta {
+        let servers = [DnsServerRoute {
             tag: "bootstrap",
             detour: "direct",
+            upstream: Arc::new(TestUpstream),
         }];
 
         let selection = router
-            .select_resolution_server(
+            .select_resolution_upstream(
                 &ResolveContext::outbound_dial("proxy", Some("bootstrap".into())),
                 &servers,
             )
+            .expect("router should resolve explicit upstream")
             .expect("explicit resolver should select a server");
 
         assert_eq!(selection.server_tag, "bootstrap");
@@ -187,18 +255,21 @@ mod tests {
     fn resolution_selection_falls_back_to_safe_direct_server() {
         let router = DnsRouter::new("remote", Vec::new());
         let servers = [
-            DnsServerRouteMeta {
+            DnsServerRoute {
                 tag: "remote",
                 detour: "proxy",
+                upstream: Arc::new(TestUpstream),
             },
-            DnsServerRouteMeta {
+            DnsServerRoute {
                 tag: "bootstrap",
                 detour: "direct",
+                upstream: Arc::new(TestUpstream),
             },
         ];
 
         let selection = router
-            .select_resolution_server(&ResolveContext::outbound_dial("proxy", None), &servers)
+            .select_resolution_upstream(&ResolveContext::outbound_dial("proxy", None), &servers)
+            .expect("router should resolve safe default upstream")
             .expect("safe default should select a server");
 
         assert_eq!(selection.server_tag, "bootstrap");

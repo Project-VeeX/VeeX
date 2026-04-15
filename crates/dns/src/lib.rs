@@ -1,31 +1,32 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use tokio::net::UdpSocket;
-use tokio::time::timeout;
 use tracing::{info, warn};
 use veex_core::{
-    read_dns_tcp_message, sanitize_field, write_dns_tcp_message, BoxFuture, BoxedAsyncStream,
-    Destination, DnsExecutorHandle, DnsRequest, DnsResponse, DomainResolverHandle, Host, Network,
-    OutboundRegistry, ProxyError, ResolveContext, SessionContext, SessionMeta,
+    sanitize_field, BoxFuture, Destination, DnsExecutorHandle, DnsRequest, DnsResponse,
+    DomainResolverHandle, Host, Network, OutboundRegistry, ProxyError, ResolveContext,
 };
-use veex_infra_linux::load_system_dns_servers;
-use veex_transport::{connect_tls_stream, ConnectTraceContext, TlsClientOptions};
+use veex_transport::TlsClientOptions;
 
 mod http;
 mod router;
+mod upstream;
 mod wire;
 
 pub use http::DEFAULT_DOH_PATH;
-pub use router::{DnsRouteReason, DnsRouter, DnsRule, DnsSelection, DnsServerRouteMeta};
+pub use router::{DnsRouteReason, DnsRouter, DnsRule, DnsSelection};
+pub use upstream::DnsUpstream;
 pub use wire::{build_a_query, parse_query_domain, parse_response_ips};
+
+use router::DnsServerRoute;
+use upstream::build_upstream;
 
 const DEFAULT_DNS_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_DNS_RECURSION_DEPTH: u8 = 4;
@@ -63,12 +64,26 @@ pub enum DnsServerTransport {
     Unsupported(String),
 }
 
+struct DnsServerRuntime {
+    server: DnsServer,
+    upstream: Arc<dyn DnsUpstream>,
+}
+
+impl DnsServerRuntime {
+    fn new(
+        server: DnsServer,
+        outbounds: &Arc<OutboundRegistry>,
+        query_timeout: Duration,
+    ) -> veex_core::Result<Self> {
+        let upstream = build_upstream(&server, outbounds, query_timeout)?;
+        Ok(Self { server, upstream })
+    }
+}
+
 pub struct DnsExecutor {
     router: DnsRouter,
-    servers: HashMap<String, DnsServer>,
-    outbounds: Arc<OutboundRegistry>,
+    servers: HashMap<String, DnsServerRuntime>,
     next_query_id: AtomicU64,
-    query_timeout: Duration,
 }
 
 impl DnsExecutor {
@@ -76,9 +91,12 @@ impl DnsExecutor {
         config: DnsRuntimeConfig,
         outbounds: Arc<OutboundRegistry>,
     ) -> veex_core::Result<Self> {
+        let query_timeout = DEFAULT_DNS_QUERY_TIMEOUT;
         let mut servers = HashMap::new();
         for server in config.servers {
-            if servers.insert(server.tag.clone(), server).is_some() {
+            let tag = server.tag.clone();
+            let runtime = DnsServerRuntime::new(server, &outbounds, query_timeout)?;
+            if servers.insert(tag, runtime).is_some() {
                 return Err(ProxyError::config("duplicate dns server tag in runtime"));
             }
         }
@@ -86,9 +104,7 @@ impl DnsExecutor {
         Ok(Self {
             router: DnsRouter::new(config.final_server_tag, config.rules),
             servers,
-            outbounds,
             next_query_id: AtomicU64::new(1),
-            query_timeout: DEFAULT_DNS_QUERY_TIMEOUT,
         })
     }
 
@@ -98,20 +114,17 @@ impl DnsExecutor {
 
     async fn execute_query_impl(&self, request: DnsRequest) -> veex_core::Result<DnsResponse> {
         let query_name = parse_query_domain(&request.raw_message)?;
-        let selection = self.router.select_client_query(&query_name);
+        let selection = self
+            .router
+            .select_client_upstream(&query_name, &self.server_routes())?;
         let server = self.lookup_server(&selection.server_tag)?;
         let query_id = self.next_query_id();
 
-        self.log_query_start(&request, &query_name, server, &selection, query_id);
+        self.log_query_start(&request, &query_name, &server.server, &selection, query_id);
 
-        let mut ctx = self.build_upstream_context_from_request(
-            &request,
-            server,
-            query_id,
-            &ResolveContext::client_query(),
-        );
-        let response = self
-            .execute_server_query(&mut ctx, server, &request.raw_message, query_id)
+        let response = selection
+            .upstream
+            .exchange(self.build_client_upstream_request(&request, &server.server, query_id))
             .await;
 
         match response {
@@ -120,7 +133,7 @@ impl DnsExecutor {
                 self.log_query_success(
                     &request,
                     &query_name,
-                    server,
+                    &server.server,
                     &selection,
                     query_id,
                     &response,
@@ -128,7 +141,14 @@ impl DnsExecutor {
                 Ok(response)
             }
             Err(err) => {
-                self.log_query_failure(&request, &query_name, server, &selection, query_id, &err);
+                self.log_query_failure(
+                    &request,
+                    &query_name,
+                    &server.server,
+                    &selection,
+                    query_id,
+                    &err,
+                );
                 Err(err)
             }
         }
@@ -161,7 +181,7 @@ impl DnsExecutor {
 
         let selection = self
             .router
-            .select_resolution_server(&context, &self.server_route_meta())
+            .select_resolution_upstream(&context, &self.server_routes())?
             .ok_or_else(|| {
                 ProxyError::resolve(format!(
                     "no safe dns server is available for dial-side resolution of {domain}"
@@ -170,19 +190,30 @@ impl DnsExecutor {
         let server = self.lookup_server(&selection.server_tag)?;
         let query_id = self.next_query_id();
 
-        self.log_domain_resolve_start(&domain, port, server, &selection, query_id, &context);
+        self.log_domain_resolve_start(
+            &domain,
+            port,
+            &server.server,
+            &selection,
+            query_id,
+            &context,
+        );
 
         let query = build_a_query(&domain, query_id as u16)?;
         let upstream_context = context.for_dns_upstream_dial(
-            server.detour.clone(),
-            server.tag.clone(),
-            server.domain_resolver.clone(),
+            server.server.detour.clone(),
+            server.server.tag.clone(),
+            server.server.domain_resolver.clone(),
         );
-        let mut ctx =
-            self.build_resolution_upstream_context(&domain, server, query_id, &upstream_context);
-
-        let response = self
-            .execute_server_query(&mut ctx, server, &query, query_id)
+        let response = selection
+            .upstream
+            .exchange(self.build_resolution_upstream_request(
+                &domain,
+                &server.server,
+                &query,
+                query_id,
+                upstream_context,
+            ))
             .await;
 
         match response {
@@ -192,344 +223,82 @@ impl DnsExecutor {
                     .map(|ip| SocketAddr::new(ip, port))
                     .collect::<Vec<_>>();
                 self.log_domain_resolve_success(
-                    &domain, port, server, &selection, query_id, &context, &addresses,
+                    &domain,
+                    port,
+                    &server.server,
+                    &selection,
+                    query_id,
+                    &context,
+                    &addresses,
                 );
                 Ok(addresses)
             }
             Err(err) => {
                 self.log_domain_resolve_failure(
-                    &domain, port, server, &selection, query_id, &context, &err,
+                    &domain,
+                    port,
+                    &server.server,
+                    &selection,
+                    query_id,
+                    &context,
+                    &err,
                 );
                 Err(err)
             }
         }
     }
 
-    fn server_route_meta(&self) -> Vec<DnsServerRouteMeta<'_>> {
+    fn server_routes(&self) -> Vec<DnsServerRoute<'_>> {
         self.servers
             .values()
-            .map(|server| DnsServerRouteMeta {
-                tag: server.tag.as_str(),
-                detour: server.detour.as_str(),
+            .map(|server| DnsServerRoute {
+                tag: server.server.tag.as_str(),
+                detour: server.server.detour.as_str(),
+                upstream: Arc::clone(&server.upstream),
             })
             .collect()
     }
 
-    fn lookup_server(&self, server_tag: &str) -> veex_core::Result<&DnsServer> {
+    fn lookup_server(&self, server_tag: &str) -> veex_core::Result<&DnsServerRuntime> {
         self.servers
             .get(server_tag)
             .ok_or_else(|| ProxyError::config(format!("missing dns server tag: {server_tag}")))
     }
 
-    fn build_upstream_context_from_request(
+    fn build_client_upstream_request(
         &self,
         request: &DnsRequest,
         server: &DnsServer,
         query_id: u64,
-        resolve_context: &ResolveContext,
-    ) -> SessionContext {
-        let mut ctx = SessionContext::new(
-            SessionMeta {
-                id: query_id,
-                network: upstream_network(&server.transport),
-                inbound_tag: request.inbound_tag.clone(),
-                peer: request.peer,
-                destination: server.destination.clone(),
-                start: Instant::now(),
-            },
-            Vec::new(),
-        );
-        ctx.set_resolve_context(Some(resolve_context.for_dns_upstream_dial(
-            server.detour.clone(),
-            server.tag.clone(),
-            server.domain_resolver.clone(),
-        )));
-        ctx
+    ) -> DnsRequest {
+        request
+            .clone()
+            .with_session_id(query_id)
+            .with_resolve_context(ResolveContext::client_query().for_dns_upstream_dial(
+                server.detour.clone(),
+                server.tag.clone(),
+                server.domain_resolver.clone(),
+            ))
     }
 
-    fn build_resolution_upstream_context(
+    fn build_resolution_upstream_request(
         &self,
         domain: &str,
         server: &DnsServer,
-        query_id: u64,
-        resolve_context: &ResolveContext,
-    ) -> SessionContext {
-        let mut ctx = SessionContext::new(
-            SessionMeta {
-                id: query_id,
-                network: upstream_network(&server.transport),
-                inbound_tag: "dns-resolver".into(),
-                peer: SocketAddr::from(([127, 0, 0, 1], 0)),
-                destination: server.destination.clone(),
-                start: Instant::now(),
-            },
-            Vec::new(),
-        );
-        ctx.set_resolve_context(Some(resolve_context.clone()));
-        ctx.state.buffered_payload = domain.as_bytes().to_vec();
-        ctx
-    }
-
-    async fn execute_server_query(
-        &self,
-        ctx: &mut SessionContext,
-        server: &DnsServer,
         query: &[u8],
         query_id: u64,
-    ) -> veex_core::Result<DnsResponse> {
-        match &server.transport {
-            DnsServerTransport::Local => self.execute_local_query(query).await,
-            DnsServerTransport::Udp => {
-                self.execute_udp_query(ctx, &server.detour, query, query_id)
-                    .await
-            }
-            DnsServerTransport::Tcp => self.execute_tcp_query(ctx, &server.detour, query).await,
-            DnsServerTransport::Tls(tls) => {
-                self.execute_tls_query(ctx, server, tls, query, query_id)
-                    .await
-            }
-            DnsServerTransport::Https(options) => {
-                self.execute_https_query(ctx, server, options, query, query_id)
-                    .await
-            }
-            DnsServerTransport::Unsupported(kind) => Err(ProxyError::protocol(format!(
-                "dns server '{}' uses unsupported upstream type '{}'",
-                server.tag, kind
-            ))),
-        }
-    }
-
-    async fn execute_local_query(&self, query: &[u8]) -> veex_core::Result<DnsResponse> {
-        let nameservers = load_system_dns_servers()
-            .map_err(|err| ProxyError::resolve_ctx("failed to load system dns nameservers", err))?;
-
-        if nameservers.is_empty() {
-            return Err(ProxyError::resolve(
-                "system dns resolver did not provide any nameserver",
-            ));
-        }
-
-        let mut last_error = None;
-        for nameserver in nameservers {
-            let destination = SocketAddr::new(nameserver, 53);
-            match self.execute_local_udp_query(destination, query).await {
-                Ok(response) => return Ok(DnsResponse::new(response)),
-                Err(err) => last_error = Some(err),
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| {
-            ProxyError::resolve("system dns resolver did not provide any reachable nameserver")
-        }))
-    }
-
-    async fn execute_udp_query(
-        &self,
-        ctx: &SessionContext,
-        detour: &str,
-        query: &[u8],
-        query_id: u64,
-    ) -> veex_core::Result<DnsResponse> {
-        let outbound = self.outbounds.get(detour).ok_or_else(|| {
-            ProxyError::config(format!("missing outbound tag for dns detour: {detour}"))
-        })?;
-        let session = outbound.open_packet(ctx).await?;
-
-        if let Err(err) = session.send_packet(query.to_vec()).await {
-            log_close_result(query_id, session.close().await);
-            return Err(err);
-        }
-
-        let response = match timeout(self.query_timeout, session.recv_packet()).await {
-            Ok(result) => result,
-            Err(_) => Err(ProxyError::timeout(format!(
-                "dns upstream response timeout after {} ms",
-                self.query_timeout.as_millis()
-            ))),
-        };
-        log_close_result(query_id, session.close().await);
-
-        response.map(DnsResponse::new)
-    }
-
-    async fn execute_local_udp_query(
-        &self,
-        destination: SocketAddr,
-        query: &[u8],
-    ) -> veex_core::Result<Vec<u8>> {
-        let socket = UdpSocket::bind(udp_bind_addr(destination.ip()))
-            .await
-            .map_err(|err| ProxyError::resolve_ctx("failed to bind local dns udp socket", err))?;
-        socket.connect(destination).await.map_err(|err| {
-            ProxyError::resolve_ctx("failed to connect local dns udp socket", err)
-        })?;
-        socket
-            .send(query)
-            .await
-            .map_err(|err| ProxyError::resolve_ctx("failed to send local dns query", err))?;
-
-        let mut buffer = vec![0; 2048];
-        let size = match timeout(self.query_timeout, socket.recv(&mut buffer)).await {
-            Ok(result) => result.map_err(|err| {
-                ProxyError::resolve_ctx("failed to receive local dns response", err)
-            })?,
-            Err(_) => {
-                return Err(ProxyError::timeout(format!(
-                    "dns upstream response timeout after {} ms",
-                    self.query_timeout.as_millis()
-                )));
-            }
-        };
-        buffer.truncate(size);
-        Ok(buffer)
-    }
-
-    async fn execute_tcp_query(
-        &self,
-        ctx: &SessionContext,
-        detour: &str,
-        query: &[u8],
-    ) -> veex_core::Result<DnsResponse> {
-        let mut stream = self.connect_detour_stream(ctx, detour).await?;
-        self.exchange_dns_over_stream(&mut *stream, query).await
-    }
-
-    async fn execute_tls_query(
-        &self,
-        ctx: &SessionContext,
-        server: &DnsServer,
-        tls: &TlsClientOptions,
-        query: &[u8],
-        query_id: u64,
-    ) -> veex_core::Result<DnsResponse> {
-        let stream = self.connect_detour_stream(ctx, &server.detour).await?;
-        let mut stream = self
-            .connect_tls_for_dns(stream, &server.destination, &server.detour, tls, query_id)
-            .await?;
-        self.exchange_dns_over_stream(&mut *stream, query).await
-    }
-
-    async fn execute_https_query(
-        &self,
-        ctx: &SessionContext,
-        server: &DnsServer,
-        options: &DnsHttpsOptions,
-        query: &[u8],
-        query_id: u64,
-    ) -> veex_core::Result<DnsResponse> {
-        let stream = self.connect_detour_stream(ctx, &server.detour).await?;
-        let mut stream = self
-            .connect_tls_for_dns(
-                stream,
-                &server.destination,
-                &server.detour,
-                &options.tls,
-                query_id,
-            )
-            .await?;
-
-        let host_header = options
-            .tls
-            .server_name
-            .clone()
-            .unwrap_or_else(|| server.destination.host.to_string());
-        let path_field = sanitize_field(&options.path).into_owned();
-        info!(
-            event = "dns_https_exchange_start",
-            query_id,
-            server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(&server.detour),
-            path = %path_field,
-            "dns https exchange started"
-        );
-        http::write_doh_http1_request(
-            &mut *stream,
-            &host_header,
-            &options.path,
-            &options.headers,
-            query,
+        resolve_context: ResolveContext,
+    ) -> DnsRequest {
+        DnsRequest::new(
+            query.to_vec(),
+            upstream_network(&server.transport),
+            "dns-resolver",
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            server.destination.clone(),
         )
-        .await?;
-        let response = match timeout(
-            self.query_timeout,
-            http::read_doh_http1_response(&mut *stream),
-        )
-        .await
-        {
-            Ok(result) => result?,
-            Err(_) => {
-                return Err(ProxyError::timeout(format!(
-                    "dns upstream response timeout after {} ms",
-                    self.query_timeout.as_millis()
-                )));
-            }
-        };
-        info!(
-            event = "dns_https_exchange_success",
-            query_id,
-            server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(&server.detour),
-            path = %path_field,
-            response_bytes = response.len() as u64,
-            "dns https exchange succeeded"
-        );
-        Ok(DnsResponse::new(response))
-    }
-
-    async fn connect_detour_stream(
-        &self,
-        ctx: &SessionContext,
-        detour: &str,
-    ) -> veex_core::Result<BoxedAsyncStream> {
-        let outbound = self.outbounds.get(detour).ok_or_else(|| {
-            ProxyError::config(format!("missing outbound tag for dns detour: {detour}"))
-        })?;
-        outbound.open_stream(ctx).await
-    }
-
-    async fn connect_tls_for_dns(
-        &self,
-        stream: BoxedAsyncStream,
-        destination: &Destination,
-        detour: &str,
-        tls: &TlsClientOptions,
-        query_id: u64,
-    ) -> veex_core::Result<BoxedAsyncStream> {
-        let trace = ConnectTraceContext {
-            session_id: query_id,
-            outbound: detour.to_string(),
-            routing_mark: None,
-        };
-        connect_tls_stream(
-            stream,
-            &destination.host,
-            destination.port,
-            tls,
-            Some(&trace),
-        )
-        .await
-    }
-
-    async fn exchange_dns_over_stream(
-        &self,
-        stream: &mut dyn veex_core::AsyncStream,
-        query: &[u8],
-    ) -> veex_core::Result<DnsResponse> {
-        write_dns_tcp_message(stream, query).await?;
-        let response = timeout(self.query_timeout, read_dns_tcp_message(stream)).await;
-        let response = match response {
-            Ok(result) => result?,
-            Err(_) => {
-                return Err(ProxyError::timeout(format!(
-                    "dns upstream response timeout after {} ms",
-                    self.query_timeout.as_millis()
-                )));
-            }
-        };
-        let response = response.ok_or_else(|| {
-            ProxyError::protocol("dns over tcp upstream closed before sending a response")
-        })?;
-        Ok(DnsResponse::new(response))
+        .with_session_id(query_id)
+        .with_resolve_context(resolve_context)
+        .with_buffered_payload(domain.as_bytes().to_vec())
     }
 
     fn log_query_start(
@@ -743,25 +512,6 @@ fn upstream_network(transport: &DnsServerTransport) -> Network {
     }
 }
 
-fn udp_bind_addr(destination: IpAddr) -> SocketAddr {
-    match destination {
-        IpAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
-        IpAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
-    }
-}
-
-fn log_close_result(query_id: u64, result: veex_core::Result<()>) {
-    if let Err(err) = result {
-        warn!(
-            event = "dns_query_close_failed",
-            query_id,
-            error_kind = ?err.kind(),
-            error = %err,
-            "dns upstream session close failed"
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -781,8 +531,10 @@ mod tests {
     };
 
     use super::{
-        build_a_query, udp_bind_addr, DnsExecutor, DnsRule, DnsRuntimeConfig, DnsServer,
-        DnsServerTransport, MAX_DNS_RECURSION_DEPTH,
+        build_a_query,
+        upstream::{execute_local_udp_query, udp_bind_addr},
+        DnsExecutor, DnsRule, DnsRuntimeConfig, DnsServer, DnsServerTransport,
+        DEFAULT_DNS_QUERY_TIMEOUT, MAX_DNS_RECURSION_DEPTH,
     };
 
     struct TestPacketSession {
@@ -853,6 +605,31 @@ mod tests {
         }
     }
 
+    fn empty_test_session() -> PacketSessionHandle {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        Arc::new(TestPacketSession {
+            recv: Mutex::new(rx),
+            sent_count: AtomicUsize::new(0),
+            sent_payloads: Arc::new(Mutex::new(Vec::new())),
+        })
+    }
+
+    fn register_test_outbound(
+        registry: &mut veex_core::OutboundRegistry,
+        tag: &str,
+        session: PacketSessionHandle,
+        connected_destinations: Arc<Mutex<Vec<Destination>>>,
+    ) {
+        registry
+            .register(Arc::new(TestOutbound {
+                meta: OutboundMeta::new(tag, "test"),
+                logger: Logger::new(tag, "test"),
+                session,
+                connected_destinations,
+            }) as Arc<dyn ExecutionOutbound>)
+            .expect("test outbound should register");
+    }
+
     #[tokio::test]
     async fn dns_executor_uses_dns_rule_and_returns_upstream_response() {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -862,16 +639,13 @@ mod tests {
             sent_count: AtomicUsize::new(0),
             sent_payloads: Arc::new(Mutex::new(Vec::new())),
         });
-        let outbound = Arc::new(TestOutbound {
-            meta: OutboundMeta::new("direct", "test"),
-            logger: Logger::new("direct", "test"),
-            session,
-            connected_destinations: Arc::new(Mutex::new(Vec::new())),
-        });
         let mut registry = veex_core::OutboundRegistry::default();
-        registry
-            .register(outbound as Arc<dyn ExecutionOutbound>)
-            .expect("test outbound should register");
+        register_test_outbound(
+            &mut registry,
+            "direct",
+            session,
+            Arc::new(Mutex::new(Vec::new())),
+        );
         let executor = DnsExecutor::new(
             DnsRuntimeConfig {
                 final_server_tag: "fallback".into(),
@@ -935,16 +709,19 @@ mod tests {
             sent_count: AtomicUsize::new(0),
             sent_payloads: Arc::new(Mutex::new(Vec::new())),
         });
-        let outbound = Arc::new(TestOutbound {
-            meta: OutboundMeta::new("direct", "test"),
-            logger: Logger::new("direct", "test"),
-            session,
-            connected_destinations: Arc::clone(&connected_destinations),
-        });
         let mut registry = veex_core::OutboundRegistry::default();
-        registry
-            .register(outbound as Arc<dyn ExecutionOutbound>)
-            .expect("test outbound should register");
+        register_test_outbound(
+            &mut registry,
+            "direct",
+            session,
+            Arc::clone(&connected_destinations),
+        );
+        register_test_outbound(
+            &mut registry,
+            "proxy",
+            empty_test_session(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
         let executor = DnsExecutor::new(
             DnsRuntimeConfig {
                 final_server_tag: "remote".into(),
@@ -1000,6 +777,13 @@ mod tests {
 
     #[tokio::test]
     async fn domain_resolver_rejects_recursive_default_path_without_safe_server() {
+        let mut registry = veex_core::OutboundRegistry::default();
+        register_test_outbound(
+            &mut registry,
+            "proxy",
+            empty_test_session(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
         let executor = DnsExecutor::new(
             DnsRuntimeConfig {
                 final_server_tag: "remote".into(),
@@ -1012,7 +796,7 @@ mod tests {
                 }],
                 rules: Vec::new(),
             },
-            Arc::new(veex_core::OutboundRegistry::default()),
+            Arc::new(registry),
         )
         .expect("dns executor should build");
 
@@ -1030,6 +814,13 @@ mod tests {
 
     #[tokio::test]
     async fn domain_resolver_rejects_excessive_recursion_depth() {
+        let mut registry = veex_core::OutboundRegistry::default();
+        register_test_outbound(
+            &mut registry,
+            "direct",
+            empty_test_session(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
         let executor = DnsExecutor::new(
             DnsRuntimeConfig {
                 final_server_tag: "direct".into(),
@@ -1042,7 +833,7 @@ mod tests {
                 }],
                 rules: Vec::new(),
             },
-            Arc::new(veex_core::OutboundRegistry::default()),
+            Arc::new(registry),
         )
         .expect("dns executor should build");
 
@@ -1081,18 +872,7 @@ mod tests {
                 .expect("udp server should respond");
         });
 
-        let executor = DnsExecutor::new(
-            DnsRuntimeConfig {
-                final_server_tag: String::new(),
-                servers: Vec::new(),
-                rules: Vec::new(),
-            },
-            Arc::new(veex_core::OutboundRegistry::default()),
-        )
-        .expect("dns executor should build");
-
-        let result = executor
-            .execute_local_udp_query(addr, &query)
+        let result = execute_local_udp_query(addr, &query, DEFAULT_DNS_QUERY_TIMEOUT)
             .await
             .expect("local udp query should succeed");
 

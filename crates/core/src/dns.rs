@@ -16,6 +16,9 @@ pub struct DnsRequest {
     pub inbound_tag: String,
     pub peer: SocketAddr,
     pub destination: Destination,
+    pub session_id: Option<u64>,
+    pub resolve_context: Option<ResolveContext>,
+    pub buffered_payload: Vec<u8>,
 }
 
 impl DnsRequest {
@@ -32,6 +35,9 @@ impl DnsRequest {
             inbound_tag: inbound_tag.into(),
             peer,
             destination,
+            session_id: None,
+            resolve_context: None,
+            buffered_payload: Vec::new(),
         }
     }
 
@@ -43,6 +49,21 @@ impl DnsRequest {
             packet.metadata.peer,
             packet.metadata.destination,
         )
+    }
+
+    pub fn with_session_id(mut self, session_id: u64) -> Self {
+        self.session_id = Some(session_id);
+        self
+    }
+
+    pub fn with_resolve_context(mut self, context: ResolveContext) -> Self {
+        self.resolve_context = Some(context);
+        self
+    }
+
+    pub fn with_buffered_payload(mut self, buffered_payload: Vec<u8>) -> Self {
+        self.buffered_payload = buffered_payload;
+        self
     }
 }
 
