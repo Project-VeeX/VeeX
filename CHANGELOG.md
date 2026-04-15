@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.4
+
+- Fixed DNS resolution metadata handling so resolver-domain control data is no longer propagated as outbound buffered payload.
+- Relaxed runtime/config assembly for control-plane dialing: configs no longer require an explicit `direct` outbound tag, remote DNS servers may omit `detour`, and the runtime installs an internal direct fallback when needed.
+- Reworked DNS execution boundaries around explicit upstream transports, request lowering, and a thinner dialer path, keeping UDP/TCP/TLS/HTTPS upstream handling behind a shared capability model.
+- Consolidated execution, outbound registry, and inbound listener capability models across stream and packet paths without changing the validated routing semantics.
+
 ## 0.6.3
 
 - Fixed TLS upstream verification so IP-address upstreams can complete standard certificate verification without requiring an explicit `server_name`.
