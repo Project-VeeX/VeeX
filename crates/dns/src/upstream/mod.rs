@@ -7,8 +7,12 @@ use std::{
 use async_trait::async_trait;
 use tokio::{net::UdpSocket, time::timeout};
 use tracing::warn;
-use veex_core::{read_dns_tcp_message, write_dns_tcp_message, DnsRequest, DnsResponse, ProxyError};
+use veex_core::{
+    read_dns_tcp_message, write_dns_tcp_message, BoxedAsyncStream, Destination, DnsRequest,
+    DnsResponse, ProxyError,
+};
 use veex_infra_linux::load_system_dns_servers;
+use veex_transport::{connect_tls_stream, ConnectTraceContext, TlsClientOptions};
 
 use crate::{
     dialer::DnsDialer,
@@ -98,6 +102,28 @@ pub(crate) async fn exchange_dns_over_stream(
         ProxyError::protocol("dns over tcp upstream closed before sending a response")
     })?;
     Ok(DnsResponse::new(response))
+}
+
+pub(crate) async fn connect_tls_for_dns(
+    stream: BoxedAsyncStream,
+    destination: &Destination,
+    dialer: &DnsDialer,
+    tls: &TlsClientOptions,
+    request: &DnsRequest,
+) -> veex_core::Result<BoxedAsyncStream> {
+    let trace = ConnectTraceContext {
+        session_id: request.session_id.unwrap_or_default(),
+        outbound: dialer.detour_tag().to_string(),
+        routing_mark: dialer.routing_mark(),
+    };
+    connect_tls_stream(
+        stream,
+        &destination.host,
+        destination.port,
+        tls,
+        Some(&trace),
+    )
+    .await
 }
 
 pub(crate) async fn execute_local_udp_query(

@@ -7,6 +7,8 @@ use veex_core::{sanitize_field, Destination, DnsRequest, DnsResponse, Network, P
 
 use crate::{dialer::DnsDialer, http, traits::DnsUpstream, types::DnsHttpsOptions};
 
+use super::connect_tls_for_dns;
+
 pub struct HttpsUpstream {
     server_tag: String,
     destination: Destination,
@@ -40,10 +42,14 @@ impl DnsUpstream for HttpsUpstream {
             .dialer
             .connect_stream(&req, &self.destination, Network::Tcp)
             .await?;
-        let mut stream = self
-            .dialer
-            .connect_tls(stream, &self.destination, &self.options.tls, &req)
-            .await?;
+        let mut stream = connect_tls_for_dns(
+            stream,
+            &self.destination,
+            &self.dialer,
+            &self.options.tls,
+            &req,
+        )
+        .await?;
 
         let host_header = self
             .options

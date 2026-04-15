@@ -15,9 +15,8 @@ use veex_core::{
 };
 
 use crate::{
-    build_a_query,
-    dialer::DnsDialer,
-    parse_query_domain, parse_response_ips,
+    build_a_query, parse_query_domain, parse_response_ips,
+    request::{bind_client_upstream_request, build_resolution_upstream_request},
     router::{DnsRouter, DnsServerRoute},
     traits::DnsUpstream,
     types::{DnsRuntimeConfig, DnsSelection, DnsServer, DnsServerTransport},
@@ -29,7 +28,6 @@ const MAX_DNS_RECURSION_DEPTH: u8 = 4;
 
 struct DnsServerRuntime {
     server: DnsServer,
-    dialer: Option<DnsDialer>,
     upstream: Arc<dyn DnsUpstream>,
 }
 
@@ -41,18 +39,14 @@ impl DnsServerRuntime {
     ) -> veex_core::Result<Self> {
         let dialer = match &server.transport {
             DnsServerTransport::Local | DnsServerTransport::Unsupported(_) => None,
-            _ => Some(DnsDialer::new(
+            _ => Some(crate::dialer::DnsDialer::new(
                 server.tag.clone(),
                 server.dial.clone(),
                 outbounds,
             )?),
         };
         let upstream = build_upstream(&server, dialer.clone(), query_timeout)?;
-        Ok(Self {
-            server,
-            dialer,
-            upstream,
-        })
+        Ok(Self { server, upstream })
     }
 }
 
@@ -100,7 +94,11 @@ impl DnsExecutor {
 
         let response = selection
             .upstream
-            .exchange(self.build_client_upstream_request(&request, server, query_id))
+            .exchange(bind_client_upstream_request(
+                &request,
+                &server.server,
+                query_id,
+            ))
             .await;
 
         match response {
@@ -178,9 +176,13 @@ impl DnsExecutor {
         let query = build_a_query(&domain, query_id as u16)?;
         let response = selection
             .upstream
-            .exchange(
-                self.build_resolution_upstream_request(&domain, server, &query, query_id, &context),
-            )
+            .exchange(build_resolution_upstream_request(
+                &domain,
+                &server.server,
+                &query,
+                query_id,
+                &context,
+            ))
             .await;
 
         match response {
@@ -230,47 +232,6 @@ impl DnsExecutor {
         self.servers
             .get(server_tag)
             .ok_or_else(|| ProxyError::config(format!("missing dns server tag: {server_tag}")))
-    }
-
-    fn build_client_upstream_request(
-        &self,
-        request: &DnsRequest,
-        server: &DnsServerRuntime,
-        query_id: u64,
-    ) -> DnsRequest {
-        match &server.dialer {
-            Some(dialer) => dialer.bind_client_request(request, query_id),
-            None => request.clone().with_session_id(query_id),
-        }
-    }
-
-    fn build_resolution_upstream_request(
-        &self,
-        domain: &str,
-        server: &DnsServerRuntime,
-        query: &[u8],
-        query_id: u64,
-        resolve_context: &ResolveContext,
-    ) -> DnsRequest {
-        match &server.dialer {
-            Some(dialer) => dialer.bind_resolution_request(
-                domain,
-                &server.server,
-                query,
-                query_id,
-                resolve_context,
-            ),
-            None => DnsRequest::new(
-                query.to_vec(),
-                crate::types::upstream_network(&server.server.transport),
-                "dns-resolver",
-                SocketAddr::from(([127, 0, 0, 1], 0)),
-                server.server.destination.clone(),
-            )
-            .with_session_id(query_id)
-            .with_resolve_context(resolve_context.clone())
-            .with_buffered_payload(domain.as_bytes().to_vec()),
-        }
     }
 
     fn log_query_start(

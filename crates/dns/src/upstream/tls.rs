@@ -6,7 +6,7 @@ use veex_transport::TlsClientOptions;
 
 use crate::{dialer::DnsDialer, traits::DnsUpstream};
 
-use super::exchange_dns_over_stream;
+use super::{connect_tls_for_dns, exchange_dns_over_stream};
 
 pub struct TlsUpstream {
     destination: Destination,
@@ -38,10 +38,8 @@ impl DnsUpstream for TlsUpstream {
             .dialer
             .connect_stream(&req, &self.destination, Network::Tcp)
             .await?;
-        let mut stream = self
-            .dialer
-            .connect_tls(stream, &self.destination, &self.tls, &req)
-            .await?;
+        let mut stream =
+            connect_tls_for_dns(stream, &self.destination, &self.dialer, &self.tls, &req).await?;
         exchange_dns_over_stream(&mut *stream, &req.raw_message, self.query_timeout).await
     }
 }

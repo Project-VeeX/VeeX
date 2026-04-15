@@ -1,6 +1,7 @@
 mod dialer;
 mod executor;
 mod http;
+mod request;
 mod router;
 mod traits;
 mod types;
