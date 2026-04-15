@@ -18,6 +18,11 @@ pub struct DnsRequest {
     pub destination: Destination,
     pub session_id: Option<u64>,
     pub resolve_context: Option<ResolveContext>,
+    /// DNS control-plane metadata.
+    ///
+    /// This field MUST NOT be propagated to outbound payload.
+    /// It is only used internally by DNS resolution logic.
+    pub resolution_domain: Option<String>,
     pub buffered_payload: Vec<u8>,
 }
 
@@ -37,6 +42,7 @@ impl DnsRequest {
             destination,
             session_id: None,
             resolve_context: None,
+            resolution_domain: None,
             buffered_payload: Vec::new(),
         }
     }
@@ -58,6 +64,11 @@ impl DnsRequest {
 
     pub fn with_resolve_context(mut self, context: ResolveContext) -> Self {
         self.resolve_context = Some(context);
+        self
+    }
+
+    pub fn with_resolution_domain(mut self, domain: impl Into<String>) -> Self {
+        self.resolution_domain = Some(domain.into());
         self
     }
 

@@ -32,7 +32,7 @@ pub(crate) fn build_resolution_upstream_request(
         server.destination.clone(),
     )
     .with_session_id(query_id)
-    .with_buffered_payload(domain.as_bytes().to_vec());
+    .with_resolution_domain(domain);
 
     match build_upstream_resolve_context(server, parent_context) {
         Some(context) => request.with_resolve_context(context),
@@ -51,4 +51,44 @@ pub(crate) fn build_upstream_resolve_context(
             server.dial.domain_resolver.clone(),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use veex_core::{Destination, Dial, Host, ResolveContext};
+
+    use crate::types::{DnsServer, DnsServerTransport};
+
+    use super::build_resolution_upstream_request;
+
+    #[test]
+    fn resolution_request_keeps_domain_as_control_metadata() {
+        let server = DnsServer {
+            tag: "bootstrap".into(),
+            transport: DnsServerTransport::Udp,
+            destination: Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
+            dial: Dial {
+                detour: Some("direct".into()),
+                connect_timeout: None,
+                routing_mark: None,
+                domain_resolver: None,
+            },
+        };
+
+        let request = build_resolution_upstream_request(
+            "resolver.example.com",
+            &server,
+            &[0x12, 0x34],
+            7,
+            &ResolveContext::outbound_dial("proxy", None),
+        );
+
+        assert_eq!(
+            request.resolution_domain.as_deref(),
+            Some("resolver.example.com")
+        );
+        assert!(request.buffered_payload.is_empty());
+    }
 }
