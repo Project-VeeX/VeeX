@@ -11,6 +11,7 @@ members = [
     "crates/observability",
     "crates/outbound-direct",
     "crates/outbound-trojan",
+    "crates/protocol",
     "crates/test-tracing",
     "crates/transport",
 ]

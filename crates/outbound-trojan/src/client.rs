@@ -6,17 +6,17 @@ use std::{
     },
 };
 
-use tokio::io::AsyncWriteExt;
 use veex_core::{
     BoxFuture, BoxedAsyncStream, Destination, Dialer, ExecutionOutbound, Logger, Outbound,
     OutboundMeta, ProxyError, ProxyOutbound, Result, SessionContext,
 };
+use veex_protocol::{
+    adapter::{StreamAdapter, StreamParams},
+    trojan::{validate_trojan_key, TrojanStreamAdapter},
+};
 use veex_transport::{connect_tls, ConnectTraceContext, TlsClientOptions};
 
-use crate::{
-    encode::build_trojan_request,
-    error::{request_write_error, validate_trojan_client},
-};
+use crate::error::validate_trojan_client;
 
 type UpstreamAddr = Destination;
 
@@ -42,6 +42,7 @@ impl fmt::Debug for TrojanOutbound {
             .field("logger", &self.logger)
             .field("dialer", &self.dialer)
             .field("upstream_addr", &self.upstream_addr)
+            .field("key", &"<redacted>")
             .field("tls", &self.tls)
             .finish()
     }
@@ -56,12 +57,13 @@ impl TrojanOutbound {
         key: impl Into<String>,
         tls: TlsClientOptions,
     ) -> Result<Self> {
+        let key = key.into();
         let outbound = Self {
             meta,
             logger,
             dialer,
             upstream_addr,
-            key: key.into(),
+            key,
             tls,
             state: Arc::new(TrojanOutboundState {
                 closed: AtomicBool::new(false),
@@ -76,7 +78,8 @@ impl TrojanOutbound {
             return Err(ProxyError::config("trojan outbound type must not be empty"));
         }
 
-        validate_trojan_client(&self.meta.tag, &self.key, &self.upstream_addr, &self.tls)
+        validate_trojan_key(&self.key)?;
+        validate_trojan_client(&self.meta.tag, &self.upstream_addr, &self.tls)
     }
 
     fn is_closed(&self) -> bool {
@@ -124,14 +127,14 @@ impl ProxyOutbound for TrojanOutbound {
             if closed {
                 return Err(ProxyError::Shutdown);
             }
-            validate_trojan_client(&tcp_trace.outbound_tag, &key, &upstream_addr, &tls)?;
+            validate_trojan_client(&tcp_trace.outbound_tag, &upstream_addr, &tls)?;
 
             // Trojan preserves transport-originated connect/tls errors and only
             // converts outbound framing failures at its own boundary.
             let tcp_stream = dialer
                 .connect(&upstream_addr.host, upstream_addr.port, tcp_trace)
                 .await?;
-            let mut stream = connect_tls(
+            let stream = connect_tls(
                 tcp_stream,
                 &upstream_addr.host,
                 upstream_addr.port,
@@ -139,13 +142,11 @@ impl ProxyOutbound for TrojanOutbound {
                 Some(&tls_trace),
             )
             .await?;
-            let request = build_trojan_request(&key, &destination, &buffered_payload)?;
-            stream
-                .write_all(&request)
-                .await
-                .map_err(request_write_error)?;
 
-            Ok(stream)
+            let adapter = TrojanStreamAdapter::new(key)?;
+            adapter
+                .establish(stream, StreamParams::new(destination, buffered_payload))
+                .await
         })
     }
 }
@@ -181,8 +182,8 @@ mod tests {
     use veex_transport::{HostResolveRequest, TlsClientOptions};
 
     use super::TrojanOutbound;
+    use crate::build_trojan_request;
     use crate::dialer::build_dialer_with_connector;
-    use crate::encode::build_trojan_request;
 
     fn event_count(events: &[CapturedEvent], event_name: &str) -> usize {
         events

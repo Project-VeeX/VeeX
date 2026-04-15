@@ -1,0 +1,10 @@
+[package]
+name = "veex-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sha2.workspace = true
+tokio.workspace = true
+veex-core = { path = "../core" }

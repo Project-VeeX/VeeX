@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-sha2.workspace = true
 veex-core = { path = "../core" }
+veex-protocol = { path = "../protocol" }
 veex-transport = { path = "../transport" }
 tokio.workspace = true
 

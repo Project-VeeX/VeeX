@@ -922,14 +922,23 @@ version = "0.6.4"
 dependencies = [
  "rcgen",
  "rustls",
- "sha2",
  "tokio",
  "tokio-rustls",
  "tracing",
  "tracing-subscriber",
  "veex-core",
+ "veex-protocol",
  "veex-test-tracing",
  "veex-transport",
+]
+
+[[package]]
+name = "veex-protocol"
+version = "0.6.4"
+dependencies = [
+ "sha2",
+ "tokio",
+ "veex-core",
 ]
 
 [[package]]
