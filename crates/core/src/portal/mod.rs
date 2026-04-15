@@ -6,7 +6,10 @@ pub mod meta;
 pub mod traits;
 
 pub use dialer::{Dial, DialConnect, DialContext, Dialer, PacketConnect, PacketDialer};
-pub use listener::{Listener, ListenerAcceptHandler, ListenerFactory};
+pub use listener::{
+    Listener, ListenerAcceptHandler, ListenerFactory, PacketListener, PacketListenerFactory,
+    PacketListenerReceive, PacketListenerReceiveHandler,
+};
 pub use meta::{InboundMeta, OutboundMeta};
 pub use traits::{
     BoxFuture, Inbound, Outbound, ProxyOutbound, StreamInbound, StreamOutbound, TransparentInbound,

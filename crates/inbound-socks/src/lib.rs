@@ -2,6 +2,7 @@
 
 mod codec;
 mod error;
+mod listener;
 mod server;
 
 pub use codec::{
@@ -9,4 +10,5 @@ pub use codec::{
     Greeting, ReplyCode, Request,
 };
 pub use error::SocksError;
+pub use listener::create_socks_listener;
 pub use server::SocksInbound;

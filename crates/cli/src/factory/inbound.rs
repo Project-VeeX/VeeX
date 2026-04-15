@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use veex_config::ProxyConfig;
-use veex_core::{Inbound, Listener, ListenerFactory, PacketDispatch, ProxyError, StreamDispatch};
-use veex_inbound_direct::{create_direct_listener, DirectInbound, DirectUdpInbound};
-use veex_inbound_socks::SocksInbound;
+use veex_core::{Inbound, PacketDispatch, ProxyError, StreamDispatch};
+use veex_inbound_direct::{
+    create_direct_packet_listener, create_direct_stream_listener, DirectInbound, DirectUdpInbound,
+};
+use veex_inbound_socks::{create_socks_listener, SocksInbound};
 use veex_inbound_transparent::{
-    create_redirect_listener, create_tproxy_listener, RedirectInbound, TProxyInbound,
+    create_redirect_stream_listener, create_tproxy_stream_listener, RedirectInbound, TProxyInbound,
 };
 
 use crate::factory::{lower_inbound, LoweredDirectNetwork, LoweredInbound};
@@ -23,10 +25,7 @@ pub fn build_inbounds(
                 LoweredDirectNetwork::Tcp => {
                     let logger =
                         veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
-                    let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
-                        Box::pin(async move { create_direct_listener(addr).map_err(Into::into) })
-                    });
-                    let listener = Listener::new(direct.listen, listener_factory);
+                    let listener = create_direct_stream_listener(direct.listen);
                     let instance = DirectInbound::new(
                         direct.meta,
                         logger,
@@ -40,11 +39,12 @@ pub fn build_inbounds(
                 LoweredDirectNetwork::Udp => {
                     let logger =
                         veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
+                    let listener = create_direct_packet_listener(direct.listen);
                     let instance = DirectUdpInbound::new(
                         direct.meta,
                         logger,
                         Arc::clone(&packet_sink),
-                        direct.listen,
+                        listener,
                         direct.override_host,
                         direct.override_port,
                     )?;
@@ -53,10 +53,7 @@ pub fn build_inbounds(
                 LoweredDirectNetwork::Both => {
                     let tcp_logger =
                         veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
-                    let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
-                        Box::pin(async move { create_direct_listener(addr).map_err(Into::into) })
-                    });
-                    let tcp_listener = Listener::new(direct.listen.clone(), listener_factory);
+                    let tcp_listener = create_direct_stream_listener(direct.listen.clone());
                     let tcp_instance = DirectInbound::new(
                         direct.meta.clone(),
                         tcp_logger,
@@ -69,11 +66,12 @@ pub fn build_inbounds(
 
                     let udp_logger =
                         veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
+                    let udp_listener = create_direct_packet_listener(direct.listen);
                     let udp_instance = DirectUdpInbound::new(
                         direct.meta,
                         udp_logger,
                         Arc::clone(&packet_sink),
-                        direct.listen,
+                        udp_listener,
                         direct.override_host,
                         direct.override_port,
                     )?;
@@ -83,12 +81,7 @@ pub fn build_inbounds(
             LoweredInbound::Socks(socks) => {
                 let logger =
                     veex_core::Logger::new(socks.meta.tag.clone(), socks.meta.r#type.clone());
-                let listener = Listener::new(
-                    socks.listen,
-                    Arc::new(|addr| {
-                        Box::pin(async move { Ok(tokio::net::TcpListener::bind(addr).await?) })
-                    }),
-                );
+                let listener = create_socks_listener(socks.listen);
                 let instance =
                     SocksInbound::new(socks.meta, logger, Arc::clone(&stream_sink), listener)?;
                 inbounds.push(instance as Arc<dyn Inbound>);
@@ -96,10 +89,7 @@ pub fn build_inbounds(
             LoweredInbound::Redirect(redirect) => {
                 let logger =
                     veex_core::Logger::new(redirect.meta.tag.clone(), redirect.meta.r#type.clone());
-                let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
-                    Box::pin(async move { create_redirect_listener(addr).map_err(Into::into) })
-                });
-                let listener = Listener::new(redirect.listen, listener_factory);
+                let listener = create_redirect_stream_listener(redirect.listen);
                 let instance = RedirectInbound::new(
                     redirect.meta,
                     logger,
@@ -111,10 +101,7 @@ pub fn build_inbounds(
             LoweredInbound::TProxy(tproxy) => {
                 let logger =
                     veex_core::Logger::new(tproxy.meta.tag.clone(), tproxy.meta.r#type.clone());
-                let listener_factory: Arc<ListenerFactory> = Arc::new(|addr| {
-                    Box::pin(async move { create_tproxy_listener(addr).map_err(Into::into) })
-                });
-                let listener = Listener::new(tproxy.listen, listener_factory);
+                let listener = create_tproxy_stream_listener(tproxy.listen);
                 let instance = TProxyInbound::new(
                     tproxy.meta,
                     logger,

@@ -1,32 +1,19 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use tokio::{
-    net::UdpSocket,
-    sync::{oneshot, Mutex},
-    task::{JoinHandle, JoinSet},
-};
 use tracing::{debug, info, warn};
 use veex_core::{
-    sanitize_field, BoxFuture, Destination, Host, Inbound, InboundMeta, Listen, Logger, Network,
-    PacketDispatch, PacketFrame, PacketMetadata, PacketWriter, ProxyError, Result,
+    sanitize_field, BoxFuture, Destination, Host, Inbound, InboundMeta, Logger, Network,
+    PacketDispatch, PacketFrame, PacketListener, PacketListenerReceive,
+    PacketListenerReceiveHandler, PacketMetadata, PacketWriter, ProxyError, Result,
 };
-
-use crate::{create_direct_udp_socket, DirectError};
-
-#[derive(Default)]
-struct DirectUdpInboundState {
-    close_tx: Mutex<Option<oneshot::Sender<()>>>,
-    task: Mutex<Option<JoinHandle<Result<()>>>>,
-}
 
 pub struct DirectUdpInbound {
     meta: InboundMeta,
     logger: Logger,
     sink: Arc<dyn PacketDispatch>,
-    listen: Listen,
+    listener: PacketListener,
     override_host: Option<Host>,
     override_port: Option<u16>,
-    state: Arc<DirectUdpInboundState>,
 }
 
 impl DirectUdpInbound {
@@ -34,7 +21,7 @@ impl DirectUdpInbound {
         meta: InboundMeta,
         logger: Logger,
         sink: Arc<dyn PacketDispatch>,
-        listen: Listen,
+        listener: PacketListener,
         override_host: Option<Host>,
         override_port: Option<u16>,
     ) -> Result<Arc<Self>> {
@@ -42,12 +29,12 @@ impl DirectUdpInbound {
             meta,
             logger,
             sink,
-            listen,
+            listener,
             override_host,
             override_port,
-            state: Arc::new(DirectUdpInboundState::default()),
         });
         inbound.validate()?;
+        inbound.bind_listener_handler()?;
         Ok(inbound)
     }
 
@@ -62,12 +49,12 @@ impl DirectUdpInbound {
                 "direct udp inbound type must not be empty",
             ));
         }
-        if self.listen.listen().trim().is_empty() {
+        if self.listener.listen().listen().trim().is_empty() {
             return Err(ProxyError::config(
                 "direct udp inbound listen must not be empty",
             ));
         }
-        if self.listen.listen_port() == 0 {
+        if self.listener.listen().listen_port() == 0 {
             return Err(ProxyError::config(
                 "direct udp inbound listen_port must be within 1..=65535",
             ));
@@ -83,15 +70,24 @@ impl DirectUdpInbound {
                 "direct udp inbound override_port must be within 1..=65535",
             ));
         }
-        self.listen.parse_addr().map(|_| ()).map_err(|err| {
-            ProxyError::config(format!("listen must be a valid socket address: {err}"))
-        })
+        self.listener.bind_addr().map(|_| ())
     }
 
-    fn resolve_destination(
-        &self,
-        local_addr: SocketAddr,
-    ) -> std::result::Result<Destination, DirectError> {
+    fn bind_listener_handler(self: &Arc<Self>) -> Result<()> {
+        let inbound = Arc::clone(self);
+        let handler: Arc<PacketListenerReceiveHandler> = Arc::new(move |receive| {
+            let inbound = Arc::clone(&inbound);
+            Box::pin(async move {
+                let peer = receive.peer;
+                if let Err(err) = inbound.handle_receive(receive).await {
+                    inbound.log_packet_failed(peer, &err);
+                }
+            })
+        });
+        self.listener.bind_handler(handler)
+    }
+
+    fn resolve_destination(&self, local_addr: SocketAddr) -> Destination {
         let mut destination = Destination::from_ip(local_addr.ip(), local_addr.port());
         if let Some(host) = &self.override_host {
             destination.host = host.clone();
@@ -99,7 +95,27 @@ impl DirectUdpInbound {
         if let Some(port) = self.override_port {
             destination.port = port;
         }
-        Ok(destination)
+        destination
+    }
+
+    async fn handle_receive(&self, receive: PacketListenerReceive) -> Result<()> {
+        let destination = self.resolve_destination(receive.local_addr);
+        let destination_field = sanitize_field(&destination.to_string()).into_owned();
+        handle_packet(
+            Arc::clone(&self.sink),
+            receive.writer,
+            self.meta.tag.clone(),
+            self.logger.clone(),
+            receive.peer,
+            receive.payload,
+            destination,
+            destination_field,
+        )
+        .await
+    }
+
+    fn log_packet_failed(&self, peer: SocketAddr, err: &ProxyError) {
+        log_packet_failed(&self.logger, peer, err);
     }
 }
 
@@ -115,120 +131,12 @@ impl Inbound for DirectUdpInbound {
     fn start(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             self.validate()?;
-
-            let mut task_guard = self.state.task.lock().await;
-            if task_guard.is_some() {
-                return Ok(());
-            }
-
-            let bind_addr = self.listen.parse_addr().map_err(|err| {
-                ProxyError::config(format!("listen must be a valid socket address: {err}"))
-            })?;
-            let socket = Arc::new(create_direct_udp_socket(bind_addr).map_err(ProxyError::from)?);
-            let local_addr = socket.local_addr()?;
-            let destination = self.resolve_destination(local_addr)?;
-            let writer: Arc<dyn PacketWriter> = Arc::new(DirectUdpWriter {
-                socket: Arc::clone(&socket),
-            });
-            let sink = Arc::clone(&self.sink);
-            let inbound_tag = self.meta.tag.clone();
-            let logger = self.logger.clone();
-            let destination_field = sanitize_field(&destination.to_string()).into_owned();
-            let (close_tx, mut close_rx) = oneshot::channel();
-
-            let task = tokio::spawn(async move {
-                let mut packet_tasks = JoinSet::new();
-                let mut buf = vec![0u8; u16::MAX as usize];
-                let mut shutting_down = false;
-
-                loop {
-                    if shutting_down && packet_tasks.is_empty() {
-                        break;
-                    }
-
-                    tokio::select! {
-                        _ = &mut close_rx, if !shutting_down => {
-                            shutting_down = true;
-                        }
-                        recv_result = socket.recv_from(&mut buf), if !shutting_down => {
-                            let (size, peer) = recv_result?;
-                            let payload = buf[..size].to_vec();
-                            let sink = Arc::clone(&sink);
-                            let writer = Arc::clone(&writer);
-                            let inbound_tag = inbound_tag.clone();
-                            let logger = logger.clone();
-                            let logger_for_error = logger.clone();
-                            let destination = destination.clone();
-                            let destination_field = destination_field.clone();
-                            packet_tasks.spawn(async move {
-                                if let Err(err) = handle_packet(
-                                    sink,
-                                    writer,
-                                    inbound_tag,
-                                    logger,
-                                    peer,
-                                    payload,
-                                    destination,
-                                    destination_field,
-                                ).await {
-                                    log_packet_failed(&logger_for_error, peer, &err);
-                                }
-                            });
-                        }
-                        maybe_task = packet_tasks.join_next(), if !packet_tasks.is_empty() => {
-                            if let Some(Err(err)) = maybe_task {
-                                return Err(ProxyError::protocol_ctx(
-                                    "direct udp packet task join failed",
-                                    err,
-                                ));
-                            }
-                        }
-                    }
-                }
-
-                Ok(())
-            });
-
-            *self.state.close_tx.lock().await = Some(close_tx);
-            *task_guard = Some(task);
-            Ok(())
+            self.listener.start().await
         })
     }
 
     fn close(&self) -> BoxFuture<'_, ()> {
-        Box::pin(async move {
-            let close_tx = self.state.close_tx.lock().await.take();
-            if let Some(close_tx) = close_tx {
-                let _ = close_tx.send(());
-            }
-
-            let Some(task) = self.state.task.lock().await.take() else {
-                return Ok(());
-            };
-
-            match task.await {
-                Ok(result) => result,
-                Err(err) => Err(ProxyError::protocol_ctx(
-                    "direct udp listener task join failed",
-                    err,
-                )),
-            }
-        })
-    }
-}
-
-struct DirectUdpWriter {
-    socket: Arc<UdpSocket>,
-}
-
-impl PacketWriter for DirectUdpWriter {
-    fn send_to(&self, peer: SocketAddr, payload: Vec<u8>) -> BoxFuture<'_, ()> {
-        // This is intentionally a thin `Arc<UdpSocket> + send_to` writer view.
-        // Multiple associations may share the same inbound socket for reverse writes.
-        Box::pin(async move {
-            self.socket.send_to(&payload, peer).await?;
-            Ok(())
-        })
+        Box::pin(async move { self.listener.close().await })
     }
 }
 
@@ -299,6 +207,7 @@ mod tests {
     };
 
     use super::DirectUdpInbound;
+    use crate::create_direct_packet_listener;
 
     struct RecordingPacketSink {
         tx: Mutex<Option<oneshot::Sender<PacketFrame>>>,
@@ -331,7 +240,7 @@ mod tests {
             InboundMeta::new("direct-in", "direct"),
             Logger::new("direct-in", "direct"),
             sink,
-            Listen::new("127.0.0.1", listen_addr.port()),
+            create_direct_packet_listener(Listen::new("127.0.0.1", listen_addr.port())),
             None,
             None,
         )
@@ -376,7 +285,7 @@ mod tests {
             InboundMeta::new("direct-in", "direct"),
             Logger::new("direct-in", "direct"),
             sink,
-            Listen::new("127.0.0.1", listen_addr.port()),
+            create_direct_packet_listener(Listen::new("127.0.0.1", listen_addr.port())),
             Some(Host::Domain("dns.example".into())),
             Some(53),
         )

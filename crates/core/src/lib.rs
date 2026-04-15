@@ -28,7 +28,10 @@ pub use listen::{format_listen_addr, parse_listen_addr};
 pub use logging::{sanitize_field, Logger};
 pub use portal::{
     dialer::{Dial, DialConnect, DialContext, Dialer, PacketConnect, PacketDialer},
-    listener::{Listener, ListenerAcceptHandler, ListenerFactory},
+    listener::{
+        Listener, ListenerAcceptHandler, ListenerFactory, PacketListener, PacketListenerFactory,
+        PacketListenerReceive, PacketListenerReceiveHandler,
+    },
     meta::{InboundMeta, OutboundMeta},
     traits::{
         BoxFuture, Inbound, Outbound, ProxyOutbound, StreamInbound, StreamOutbound,
