@@ -6,10 +6,7 @@ use std::{
     },
 };
 
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
     build_session_bootstrap, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound,
@@ -17,13 +14,7 @@ use veex_core::{
     StreamDispatch, StreamInbound,
 };
 
-use crate::{
-    codec::{
-        decode_greeting, decode_request, encode_method_selection, encode_reply, ReplyCode,
-        NO_ACCEPTABLE_METHODS, NO_AUTHENTICATION,
-    },
-    error::SocksError,
-};
+use crate::protocol::{establish_socks_stream, SocksProtocolError};
 
 struct SocksInboundState {
     next_session_id: AtomicU64,
@@ -81,7 +72,9 @@ impl SocksInbound {
         let handler: Arc<ListenerAcceptHandler> = Arc::new(move |stream, peer| {
             let inbound = Arc::clone(&inbound);
             Box::pin(async move {
-                let _ = inbound.accept_stream(stream, peer).await;
+                if let Err(err) = inbound.accept_stream(stream, peer).await {
+                    inbound.log_connection_failed(peer, &err);
+                }
             })
         });
         self.listener.bind_handler(handler)
@@ -101,109 +94,27 @@ impl SocksInbound {
     }
 
     async fn handle_stream(&self, stream: TcpStream, peer: SocketAddr) -> Result<()> {
-        self.perform_handshake(stream, peer).await
-    }
-
-    async fn perform_handshake(&self, mut stream: TcpStream, peer: SocketAddr) -> Result<()> {
-        let methods = read_greeting(&mut stream).await.map_err(|err| {
-            self.log_handshake_failed(peer, "greeting", &err);
-            ProxyError::from(err)
+        let established = establish_socks_stream(stream).await.map_err(|err| {
+            self.log_handshake_failed(peer, &err);
+            ProxyError::from(err.into_inner())
         })?;
-        let greeting = decode_greeting(&methods).map_err(|err| {
-            self.log_handshake_failed(peer, "greeting", &err);
-            ProxyError::from(err)
-        })?;
-
-        if !greeting.methods.contains(&NO_AUTHENTICATION) {
-            if let Err(err) = stream
-                .write_all(&encode_method_selection(NO_ACCEPTABLE_METHODS))
-                .await
-            {
-                let err = SocksError::from(err);
-                self.log_handshake_failed(peer, "method_selection", &err);
-                return Err(err.into());
-            }
-
-            let err = SocksError::UnsupportedAuthMethods;
-            self.log_handshake_failed(peer, "method_selection", &err);
-            return Err(err.into());
-        }
-
-        stream
-            .write_all(&encode_method_selection(NO_AUTHENTICATION))
-            .await
-            .map_err(|err| {
-                let err = SocksError::from(err);
-                self.log_handshake_failed(peer, "method_selection", &err);
-                ProxyError::from(err)
-            })?;
-
-        let request_bytes = read_request(&mut stream).await.map_err(|err| {
-            self.log_handshake_failed(peer, "request_decode", &err);
-            ProxyError::from(err)
-        })?;
-        let request = match decode_request(&request_bytes) {
-            Ok(request) => request,
-            Err(err @ SocksError::UnsupportedCommand(_)) => {
-                if let Err(write_err) = stream
-                    .write_all(&encode_reply(ReplyCode::CommandNotSupported, None))
-                    .await
-                {
-                    let err = SocksError::from(write_err);
-                    self.log_handshake_failed(peer, "request_validate", &err);
-                    return Err(err.into());
-                }
-                self.log_handshake_failed(peer, "request_validate", &err);
-                return Err(err.into());
-            }
-            Err(err @ SocksError::UnsupportedAddressType(_)) => {
-                if let Err(write_err) = stream
-                    .write_all(&encode_reply(ReplyCode::AddressTypeNotSupported, None))
-                    .await
-                {
-                    let err = SocksError::from(write_err);
-                    self.log_handshake_failed(peer, "request_validate", &err);
-                    return Err(err.into());
-                }
-                self.log_handshake_failed(peer, "request_validate", &err);
-                return Err(err.into());
-            }
-            Err(err) => {
-                if let Err(write_err) = stream
-                    .write_all(&encode_reply(ReplyCode::GeneralFailure, None))
-                    .await
-                {
-                    let err = SocksError::from(write_err);
-                    self.log_handshake_failed(peer, "request_decode", &err);
-                    return Err(err.into());
-                }
-                self.log_handshake_failed(peer, "request_decode", &err);
-                return Err(err.into());
-            }
+        let command = match established.command {
+            crate::codec::Command::Connect => "connect",
         };
 
-        let local_addr = stream.local_addr().ok();
-        stream
-            .write_all(&encode_reply(ReplyCode::Succeeded, local_addr))
-            .await
-            .map_err(|err| {
-                let err = SocksError::from(err);
-                self.log_handshake_failed(peer, "request_validate", &err);
-                ProxyError::from(err)
-            })?;
-
-        let session = self.bootstrap_session(peer, request.destination);
+        let session = self.bootstrap_session(peer, established.destination);
         info!(
             event = "session_start",
             session_id = session.id,
             inbound = %session.inbound_field,
             peer = %session.peer_field,
             destination = %session.destination_field,
+            command = %command,
             network = %"tcp",
             "socks session start"
         );
 
-        let stream: BoxedAsyncStream = Box::new(stream);
+        let stream: BoxedAsyncStream = Box::new(established.stream);
         let result = self.sink.dispatch_stream(stream, session.ctx).await;
         if let Err(err) = &result {
             warn!(
@@ -220,16 +131,28 @@ impl SocksInbound {
         result
     }
 
-    fn log_handshake_failed(&self, peer: SocketAddr, stage: &'static str, err: &SocksError) {
+    fn log_handshake_failed(&self, peer: SocketAddr, err: &SocksProtocolError) {
         let peer_field = peer.to_string();
         let peer_field = sanitize_field(&peer_field).into_owned();
         warn!(
             event = "handshake_failed",
             inbound = %self.logger.tag_field(),
             peer = %peer_field,
-            stage = %stage,
-            error = %err,
+            stage = %err.stage(),
+            error = %err.source_error(),
             "socks handshake failed"
+        );
+    }
+
+    fn log_connection_failed(&self, peer: SocketAddr, err: &ProxyError) {
+        let peer_field = sanitize_field(&peer.to_string()).into_owned();
+        warn!(
+            event = "inbound_connection_failed",
+            inbound = %self.logger.tag_field(),
+            peer = %peer_field,
+            error_kind = ?err.kind(),
+            error = %err,
+            "socks inbound connection failed"
         );
     }
 }
@@ -259,54 +182,6 @@ impl StreamInbound for SocksInbound {
     fn accept_stream(&self, stream: TcpStream, peer: SocketAddr) -> BoxFuture<'_, ()> {
         Box::pin(async move { self.handle_stream(stream, peer).await })
     }
-}
-
-async fn read_greeting(stream: &mut TcpStream) -> std::result::Result<Vec<u8>, SocksError> {
-    let mut header = [0u8; 2];
-    stream.read_exact(&mut header).await?;
-    let mut bytes = header.to_vec();
-
-    let method_len = header[1] as usize;
-    let mut methods = vec![0u8; method_len];
-    stream.read_exact(&mut methods).await?;
-    bytes.extend_from_slice(&methods);
-    Ok(bytes)
-}
-
-async fn read_request(stream: &mut TcpStream) -> std::result::Result<Vec<u8>, SocksError> {
-    let mut header = [0u8; 4];
-    stream.read_exact(&mut header).await?;
-    let atyp = header[3];
-    let mut bytes = header.to_vec();
-
-    match atyp {
-        0x01 => {
-            let mut rest = [0u8; 6];
-            stream.read_exact(&mut rest).await?;
-            bytes.extend_from_slice(&rest);
-        }
-        0x03 => {
-            let mut len = [0u8; 1];
-            stream.read_exact(&mut len).await?;
-            bytes.extend_from_slice(&len);
-
-            let mut domain = vec![0u8; len[0] as usize + 2];
-            stream.read_exact(&mut domain).await?;
-            bytes.extend_from_slice(&domain);
-        }
-        0x04 => {
-            let mut rest = [0u8; 18];
-            stream.read_exact(&mut rest).await?;
-            bytes.extend_from_slice(&rest);
-        }
-        _ => {
-            let mut rest = [0u8; 2];
-            stream.read_exact(&mut rest).await?;
-            bytes.extend_from_slice(&rest);
-        }
-    }
-
-    Ok(bytes)
 }
 
 #[cfg(test)]

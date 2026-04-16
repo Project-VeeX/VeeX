@@ -3,6 +3,7 @@
 mod codec;
 mod error;
 mod listener;
+mod protocol;
 mod server;
 
 pub use codec::{
