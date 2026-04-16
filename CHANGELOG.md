@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.6
+
+- Reorganized `veex-core` around explicit `routing`, `session`, and `io` domain boundaries, and removed the remaining crate-root convenience exports so public paths now reflect the real subsystem layout directly.
+- Finished pulling route execution orchestration out of the core execution path: routing now owns the full rule pipeline and returns a stable `RouteResult<...>` handoff, while stream and packet execution consume routed inputs without holding `Router`.
+- Split `execution` into the dedicated `veex-execution` crate, moved the router-to-dispatch bridge with it, and further purified its boundary by separating read-only outbound lookup from CLI runtime wiring and lifecycle assembly.
+
 ## 0.6.5
 
 - Extracted shared protocol seams without changing component boundaries: Trojan outbound now uses a dedicated protocol adapter path, while direct outbound remains explicitly protocol-free.
