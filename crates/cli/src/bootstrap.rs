@@ -3,8 +3,8 @@ use std::sync::Arc;
 use thiserror::Error;
 use veex_config::ProxyConfig;
 use veex_core::{
-    Inbound, OutboundRegistry, PacketDispatch, PacketDispatcher, ProxyError, StreamDispatch,
-    StreamDispatcher,
+    Inbound, OutboundRegistry, PacketDispatch, PacketDispatcher, ProxyError, RoutedPacketDispatch,
+    RoutedStreamDispatch, StreamDispatch, StreamDispatcher,
 };
 
 use crate::factory::{
@@ -45,16 +45,18 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
             .map_err(BootstrapError::OutboundBuild)?;
     }
     let dns_executor = dns_services.map(|services| services.executor);
-    let stream_sink: Arc<dyn StreamDispatch> = Arc::new(StreamDispatcher::with_dns_executor(
-        router.clone(),
+    let stream_executor = Arc::new(StreamDispatcher::with_dns_executor(
         Arc::clone(&outbounds),
         dns_executor.clone(),
     ));
-    let packet_sink: Arc<dyn PacketDispatch> = Arc::new(PacketDispatcher::with_dns_executor(
-        router,
+    let packet_executor = Arc::new(PacketDispatcher::with_dns_executor(
         Arc::clone(&outbounds),
         dns_executor,
     ));
+    let stream_sink: Arc<dyn StreamDispatch> =
+        Arc::new(RoutedStreamDispatch::new(router.clone(), stream_executor));
+    let packet_sink: Arc<dyn PacketDispatch> =
+        Arc::new(RoutedPacketDispatch::new(router, packet_executor));
     let inbounds =
         build_inbounds(config, stream_sink, packet_sink).map_err(BootstrapError::InboundBuild)?;
 

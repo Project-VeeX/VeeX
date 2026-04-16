@@ -1,10 +1,7 @@
 use std::{
     collections::HashMap,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex, MutexGuard,
-    },
-    time::{Duration, Instant},
+    sync::{Arc, Mutex, MutexGuard},
+    time::Duration,
 };
 
 use crate::{
@@ -19,12 +16,12 @@ use crate::{
             dns::hijack_packet_dns,
             io::{PacketAssociationKey, PacketFrame, PacketMetadata, PacketWriter},
         },
-        traits::{DnsHijack, PacketDispatch},
+        traits::DnsHijack,
         OutboundRegistry,
     },
     portal::traits::BoxFuture,
-    routing::{RouteFinalAction, RouteReason, Router},
-    session::{SessionContext, SessionMeta},
+    routing::{PacketRouteInput, RouteFinalAction, RouteReason, RouteResult},
+    session::SessionContext,
     types::Network,
 };
 
@@ -35,63 +32,43 @@ const DEFAULT_PACKET_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// This path is intentionally independent from the stream dispatcher and owns
 /// association lifecycle, packet outbound session binding, and reverse packet flow.
 pub struct PacketDispatcher {
-    router: Router,
     outbounds: Arc<OutboundRegistry>,
     dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
     associations: Arc<Mutex<HashMap<PacketAssociationKey, Arc<PacketAssociation>>>>,
-    next_association_id: AtomicU64,
     idle_timeout: Duration,
 }
 
 impl PacketDispatcher {
-    pub fn new(router: Router, outbounds: Arc<OutboundRegistry>) -> Self {
-        Self::with_dns_executor_and_idle_timeout(
-            router,
-            outbounds,
-            None,
-            DEFAULT_PACKET_IDLE_TIMEOUT,
-        )
+    pub fn new(outbounds: Arc<OutboundRegistry>) -> Self {
+        Self::with_dns_executor_and_idle_timeout(outbounds, None, DEFAULT_PACKET_IDLE_TIMEOUT)
     }
 
     pub fn with_dns_executor(
-        router: Router,
         outbounds: Arc<OutboundRegistry>,
         dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
     ) -> Self {
         Self::with_dns_executor_and_idle_timeout(
-            router,
             outbounds,
             dns_executor,
             DEFAULT_PACKET_IDLE_TIMEOUT,
         )
     }
 
-    pub fn with_idle_timeout(
-        router: Router,
-        outbounds: Arc<OutboundRegistry>,
-        idle_timeout: Duration,
-    ) -> Self {
-        Self::with_dns_executor_and_idle_timeout(router, outbounds, None, idle_timeout)
+    pub fn with_idle_timeout(outbounds: Arc<OutboundRegistry>, idle_timeout: Duration) -> Self {
+        Self::with_dns_executor_and_idle_timeout(outbounds, None, idle_timeout)
     }
 
     pub fn with_dns_executor_and_idle_timeout(
-        router: Router,
         outbounds: Arc<OutboundRegistry>,
         dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
         idle_timeout: Duration,
     ) -> Self {
         Self {
-            router,
             outbounds,
             dns_executor,
             associations: Arc::new(Mutex::new(HashMap::new())),
-            next_association_id: AtomicU64::new(1),
             idle_timeout,
         }
-    }
-
-    fn next_association_id(&self) -> u64 {
-        self.next_association_id.fetch_add(1, Ordering::Relaxed)
     }
 
     fn association(&self, key: &PacketAssociationKey) -> Option<Arc<PacketAssociation>> {
@@ -149,11 +126,7 @@ impl PacketDispatcher {
         });
     }
 
-    async fn dispatch_packet_impl(
-        &self,
-        packet: PacketFrame,
-        writer: Arc<dyn PacketWriter>,
-    ) -> crate::Result<()> {
+    pub(crate) async fn dispatch_associated(&self, packet: PacketFrame) -> crate::Result<bool> {
         if packet.metadata.network != Network::Udp {
             return Err(ProxyError::protocol(format!(
                 "packet dispatcher only accepts udp packets, got {}",
@@ -161,50 +134,11 @@ impl PacketDispatcher {
             )));
         }
 
-        // Route selection is intentionally a first-packet-only decision.
-        // Once an association exists, later packets must reuse the bound outbound session
-        // and must never re-enter the router.
         let association_key = packet.metadata.association_key();
-        let association = match self.association(&association_key) {
-            Some(existing) => {
-                log_packet_association_hit(&existing);
-                existing
-            }
-            None => {
-                let ctx = self.build_session_context(&packet.metadata);
-                let decision = self.router.select(&ctx);
-
-                match &decision.final_action {
-                    RouteFinalAction::Route(target) => {
-                        log_route_select(&ctx, &target.outbound_tag, decision.reason);
-                        match self.insert_association(
-                            self.create_association(
-                                ctx,
-                                &packet.metadata,
-                                writer,
-                                target.outbound_tag.clone(),
-                                decision.reason,
-                            )
-                            .await?,
-                        ) {
-                            Ok(created) => {
-                                self.spawn_reverse_loop(Arc::clone(&created));
-                                created
-                            }
-                            Err(existing) => {
-                                log_packet_association_hit(&existing);
-                                existing
-                            }
-                        }
-                    }
-                    RouteFinalAction::HijackDns => {
-                        return self
-                            .hijack((ctx.meta.id, packet, writer), decision.reason)
-                            .await;
-                    }
-                }
-            }
+        let Some(association) = self.association(&association_key) else {
+            return Ok(false);
         };
+        log_packet_association_hit(&association);
 
         if let Err(err) = association.send(packet.payload).await {
             association.shutdown();
@@ -213,31 +147,64 @@ impl PacketDispatcher {
             return Err(err);
         }
 
-        Ok(())
+        Ok(true)
     }
 
-    fn build_session_context(&self, metadata: &PacketMetadata) -> SessionContext {
-        SessionContext::new(
-            SessionMeta {
-                id: self.next_association_id(),
-                network: metadata.network,
-                inbound_tag: metadata.inbound_tag.clone(),
-                peer: metadata.peer,
-                destination: metadata.destination.clone(),
-                start: Instant::now(),
-            },
-            Vec::new(),
-        )
-    }
-}
-
-impl PacketDispatch for PacketDispatcher {
-    fn dispatch_packet(
+    pub async fn dispatch_routed(
         &self,
-        packet: PacketFrame,
-        writer: Arc<dyn PacketWriter>,
-    ) -> BoxFuture<'_, ()> {
-        Box::pin(async move { self.dispatch_packet_impl(packet, writer).await })
+        routed: RouteResult<PacketRouteInput>,
+    ) -> crate::Result<()> {
+        let RouteResult {
+            ctx,
+            decision,
+            input,
+        } = routed;
+        let PacketRouteInput { packet, writer } = input;
+
+        if packet.metadata.network != Network::Udp {
+            return Err(ProxyError::protocol(format!(
+                "packet dispatcher only accepts udp packets, got {}",
+                packet.metadata.network.as_str()
+            )));
+        }
+
+        match &decision.final_action {
+            RouteFinalAction::Route(target) => {
+                log_route_select(&ctx, &target.outbound_tag, decision.reason);
+                let association = match self.insert_association(
+                    self.create_association(
+                        ctx,
+                        &packet.metadata,
+                        writer,
+                        target.outbound_tag.clone(),
+                        decision.reason,
+                    )
+                    .await?,
+                ) {
+                    Ok(created) => {
+                        self.spawn_reverse_loop(Arc::clone(&created));
+                        created
+                    }
+                    Err(existing) => {
+                        log_packet_association_hit(&existing);
+                        existing
+                    }
+                };
+
+                if let Err(err) = association.send(packet.payload).await {
+                    association.shutdown();
+                    self.remove_association(association.key(), association.id());
+                    let _ = association.session().close().await;
+                    return Err(err);
+                }
+
+                Ok(())
+            }
+            RouteFinalAction::HijackDns => {
+                self.hijack((ctx.meta.id, packet, writer), decision.reason)
+                    .await
+            }
+        }
     }
 }
 
@@ -309,12 +276,11 @@ mod tests {
     use crate::{
         dns::{DnsExecutorHandle, DnsRequest, DnsResponse},
         logging::Logger,
-        routing::{RouteAction, RouteFinalAction, RouteRule},
+        routing::{PacketRouteInput, RouteDecision, RouteFinalAction, RouteReason, RouteResult},
         types::Host,
         BoxFuture, BoxedAsyncStream, Destination, ExecutionOutbound, Network, Outbound,
-        OutboundMeta, OutboundRegistry, OutboundRegistryBuilder, PacketDispatch, PacketFrame,
-        PacketMetadata, PacketSession, PacketSessionHandle, PacketWriter, ProxyError,
-        SessionContext,
+        OutboundMeta, OutboundRegistry, OutboundRegistryBuilder, PacketFrame, PacketMetadata,
+        PacketSession, PacketSessionHandle, PacketWriter, ProxyError, SessionContext,
     };
 
     use super::PacketDispatcher;
@@ -460,7 +426,6 @@ mod tests {
         });
         let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
         let dispatcher = PacketDispatcher::with_idle_timeout(
-            crate::Router::with_default_outbound("direct"),
             finalized_registry(outbound.clone() as Arc<dyn ExecutionOutbound>),
             Duration::from_secs(1),
         );
@@ -476,10 +441,27 @@ mod tests {
         );
 
         dispatcher
-            .dispatch_packet(
-                PacketFrame::new(metadata.clone(), b"ping".to_vec()),
-                Arc::clone(&writer),
-            )
+            .dispatch_routed(RouteResult {
+                ctx: SessionContext::new(
+                    crate::SessionMeta {
+                        id: 1,
+                        network: Network::Udp,
+                        inbound_tag: "direct-in".into(),
+                        peer: SocketAddr::from(([127, 0, 0, 1], 53000)),
+                        destination: Destination::new(
+                            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                            5353,
+                        ),
+                        start: std::time::Instant::now(),
+                    },
+                    Vec::new(),
+                ),
+                decision: RouteDecision::route("direct", RouteReason::Final),
+                input: PacketRouteInput {
+                    packet: PacketFrame::new(metadata.clone(), b"ping".to_vec()),
+                    writer: Arc::clone(&writer),
+                },
+            })
             .await
             .expect("first packet should dispatch");
         upstream_tx
@@ -493,10 +475,11 @@ mod tests {
                 .any(|(_, payload)| payload == b"pong")
         })
         .await;
-        dispatcher
-            .dispatch_packet(PacketFrame::new(metadata, b"pang".to_vec()), writer)
+        let reused = dispatcher
+            .dispatch_associated(PacketFrame::new(metadata, b"pang".to_vec()))
             .await
             .expect("second packet should reuse association");
+        assert!(reused, "second packet should reuse an existing association");
 
         assert_eq!(outbound.connect_count.load(Ordering::Relaxed), 1);
         assert_eq!(
@@ -554,7 +537,6 @@ mod tests {
         });
         let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
         let dispatcher = PacketDispatcher::with_idle_timeout(
-            crate::Router::with_default_outbound("direct"),
             finalized_registry(outbound as Arc<dyn ExecutionOutbound>),
             Duration::from_millis(50),
         );
@@ -563,18 +545,35 @@ mod tests {
         });
 
         dispatcher
-            .dispatch_packet(
-                PacketFrame::new(
-                    PacketMetadata::new(
-                        "direct-in",
-                        SocketAddr::from(([127, 0, 0, 1], 53001)),
-                        Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 5353),
-                        Network::Udp,
-                    ),
-                    b"ping".to_vec(),
+            .dispatch_routed(RouteResult {
+                ctx: SessionContext::new(
+                    crate::SessionMeta {
+                        id: 1,
+                        network: Network::Udp,
+                        inbound_tag: "direct-in".into(),
+                        peer: SocketAddr::from(([127, 0, 0, 1], 53001)),
+                        destination: Destination::new(
+                            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                            5353,
+                        ),
+                        start: std::time::Instant::now(),
+                    },
+                    Vec::new(),
                 ),
-                writer,
-            )
+                decision: RouteDecision::route("direct", RouteReason::Final),
+                input: PacketRouteInput {
+                    packet: PacketFrame::new(
+                        PacketMetadata::new(
+                            "direct-in",
+                            SocketAddr::from(([127, 0, 0, 1], 53001)),
+                            Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 5353),
+                            Network::Udp,
+                        ),
+                        b"ping".to_vec(),
+                    ),
+                    writer,
+                },
+            })
             .await
             .expect("packet should dispatch");
         tokio::time::sleep(Duration::from_millis(120)).await;
@@ -595,11 +594,6 @@ mod tests {
     async fn packet_dispatcher_hands_hijack_dns_to_executor_without_association() {
         let (_guard, trace_buffer) = install_test_subscriber();
         let dispatcher = PacketDispatcher::with_dns_executor(
-            crate::Router::with_default_outbound("direct").with_rule(RouteRule {
-                inbound: vec!["dns-in".into()],
-                action: RouteAction::Final(RouteFinalAction::HijackDns),
-                ..RouteRule::new("unused")
-            }),
             empty_registry(),
             Some(Arc::new(TestDnsExecutor {
                 responses: Arc::new(Mutex::new(vec![b"dns-response".to_vec()])),
@@ -612,18 +606,38 @@ mod tests {
         });
 
         dispatcher
-            .dispatch_packet(
-                PacketFrame::new(
-                    PacketMetadata::new(
-                        "dns-in",
-                        SocketAddr::from(([127, 0, 0, 1], 53053)),
-                        Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
-                        Network::Udp,
-                    ),
-                    b"dns-query".to_vec(),
+            .dispatch_routed(RouteResult {
+                ctx: SessionContext::new(
+                    crate::SessionMeta {
+                        id: 1,
+                        network: Network::Udp,
+                        inbound_tag: "dns-in".into(),
+                        peer: SocketAddr::from(([127, 0, 0, 1], 53053)),
+                        destination: Destination::new(
+                            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                            53,
+                        ),
+                        start: std::time::Instant::now(),
+                    },
+                    Vec::new(),
                 ),
-                writer,
-            )
+                decision: RouteDecision {
+                    final_action: RouteFinalAction::HijackDns,
+                    reason: RouteReason::Rule,
+                },
+                input: PacketRouteInput {
+                    packet: PacketFrame::new(
+                        PacketMetadata::new(
+                            "dns-in",
+                            SocketAddr::from(([127, 0, 0, 1], 53053)),
+                            Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
+                            Network::Udp,
+                        ),
+                        b"dns-query".to_vec(),
+                    ),
+                    writer,
+                },
+            })
             .await
             .expect("dns hijack should succeed");
 

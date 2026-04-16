@@ -10,7 +10,9 @@ use crate::{
     types::{Destination, Host},
 };
 
-use super::{sniff_stream_internal, SniffExecution, SniffResult};
+use super::{
+    sniff_stream_internal, PacketRouteInput, RouteError, RouteResult, SniffExecution, SniffResult,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouteReason {
@@ -77,6 +79,7 @@ pub struct SniffAction {
 pub enum RouteFinalAction {
     Route(RouteTarget),
     HijackDns,
+    // Future terminal actions such as reject / bypass would extend this enum here.
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -404,11 +407,6 @@ impl RouteRuleMissReason {
     }
 }
 
-pub struct RouteExecution {
-    pub stream: BoxedAsyncStream,
-    pub decision: RouteDecision,
-}
-
 /// Static router that decides which outbound should handle a session.
 ///
 /// The routing decision pipeline is a single ordered rule/action scan:
@@ -481,34 +479,34 @@ impl Router {
         self.default_final_decision()
     }
 
-    pub async fn execute(
+    pub async fn route_stream(
         &self,
-        inbound_stream: BoxedAsyncStream,
-        ctx: &mut SessionContext,
-    ) -> RouteExecution {
-        let mut stream = inbound_stream;
+        input: BoxedAsyncStream,
+        ctx: SessionContext,
+    ) -> Result<RouteResult<BoxedAsyncStream>, RouteError> {
+        let mut stream = input;
         let inbound_tag = Some(ctx.meta.inbound_tag.as_str());
         let destination = &ctx.meta.destination;
         let mut route_context = RouteRuntimeContext::from_destination(destination);
 
         for rule in &self.rules {
-            let input = route_context.input(destination, inbound_tag);
-            let normalized_domain = input.domain.map(normalize_domain_str);
-            log_route_rule_eval(ctx, rule, input.domain);
+            let route_input = route_context.input(destination, inbound_tag);
+            let normalized_domain = route_input.domain.map(normalize_domain_str);
+            log_route_rule_eval(&ctx, rule, route_input.domain);
 
-            let evaluation = rule.evaluate(input, normalized_domain.as_deref());
+            let evaluation = rule.evaluate(route_input, normalized_domain.as_deref());
             let Err(reason) = evaluation else {
-                log_route_rule_match(ctx, rule, input.domain);
+                log_route_rule_match(&ctx, rule, route_input.domain);
 
                 match &rule.action {
                     RouteAction::Upgrade(RouteUpgradeAction::Sniff(action)) => {
                         let domain_before = route_context.domain().map(str::to_string);
-                        log_sniff_start(ctx, action.timeout);
+                        log_sniff_start(&ctx, action.timeout);
                         let sniff = sniff_stream_internal(stream, action.timeout).await;
-                        log_sniff_result(ctx, action.timeout, &sniff);
+                        log_sniff_result(&ctx, action.timeout, &sniff);
                         route_context.apply_sniffed_domain(sniff.outcome.domain.clone());
                         log_route_upgrade_applied(
-                            ctx,
+                            &ctx,
                             rule,
                             domain_before.as_deref(),
                             route_context.domain(),
@@ -517,20 +515,46 @@ impl Router {
                     }
                     RouteAction::Final(action) => {
                         let decision = self.final_action_decision(action, RouteReason::Rule);
-                        log_route_final_selected(ctx, rule, input.domain, &decision.final_action);
-                        return RouteExecution { stream, decision };
+                        log_route_final_selected(
+                            &ctx,
+                            rule,
+                            route_input.domain,
+                            &decision.final_action,
+                        );
+                        return Ok(RouteResult {
+                            ctx,
+                            decision,
+                            input: stream,
+                        });
                     }
                 }
 
                 continue;
             };
 
-            log_route_rule_miss(ctx, rule, input.domain, reason);
+            log_route_rule_miss(&ctx, rule, route_input.domain, reason);
         }
 
         let decision = self.default_final_decision();
-        log_route_default_final_selected(ctx, route_context.domain(), &decision.final_action);
-        RouteExecution { stream, decision }
+        log_route_default_final_selected(&ctx, route_context.domain(), &decision.final_action);
+        Ok(RouteResult {
+            ctx,
+            decision,
+            input: stream,
+        })
+    }
+
+    pub async fn route_packet(
+        &self,
+        input: PacketRouteInput,
+        ctx: SessionContext,
+    ) -> Result<RouteResult<PacketRouteInput>, RouteError> {
+        let decision = self.select(&ctx);
+        Ok(RouteResult {
+            ctx,
+            decision,
+            input,
+        })
     }
 
     fn final_action_decision(
@@ -1246,7 +1270,7 @@ mod tests {
             },
         ]);
         let destination = Destination::from_ip("198.51.100.10".parse().unwrap(), 443);
-        let mut ctx = SessionContext::new(
+        let ctx = SessionContext::new(
             SessionMeta {
                 id: 7,
                 network: Network::Tcp,
@@ -1259,20 +1283,21 @@ mod tests {
         );
         let payload = tls_client_hello_with_sni("www.google.com");
 
-        let execution = router
-            .execute(
+        let routed = router
+            .route_stream(
                 Box::new(ScriptedStream::new([
                     ReadStep::Data(payload.clone()),
                     ReadStep::Eof,
                 ])),
-                &mut ctx,
+                ctx,
             )
-            .await;
+            .await
+            .expect("stream routing should succeed");
 
-        assert_eq!(execution.decision.outbound_tag(), Some("proxy"));
-        assert_eq!(execution.decision.reason, RouteReason::Rule);
+        assert_eq!(routed.decision.outbound_tag(), Some("proxy"));
+        assert_eq!(routed.decision.reason, RouteReason::Rule);
 
-        let mut replay = execution.stream;
+        let mut replay = routed.input;
         let mut replayed = Vec::new();
         replay
             .read_to_end(&mut replayed)
@@ -1298,7 +1323,7 @@ mod tests {
             },
         ]);
         let destination = Destination::from_ip("198.51.100.10".parse().unwrap(), 443);
-        let mut ctx = SessionContext::new(
+        let ctx = SessionContext::new(
             SessionMeta {
                 id: 8,
                 network: Network::Tcp,
@@ -1310,18 +1335,19 @@ mod tests {
             Vec::new(),
         );
 
-        let execution = router
-            .execute(
+        let routed = router
+            .route_stream(
                 Box::new(ScriptedStream::new([
                     ReadStep::Data(tls_client_hello_with_sni("www.google.com")),
                     ReadStep::Eof,
                 ])),
-                &mut ctx,
+                ctx,
             )
-            .await;
+            .await
+            .expect("stream routing should succeed");
 
-        assert_eq!(execution.decision.outbound_tag(), Some("late"));
-        assert_eq!(execution.decision.reason, RouteReason::Rule);
+        assert_eq!(routed.decision.outbound_tag(), Some("late"));
+        assert_eq!(routed.decision.reason, RouteReason::Rule);
     }
 
     #[tokio::test]
@@ -1341,7 +1367,7 @@ mod tests {
             },
         ]);
         let destination = Destination::from_ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)), 443);
-        let mut ctx = SessionContext::new(
+        let ctx = SessionContext::new(
             SessionMeta {
                 id: 11,
                 network: Network::Tcp,
@@ -1353,18 +1379,19 @@ mod tests {
             Vec::new(),
         );
 
-        let execution = router
-            .execute(
+        let routed = router
+            .route_stream(
                 Box::new(ScriptedStream::new([
                     ReadStep::Data(tls_client_hello_with_sni("www.google.com")),
                     ReadStep::Eof,
                 ])),
-                &mut ctx,
+                ctx,
             )
-            .await;
+            .await
+            .expect("stream routing should succeed");
 
-        assert_eq!(execution.decision.outbound_tag(), Some("direct"));
-        assert_eq!(execution.decision.reason, RouteReason::Rule);
+        assert_eq!(routed.decision.outbound_tag(), Some("direct"));
+        assert_eq!(routed.decision.reason, RouteReason::Rule);
     }
 
     #[tokio::test]
@@ -1374,7 +1401,7 @@ mod tests {
             ..RouteRule::sniff(Duration::from_millis(10))
         });
         let destination = Destination::from_ip("198.51.100.10".parse().unwrap(), 443);
-        let mut ctx = SessionContext::new(
+        let ctx = SessionContext::new(
             SessionMeta {
                 id: 12,
                 network: Network::Tcp,
@@ -1386,9 +1413,12 @@ mod tests {
             Vec::new(),
         );
 
-        let execution = router.execute(Box::new(PendingStream), &mut ctx).await;
-        assert_eq!(execution.decision.outbound_tag(), Some("final"));
-        assert_eq!(execution.decision.reason, RouteReason::Final);
+        let routed = router
+            .route_stream(Box::new(PendingStream), ctx)
+            .await
+            .expect("stream routing should succeed");
+        assert_eq!(routed.decision.outbound_tag(), Some("final"));
+        assert_eq!(routed.decision.reason, RouteReason::Final);
     }
 
     #[tokio::test]
@@ -1404,7 +1434,7 @@ mod tests {
             },
         ]);
         let destination = Destination::from_ip("198.51.100.10".parse().unwrap(), 443);
-        let mut ctx = SessionContext::new(
+        let ctx = SessionContext::new(
             SessionMeta {
                 id: 9,
                 network: Network::Tcp,
@@ -1416,9 +1446,12 @@ mod tests {
             Vec::new(),
         );
 
-        let execution = router.execute(Box::new(PendingStream), &mut ctx).await;
-        assert_eq!(execution.decision.outbound_tag(), Some("late"));
-        assert_eq!(execution.decision.reason, RouteReason::Rule);
+        let routed = router
+            .route_stream(Box::new(PendingStream), ctx)
+            .await
+            .expect("stream routing should succeed");
+        assert_eq!(routed.decision.outbound_tag(), Some("late"));
+        assert_eq!(routed.decision.reason, RouteReason::Rule);
     }
 
     #[tokio::test]
@@ -1435,7 +1468,7 @@ mod tests {
             },
         ]);
         let destination = Destination::from_ip("198.51.100.10".parse().unwrap(), 443);
-        let mut ctx = SessionContext::new(
+        let ctx = SessionContext::new(
             SessionMeta {
                 id: 10,
                 network: Network::Tcp,
@@ -1447,15 +1480,16 @@ mod tests {
             Vec::new(),
         );
 
-        let execution = router
-            .execute(
+        let routed = router
+            .route_stream(
                 Box::new(ScriptedStream::new([ReadStep::Error(io::Error::other(
                     "boom",
                 ))])),
-                &mut ctx,
+                ctx,
             )
-            .await;
-        assert_eq!(execution.decision.outbound_tag(), Some("late"));
+            .await
+            .expect("stream routing should succeed");
+        assert_eq!(routed.decision.outbound_tag(), Some("late"));
 
         let events = captured_events(&events);
         assert_has_event(
@@ -1484,7 +1518,7 @@ mod tests {
             },
         ]);
         let destination = Destination::from_ip("198.51.100.10".parse().unwrap(), 443);
-        let mut ctx = SessionContext::new(
+        let ctx = SessionContext::new(
             SessionMeta {
                 id: 13,
                 network: Network::Tcp,
@@ -1496,8 +1530,11 @@ mod tests {
             Vec::new(),
         );
 
-        let execution = router.execute(Box::new(PendingStream), &mut ctx).await;
-        assert_eq!(execution.decision.outbound_tag(), Some("late"));
+        let routed = router
+            .route_stream(Box::new(PendingStream), ctx)
+            .await
+            .expect("stream routing should succeed");
+        assert_eq!(routed.decision.outbound_tag(), Some("late"));
 
         let events = captured_events(&events);
         assert_has_event(
@@ -1556,7 +1593,7 @@ mod tests {
             ..RouteRule::sniff(Duration::from_millis(300))
         });
         let destination = Destination::from_ip("198.51.100.10".parse().unwrap(), 443);
-        let mut ctx = SessionContext::new(
+        let ctx = SessionContext::new(
             SessionMeta {
                 id: 14,
                 network: Network::Tcp,
@@ -1568,17 +1605,18 @@ mod tests {
             Vec::new(),
         );
 
-        let execution = router
-            .execute(
+        let routed = router
+            .route_stream(
                 Box::new(ScriptedStream::new([
                     ReadStep::Data(tls_client_hello_with_sni("www.google.com")),
                     ReadStep::Eof,
                 ])),
-                &mut ctx,
+                ctx,
             )
-            .await;
-        assert_eq!(execution.decision.outbound_tag(), Some("final"));
-        assert_eq!(execution.decision.reason, RouteReason::Final);
+            .await
+            .expect("stream routing should succeed");
+        assert_eq!(routed.decision.outbound_tag(), Some("final"));
+        assert_eq!(routed.decision.reason, RouteReason::Final);
 
         let events = captured_events(&events);
         assert_has_event(

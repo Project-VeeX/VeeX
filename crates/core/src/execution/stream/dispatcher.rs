@@ -5,14 +5,10 @@ use veex_observability::{emit_session_finish, SessionSummary};
 
 use crate::{
     dns::DnsExecutorHandle,
-    execution::{
-        stream::io::BoxedAsyncStream,
-        traits::{DnsHijack, StreamDispatch},
-        OutboundRegistry,
-    },
+    execution::{stream::io::BoxedAsyncStream, traits::DnsHijack, OutboundRegistry},
     logging::sanitize_field,
     portal::traits::BoxFuture,
-    routing::{RouteFinalAction, RouteReason, Router},
+    routing::{RouteFinalAction, RouteReason, RouteResult},
     session::SessionContext,
 };
 
@@ -22,7 +18,6 @@ use super::{
 };
 
 pub struct StreamDispatcher {
-    router: Router,
     outbounds: Arc<OutboundRegistry>,
     dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
 }
@@ -38,127 +33,113 @@ struct DispatchTraceContext {
 }
 
 impl StreamDispatcher {
-    pub fn new(router: Router, outbounds: Arc<OutboundRegistry>) -> Self {
-        Self::with_dns_executor(router, outbounds, None)
+    pub fn new(outbounds: Arc<OutboundRegistry>) -> Self {
+        Self::with_dns_executor(outbounds, None)
     }
 
     pub fn with_dns_executor(
-        router: Router,
         outbounds: Arc<OutboundRegistry>,
         dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
     ) -> Self {
         Self {
-            router,
             outbounds,
             dns_executor,
         }
     }
 
-    fn dispatch_stream_impl(
+    pub async fn dispatch_routed(
         &self,
-        inbound_stream: BoxedAsyncStream,
-        ctx: SessionContext,
-    ) -> BoxFuture<'_, ()> {
-        Box::pin(async move {
-            let mut ctx = ctx;
-            let execution = self.router.execute(inbound_stream, &mut ctx).await;
-            let decision = execution.decision;
-            let outbound_tag = match &decision.final_action {
-                RouteFinalAction::Route(target) => {
-                    ctx.set_route(target.outbound_tag.clone(), decision.reason);
-                    target.outbound_tag.clone()
-                }
-                RouteFinalAction::HijackDns => {
-                    return self.hijack((execution.stream, ctx), decision.reason).await;
-                }
-            };
+        routed: RouteResult<BoxedAsyncStream>,
+    ) -> crate::Result<()> {
+        let RouteResult {
+            mut ctx,
+            decision,
+            input: inbound_stream,
+        } = routed;
+        let outbound_tag = match &decision.final_action {
+            RouteFinalAction::Route(target) => {
+                ctx.set_route(target.outbound_tag.clone(), decision.reason);
+                target.outbound_tag.clone()
+            }
+            RouteFinalAction::HijackDns => {
+                return self.hijack((inbound_stream, ctx), decision.reason).await;
+            }
+        };
 
-            let route_reason = ctx.route.reason.unwrap_or(RouteReason::Final);
-            let trace = DispatchTraceContext::new(&ctx, outbound_tag.as_str(), route_reason);
-            let inbound_stream = execution.stream;
+        let route_reason = ctx.route.reason.unwrap_or(RouteReason::Final);
+        let trace = DispatchTraceContext::new(&ctx, outbound_tag.as_str(), route_reason);
 
-            // Stream dispatcher owns session-scoped lifecycle events. Lower-level transport,
-            // outbound, and relay details stay in their respective modules.
-            log_route_select(&trace, ctx.meta.network.as_str());
-            let outbound = self.outbounds.require(&outbound_tag)?;
+        // Stream dispatcher owns session-scoped lifecycle events. Lower-level transport,
+        // outbound, and relay details stay in their respective modules.
+        log_route_select(&trace, ctx.meta.network.as_str());
+        let outbound = self.outbounds.require(&outbound_tag)?;
 
-            let (summary, result) = match outbound.open_stream(&ctx).await {
-                Ok(outbound_stream) => {
-                    log_relay_start(&trace);
-                    match relay_bidirectional_with_trace(
-                        inbound_stream,
-                        outbound_stream,
-                        Some(RelayTraceContext {
-                            session_id: ctx.meta.id,
-                        }),
-                    )
-                    .await
-                    {
-                        Ok(stats) => (
-                            SessionSummary::success(
-                                trace.session_id,
-                                trace.inbound_field.as_str(),
-                                trace.outbound_field.as_str(),
-                                trace.peer_field.as_str(),
-                                trace.destination_field.as_str(),
-                                stats.bytes_up,
-                                stats.bytes_down,
-                                ctx.meta.start.elapsed(),
-                            ),
-                            Ok(()),
-                        ),
-                        Err(relay_err) => {
-                            log_relay_failed(&trace, &relay_err);
-                            let error_kind = relay_err.error.kind();
-                            (
-                                SessionSummary::failure(
-                                    trace.session_id,
-                                    trace.inbound_field.as_str(),
-                                    trace.outbound_field.as_str(),
-                                    trace.peer_field.as_str(),
-                                    trace.destination_field.as_str(),
-                                    relay_err.stats.bytes_up,
-                                    relay_err.stats.bytes_down,
-                                    ctx.meta.start.elapsed(),
-                                    error_kind,
-                                ),
-                                Err(relay_err.error),
-                            )
-                        }
-                    }
-                }
-                Err(err) => {
-                    let error_kind = err.kind();
-                    (
-                        SessionSummary::failure(
+        let (summary, result) = match outbound.open_stream(&ctx).await {
+            Ok(outbound_stream) => {
+                log_relay_start(&trace);
+                match relay_bidirectional_with_trace(
+                    inbound_stream,
+                    outbound_stream,
+                    Some(RelayTraceContext {
+                        session_id: ctx.meta.id,
+                    }),
+                )
+                .await
+                {
+                    Ok(stats) => (
+                        SessionSummary::success(
                             trace.session_id,
                             trace.inbound_field.as_str(),
                             trace.outbound_field.as_str(),
                             trace.peer_field.as_str(),
                             trace.destination_field.as_str(),
-                            0,
-                            0,
+                            stats.bytes_up,
+                            stats.bytes_down,
                             ctx.meta.start.elapsed(),
-                            error_kind,
                         ),
-                        Err(err),
-                    )
+                        Ok(()),
+                    ),
+                    Err(relay_err) => {
+                        log_relay_failed(&trace, &relay_err);
+                        let error_kind = relay_err.error.kind();
+                        (
+                            SessionSummary::failure(
+                                trace.session_id,
+                                trace.inbound_field.as_str(),
+                                trace.outbound_field.as_str(),
+                                trace.peer_field.as_str(),
+                                trace.destination_field.as_str(),
+                                relay_err.stats.bytes_up,
+                                relay_err.stats.bytes_down,
+                                ctx.meta.start.elapsed(),
+                                error_kind,
+                            ),
+                            Err(relay_err.error),
+                        )
+                    }
                 }
-            };
+            }
+            Err(err) => {
+                let error_kind = err.kind();
+                (
+                    SessionSummary::failure(
+                        trace.session_id,
+                        trace.inbound_field.as_str(),
+                        trace.outbound_field.as_str(),
+                        trace.peer_field.as_str(),
+                        trace.destination_field.as_str(),
+                        0,
+                        0,
+                        ctx.meta.start.elapsed(),
+                        error_kind,
+                    ),
+                    Err(err),
+                )
+            }
+        };
 
-            emit_session_finish(&summary, trace.route_reason.as_str(), result.as_ref().err());
-            result
-        })
-    }
-}
-
-impl StreamDispatch for StreamDispatcher {
-    fn dispatch_stream(
-        &self,
-        inbound_stream: BoxedAsyncStream,
-        ctx: SessionContext,
-    ) -> BoxFuture<'_, ()> {
-        self.dispatch_stream_impl(inbound_stream, ctx)
+        emit_session_finish(&summary, trace.route_reason.as_str(), result.as_ref().err());
+        result
     }
 }
 
@@ -259,8 +240,8 @@ mod tests {
     use crate::{
         BoxFuture, BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DnsResponse,
         ErrorKind, ExecutionOutbound, Logger, Network, Outbound, OutboundMeta, OutboundRegistry,
-        OutboundRegistryBuilder, RouteAction, RouteFinalAction, RouteReason, RouteRule, Router,
-        SessionContext, SessionMeta, SessionRoute, SessionState, StreamDispatch, StreamOutbound,
+        OutboundRegistryBuilder, RouteDecision, RouteFinalAction, RouteReason, RouteResult,
+        SessionContext, SessionMeta, SessionRoute, SessionState, StreamOutbound,
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
@@ -532,10 +513,7 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_writes_route_and_passes_state_to_outbound() {
         let (outbound, captured) = CaptureOutbound::new("proxy");
-        let dispatcher = StreamDispatcher::new(
-            Router::with_default_outbound("proxy"),
-            finalized_registry(Arc::new(outbound)),
-        );
+        let dispatcher = StreamDispatcher::new(finalized_registry(Arc::new(outbound)));
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 7,
@@ -549,9 +527,13 @@ mod tests {
         );
 
         dispatcher
-            .dispatch_stream(Box::new(ClosedStream), ctx)
+            .dispatch_routed(RouteResult {
+                ctx,
+                decision: RouteDecision::route("proxy", RouteReason::Final),
+                input: Box::new(ClosedStream),
+            })
             .await
-            .expect("dispatch_stream should succeed");
+            .expect("dispatch_routed should succeed");
 
         let captured = captured
             .lock()
@@ -566,16 +548,14 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_preserves_partial_relay_stats_on_failure() {
         let (_guard, events) = install_test_subscriber();
-        let dispatcher = StreamDispatcher::new(
-            Router::with_default_outbound("proxy"),
-            finalized_registry(Arc::new(ScriptedOutbound::new(
+        let dispatcher =
+            StreamDispatcher::new(finalized_registry(Arc::new(ScriptedOutbound::new(
                 "proxy",
                 Box::new(ScriptedStream::new([
                     ReadStep::Data(b"pong"),
                     ReadStep::Eof,
                 ])),
-            ))),
-        );
+            ))));
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 9,
@@ -589,15 +569,16 @@ mod tests {
         );
 
         let err = dispatcher
-            .dispatch_stream(
-                Box::new(ScriptedStream::new([
+            .dispatch_routed(RouteResult {
+                ctx,
+                decision: RouteDecision::route("proxy", RouteReason::Final),
+                input: Box::new(ScriptedStream::new([
                     ReadStep::Data(b"ping"),
                     ReadStep::Error(io::Error::other("boom")),
                 ])),
-                ctx,
-            )
+            })
             .await
-            .expect_err("dispatch_stream should surface relay failure");
+            .expect_err("dispatch_routed should surface relay failure");
 
         assert_eq!(err.kind(), ErrorKind::Relay);
 
@@ -639,11 +620,6 @@ mod tests {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let responses = Arc::new(Mutex::new(vec![b"\x12\x34dns-response".to_vec()]));
         let dispatcher = StreamDispatcher::with_dns_executor(
-            Router::with_default_outbound("unused").with_rule(RouteRule {
-                inbound: vec!["dns-in".into()],
-                action: RouteAction::Final(RouteFinalAction::HijackDns),
-                ..RouteRule::new("unused")
-            }),
             empty_registry(),
             Some(Arc::new(TestDnsExecutor {
                 requests: Arc::clone(&requests),
@@ -668,7 +644,14 @@ mod tests {
         );
 
         dispatcher
-            .dispatch_stream(Box::new(stream), ctx)
+            .dispatch_routed(RouteResult {
+                ctx,
+                decision: RouteDecision {
+                    final_action: RouteFinalAction::HijackDns,
+                    reason: RouteReason::Rule,
+                },
+                input: Box::new(stream),
+            })
             .await
             .expect("tcp dns hijack should succeed");
 

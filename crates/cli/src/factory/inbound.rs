@@ -200,13 +200,13 @@ mod tests {
                 rules: vec![],
             },
         };
-        let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::StreamDispatcher::new(
+        let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::RoutedStreamDispatch::new(
             veex_core::Router::with_default_outbound("direct"),
-            test_outbounds(),
+            Arc::new(veex_core::StreamDispatcher::new(test_outbounds())),
         ));
-        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::PacketDispatcher::new(
+        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::RoutedPacketDispatch::new(
             veex_core::Router::with_default_outbound("direct"),
-            test_outbounds(),
+            Arc::new(veex_core::PacketDispatcher::new(test_outbounds())),
         ));
 
         let inbounds = build_inbounds(&config, sink, packet_sink).expect("inbounds should build");
@@ -243,13 +243,13 @@ mod tests {
                 rules: vec![],
             },
         };
-        let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::StreamDispatcher::new(
+        let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::RoutedStreamDispatch::new(
             veex_core::Router::with_default_outbound("direct"),
-            test_outbounds(),
+            Arc::new(veex_core::StreamDispatcher::new(test_outbounds())),
         ));
-        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::PacketDispatcher::new(
+        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::RoutedPacketDispatch::new(
             veex_core::Router::with_default_outbound("direct"),
-            test_outbounds(),
+            Arc::new(veex_core::PacketDispatcher::new(test_outbounds())),
         ));
 
         let inbounds = build_inbounds(&config, sink, packet_sink).expect("inbounds should build");
@@ -286,13 +286,13 @@ mod tests {
                 rules: vec![],
             },
         };
-        let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::StreamDispatcher::new(
+        let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::RoutedStreamDispatch::new(
             veex_core::Router::with_default_outbound("direct"),
-            test_outbounds(),
+            Arc::new(veex_core::StreamDispatcher::new(test_outbounds())),
         ));
-        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::PacketDispatcher::new(
+        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::RoutedPacketDispatch::new(
             veex_core::Router::with_default_outbound("direct"),
-            test_outbounds(),
+            Arc::new(veex_core::PacketDispatcher::new(test_outbounds())),
         ));
 
         let inbounds = build_inbounds(&config, sink, packet_sink).expect("inbounds should build");

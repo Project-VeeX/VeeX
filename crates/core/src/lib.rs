@@ -38,9 +38,10 @@ pub use portal::{
     },
 };
 pub use routing::{
-    sniff_stream, PrefixedStream, RouteAction, RouteDecision, RouteFinalAction, RouteInput,
-    RouteReason, RouteRule, RouteTarget, RouteUpgradeAction, Router, SniffAction, SniffOutcome,
-    SniffedProtocol,
+    sniff_stream, PacketRouteInput, PrefixedStream, RouteAction, RouteDecision, RouteError,
+    RouteFinalAction, RouteInput, RouteReason, RouteResult, RouteRule, RouteTarget,
+    RouteUpgradeAction, RoutedPacketDispatch, RoutedStreamDispatch, Router, SniffAction,
+    SniffOutcome, SniffedProtocol,
 };
 pub use session::{build_session_bootstrap, SessionBootstrap};
 pub use shutdown::{shutdown_channel, ShutdownSignal, ShutdownTrigger};
