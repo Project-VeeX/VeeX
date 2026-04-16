@@ -2,7 +2,6 @@
 
 pub mod dns;
 pub mod error;
-pub mod execution;
 pub mod io;
 pub mod listen;
 pub mod logging;

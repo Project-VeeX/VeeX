@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use crate::error::ProxyError;
+use veex_core::ProxyError;
 
 use super::traits::ExecutionOutbound;
 
@@ -12,7 +12,7 @@ pub struct OutboundRegistryBuilder {
 }
 
 impl OutboundRegistryBuilder {
-    pub fn register(&mut self, outbound: Arc<dyn ExecutionOutbound>) -> crate::Result<()> {
+    pub fn register(&mut self, outbound: Arc<dyn ExecutionOutbound>) -> veex_core::Result<()> {
         let tag = outbound.meta().tag.clone();
         if self.index_by_tag.contains_key(&tag) {
             return Err(ProxyError::config(format!(
@@ -54,7 +54,7 @@ impl OutboundRegistry {
         Arc::clone(&self.default_outbound)
     }
 
-    pub fn require(&self, tag: &str) -> crate::Result<Arc<dyn ExecutionOutbound>> {
+    pub fn require(&self, tag: &str) -> veex_core::Result<Arc<dyn ExecutionOutbound>> {
         self.get(tag)
             .ok_or_else(|| ProxyError::config(format!("missing outbound tag: {tag}")))
     }
@@ -90,14 +90,15 @@ impl OutboundRegistry {
 mod tests {
     use std::sync::Arc;
 
-    use crate::{
-        execution::ExecutionOutbound,
+    use veex_core::{
         io::BoxedAsyncStream,
         logging::Logger,
         portal::{meta::OutboundMeta, traits::BoxFuture, Outbound},
         session::SessionContext,
         ProxyError,
     };
+
+    use crate::ExecutionOutbound;
 
     use super::OutboundRegistryBuilder;
 

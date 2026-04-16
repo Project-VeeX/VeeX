@@ -9,4 +9,5 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 veex-core = { path = "../core" }
+veex-execution = { path = "../execution" }
 veex-infra-linux = { path = "../infra-linux" }

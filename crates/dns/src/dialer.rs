@@ -3,13 +3,13 @@ use std::{fmt, sync::Arc, time::Instant};
 use tracing::debug;
 use veex_core::{
     dns::DnsRequest,
-    execution::{ExecutionOutbound, OutboundRegistry},
     io::{BoxedAsyncStream, PacketSessionHandle},
     logging::sanitize_field,
     portal::Dial,
     session::{SessionContext, SessionMeta},
     types::{Destination, Network},
 };
+use veex_execution::{ExecutionOutbound, OutboundRegistry};
 
 #[derive(Clone)]
 pub(crate) struct DnsDialer {
@@ -111,7 +111,6 @@ mod tests {
 
     use veex_core::{
         dns::DnsRequest,
-        execution::{ExecutionOutbound, OutboundRegistryBuilder},
         io::BoxedAsyncStream,
         logging::Logger,
         portal::{BoxFuture, Dial, Outbound, OutboundMeta},
@@ -119,6 +118,7 @@ mod tests {
         types::{Destination, Host, Network},
         ProxyError,
     };
+    use veex_execution::{ExecutionOutbound, OutboundRegistryBuilder};
 
     use super::DnsDialer;
 

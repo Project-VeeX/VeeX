@@ -10,6 +10,7 @@ socket2 = "0.5"
 tokio.workspace = true
 tracing.workspace = true
 veex-core = { path = "../core" }
+veex-execution = { path = "../execution" }
 veex-protocol = { path = "../protocol" }
 veex-transport = { path = "../transport" }
 

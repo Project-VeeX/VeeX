@@ -11,12 +11,12 @@ use std::{
 use tracing::{info, warn};
 use veex_core::{
     dns::{DnsExecutorHandle, DnsRequest, DnsResponse, DomainResolverHandle, ResolveContext},
-    execution::OutboundRegistry,
     logging::sanitize_field,
     portal::BoxFuture,
     types::Host,
     ProxyError,
 };
+use veex_execution::OutboundRegistry;
 
 use crate::{
     build_a_query, parse_query_domain, parse_response_ips,
@@ -439,7 +439,6 @@ mod tests {
     use tokio::sync::{mpsc, Mutex};
     use veex_core::{
         dns::{DnsExecutorHandle, DnsRequest, DomainResolverHandle, ResolveContext},
-        execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder},
         io::{BoxedAsyncStream, PacketSession, PacketSessionHandle},
         logging::Logger,
         portal::{BoxFuture, Dial, Outbound, OutboundMeta},
@@ -447,6 +446,7 @@ mod tests {
         types::{Destination, Host, Network},
         ProxyError,
     };
+    use veex_execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder};
 
     use crate::{
         build_a_query,

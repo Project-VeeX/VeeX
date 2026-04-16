@@ -7,7 +7,6 @@ use std::{
 };
 
 use veex_core::{
-    execution::ExecutionOutbound,
     io::BoxedAsyncStream,
     logging::Logger,
     portal::{BoxFuture, Dialer, Outbound, OutboundMeta, ProxyOutbound},
@@ -15,6 +14,7 @@ use veex_core::{
     types::Destination,
     ProxyError, Result,
 };
+use veex_execution::ExecutionOutbound;
 use veex_protocol::{
     adapter::{StreamAdapter, StreamParams},
     trojan::{validate_trojan_key, TrojanStreamAdapter},

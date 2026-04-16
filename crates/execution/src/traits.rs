@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use crate::{
+use veex_core::{
     dns::DnsExecutorHandle,
-    error::ProxyError,
     io::{BoxedAsyncStream, PacketFrame, PacketSessionHandle, PacketWriter},
     portal::traits::{BoxFuture, Outbound},
     routing::RouteReason,
     session::SessionContext,
+    ProxyError,
 };
 
 /// Dispatch-facing outbound capability used by the execution layer.

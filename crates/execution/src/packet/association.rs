@@ -9,11 +9,11 @@ use std::{
 use tokio::sync::Notify;
 use tracing::{debug, info, warn};
 
-use crate::{
-    error::ProxyError,
+use veex_core::{
     io::{PacketAssociationKey, PacketSessionHandle, PacketWriter},
     logging::sanitize_field,
     routing::RouteReason,
+    ProxyError,
 };
 
 /// Packet-side forwarding state, roughly parallel to stream relay state.
@@ -88,7 +88,7 @@ impl PacketAssociation {
         &self.session
     }
 
-    pub(crate) async fn send(&self, payload: Vec<u8>) -> crate::Result<()> {
+    pub(crate) async fn send(&self, payload: Vec<u8>) -> veex_core::Result<()> {
         self.touch();
         let result = self.session.send_packet(payload).await;
         if result.is_ok() {

@@ -10,13 +10,13 @@ use std::{
 };
 
 use veex_core::{
-    execution::ExecutionOutbound,
     io::{BoxedAsyncStream, PacketSessionHandle},
     logging::Logger,
     portal::{BoxFuture, Dialer, Outbound, OutboundMeta, PacketDialer, StreamOutbound},
     session::SessionContext,
     ProxyError, Result,
 };
+use veex_execution::ExecutionOutbound;
 
 #[derive(Debug)]
 struct DirectOutboundState {
@@ -162,7 +162,6 @@ mod tests {
         time::sleep,
     };
     use veex_core::{
-        execution::ExecutionOutbound,
         io::{PacketSession, PacketSessionHandle},
         logging::Logger,
         portal::{
@@ -172,6 +171,7 @@ mod tests {
         session::{SessionContext, SessionMeta},
         types::{Destination, Host, Network},
     };
+    use veex_execution::ExecutionOutbound;
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     use super::super::dialer::{

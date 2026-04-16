@@ -6,7 +6,7 @@ use std::{
     time::Instant,
 };
 
-use crate::{
+use veex_core::{
     io::{BoxedAsyncStream, PacketCarrier, PacketFrame, PacketWriter, StreamCarrier},
     portal::traits::BoxFuture,
     routing::Router,

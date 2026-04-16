@@ -2,7 +2,6 @@ use std::{net::SocketAddr, sync::Arc};
 
 use tracing::{debug, info, warn};
 use veex_core::{
-    execution::PacketDispatch,
     io::{PacketFrame, PacketMetadata, PacketWriter},
     logging::{sanitize_field, Logger},
     portal::{
@@ -12,6 +11,7 @@ use veex_core::{
     types::{Destination, Host, Network},
     ProxyError, Result,
 };
+use veex_execution::PacketDispatch;
 
 use super::common::{resolve_local_destination, validate_packet_inbound};
 
@@ -174,12 +174,12 @@ mod tests {
 
     use tokio::{net::UdpSocket, sync::oneshot};
     use veex_core::{
-        execution::PacketDispatch,
         io::{PacketFrame, PacketWriter},
         logging::Logger,
         portal::{BoxFuture, Inbound, InboundMeta},
         types::{Destination, Host, Listen},
     };
+    use veex_execution::PacketDispatch;
 
     use super::super::create_direct_packet_listener;
     use super::DirectUdpInbound;

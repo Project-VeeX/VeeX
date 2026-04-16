@@ -1,12 +1,8 @@
 use std::sync::Arc;
 
 use veex_config::ProxyConfig;
-use veex_core::{
-    execution::{PacketDispatch, StreamDispatch},
-    logging::Logger,
-    portal::Inbound,
-    ProxyError,
-};
+use veex_core::{logging::Logger, portal::Inbound, ProxyError};
+use veex_execution::{PacketDispatch, StreamDispatch};
 use veex_portal_inbound::direct::{create_direct_packet_listener, create_direct_stream_listener};
 use veex_portal_inbound::socks::create_socks_listener;
 use veex_portal_inbound::transparent::{
@@ -128,14 +124,14 @@ mod tests {
         ProxyConfig, RouteConfig, TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT,
     };
     use veex_core::{
-        execution::{
-            ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder, PacketDispatcher,
-            RoutedPacketDispatch, RoutedStreamDispatch, StreamDispatcher,
-        },
         io::BoxedAsyncStream,
         portal::{BoxFuture, Outbound, OutboundMeta},
         routing::Router,
         session::SessionContext,
+    };
+    use veex_execution::{
+        ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder, PacketDispatcher,
+        RoutedPacketDispatch, RoutedStreamDispatch, StreamDispatcher,
     };
     struct UnusedExecutionOutbound {
         meta: OutboundMeta,

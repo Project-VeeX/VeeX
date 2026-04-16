@@ -3,10 +3,10 @@ use std::sync::Arc;
 use veex_config::ProxyConfig;
 use veex_core::{
     dns::{DnsExecutorHandle, DomainResolverHandle},
-    execution::OutboundRegistry,
     ProxyError,
 };
 use veex_dns::DnsExecutor;
+use veex_execution::OutboundRegistry;
 
 use crate::factory::lower_dns;
 

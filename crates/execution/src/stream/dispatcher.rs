@@ -3,15 +3,16 @@ use std::sync::Arc;
 use tracing::{info, warn};
 use veex_observability::{emit_session_finish, SessionSummary};
 
-use crate::{
+use veex_core::{
     dns::DnsExecutorHandle,
-    execution::{traits::DnsHijack, OutboundRegistry},
     io::{BoxedAsyncStream, StreamCarrier},
     logging::sanitize_field,
     portal::traits::BoxFuture,
     routing::{RouteFinalAction, RouteReason, RouteResult},
     session::SessionContext,
 };
+
+use crate::{traits::DnsHijack, OutboundRegistry};
 
 use super::{
     dns::hijack_stream_dns,
@@ -48,7 +49,10 @@ impl StreamDispatcher {
         }
     }
 
-    pub async fn dispatch_routed(&self, routed: RouteResult<StreamCarrier>) -> crate::Result<()> {
+    pub async fn dispatch_routed(
+        &self,
+        routed: RouteResult<StreamCarrier>,
+    ) -> veex_core::Result<()> {
         let RouteResult {
             mut ctx,
             decision,
@@ -237,9 +241,8 @@ mod tests {
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
     use super::StreamDispatcher;
-    use crate::{
+    use veex_core::{
         dns::{DnsExecutorHandle, DnsRequest, DnsResponse},
-        execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder},
         io::{BoxedAsyncStream, StreamCarrier},
         logging::Logger,
         portal::{BoxFuture, Outbound, OutboundMeta, StreamOutbound},
@@ -249,6 +252,8 @@ mod tests {
         ErrorKind,
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
+
+    use crate::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder};
 
     struct ClosedStream;
 

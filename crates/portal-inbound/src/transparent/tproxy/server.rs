@@ -3,7 +3,6 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
-    execution::StreamDispatch,
     io::BoxedAsyncStream,
     logging::{sanitize_field, Logger},
     portal::{
@@ -13,6 +12,7 @@ use veex_core::{
     types::{Destination, Network},
     ProxyError, Result,
 };
+use veex_execution::StreamDispatch;
 
 use super::super::{
     common::{build_transparent_session, validate_transparent_inbound, TransparentInboundState},
@@ -197,13 +197,13 @@ mod tests {
 
     use tokio::{net::TcpListener, net::TcpStream, sync::oneshot};
     use veex_core::{
-        execution::StreamDispatch,
         io::BoxedAsyncStream,
         logging::Logger,
         portal::{BoxFuture, Inbound, InboundMeta, Listener, ListenerFactory},
         session::SessionContext,
         types::{Destination, Listen, Network},
     };
+    use veex_execution::StreamDispatch;
 
     use super::super::super::{destination::TProxyDestinationProvider, tproxy::TProxyError};
     use super::TProxyInbound;

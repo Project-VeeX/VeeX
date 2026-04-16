@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use crate::{
+use veex_core::{
     dns::{read_dns_tcp_message, write_dns_tcp_message, DnsExecutorHandle, DnsRequest},
     io::BoxedAsyncStream,
     logging::sanitize_field,
@@ -15,7 +15,7 @@ pub(crate) async fn hijack_stream_dns(
     mut inbound_stream: BoxedAsyncStream,
     ctx: SessionContext,
     route_reason: RouteReason,
-) -> crate::Result<()> {
+) -> veex_core::Result<()> {
     let inbound = sanitize_field(ctx.meta.inbound_tag.as_str()).into_owned();
     let peer = sanitize_field(&ctx.meta.peer.to_string()).into_owned();
     let destination = sanitize_field(&ctx.meta.destination.to_string()).into_owned();

@@ -9,7 +9,6 @@ use std::{
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
-    execution::StreamDispatch,
     io::BoxedAsyncStream,
     logging::{sanitize_field, Logger},
     portal::{BoxFuture, Inbound, InboundMeta, Listener, ListenerAcceptHandler, StreamInbound},
@@ -17,6 +16,7 @@ use veex_core::{
     types::{Destination, Host},
     ProxyError, Result,
 };
+use veex_execution::StreamDispatch;
 
 use super::common::{resolve_stream_destination, validate_stream_inbound};
 
@@ -189,13 +189,13 @@ mod tests {
 
     use tokio::{net::TcpListener, net::TcpStream, sync::oneshot};
     use veex_core::{
-        execution::StreamDispatch,
         io::BoxedAsyncStream,
         logging::Logger,
         portal::{BoxFuture, Inbound, InboundMeta, Listener, ListenerFactory},
         session::SessionContext,
         types::{Destination, Host, Listen},
     };
+    use veex_execution::StreamDispatch;
 
     use super::DirectInbound;
 

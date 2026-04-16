@@ -3,9 +3,8 @@ use std::future::Future;
 use thiserror::Error;
 use tracing::{error, info, warn};
 use veex_config::ProxyConfig;
-use veex_core::{
-    execution::OutboundRegistry, logging::sanitize_field, portal::Inbound, ProxyError,
-};
+use veex_core::{logging::sanitize_field, portal::Inbound, ProxyError};
+use veex_execution::OutboundRegistry;
 
 use crate::bootstrap::{build_runtime_state, BootstrapError, RuntimeState};
 
@@ -187,7 +186,6 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use veex_core::{
-        execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder},
         io::BoxedAsyncStream,
         logging::Logger,
         portal::{BoxFuture, Outbound, OutboundMeta},
@@ -195,6 +193,7 @@ mod tests {
         types::{Destination, Host, Network},
         ErrorKind, ProxyError,
     };
+    use veex_execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder};
 
     use super::{close_outbounds, start_outbounds};
 

@@ -4,25 +4,26 @@ use std::{
     time::Duration,
 };
 
-use crate::{
+use veex_core::{
     dns::DnsExecutorHandle,
-    error::ProxyError,
-    execution::{
-        packet::{
-            association::{
-                log_packet_association_close, log_packet_association_close_error,
-                log_packet_association_hit, PacketAssociation,
-            },
-            dns::hijack_packet_dns,
-        },
-        traits::DnsHijack,
-        OutboundRegistry,
-    },
     io::{PacketAssociationKey, PacketCarrier, PacketFrame, PacketMetadata, PacketWriter},
     portal::traits::BoxFuture,
     routing::{RouteFinalAction, RouteReason, RouteResult},
     session::SessionContext,
     types::Network,
+    ProxyError,
+};
+
+use crate::{
+    packet::{
+        association::{
+            log_packet_association_close, log_packet_association_close_error,
+            log_packet_association_hit, PacketAssociation,
+        },
+        dns::hijack_packet_dns,
+    },
+    traits::DnsHijack,
+    OutboundRegistry,
 };
 
 const DEFAULT_PACKET_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -98,7 +99,7 @@ impl PacketDispatcher {
         writer: Arc<dyn PacketWriter>,
         outbound_tag: String,
         route_reason: RouteReason,
-    ) -> crate::Result<Arc<PacketAssociation>> {
+    ) -> veex_core::Result<Arc<PacketAssociation>> {
         ctx.set_route(outbound_tag.clone(), route_reason);
         let outbound = self.outbounds.require(&outbound_tag)?;
         let session = outbound.open_packet(&ctx).await?;
@@ -126,7 +127,7 @@ impl PacketDispatcher {
         });
     }
 
-    pub(crate) async fn dispatch_associated(&self, packet: PacketFrame) -> crate::Result<bool> {
+    pub(crate) async fn dispatch_associated(&self, packet: PacketFrame) -> veex_core::Result<bool> {
         if packet.metadata.network != Network::Udp {
             return Err(ProxyError::protocol(format!(
                 "packet dispatcher only accepts udp packets, got {}",
@@ -150,7 +151,10 @@ impl PacketDispatcher {
         Ok(true)
     }
 
-    pub async fn dispatch_routed(&self, routed: RouteResult<PacketCarrier>) -> crate::Result<()> {
+    pub async fn dispatch_routed(
+        &self,
+        routed: RouteResult<PacketCarrier>,
+    ) -> veex_core::Result<()> {
         let RouteResult {
             ctx,
             decision,
@@ -231,10 +235,10 @@ fn log_route_select(ctx: &SessionContext, outbound_tag: &str, route_reason: Rout
     tracing::info!(
         event = "route_select",
         session_id = ctx.meta.id,
-        inbound = %crate::logging::sanitize_field(ctx.meta.inbound_tag.as_str()),
-        peer = %crate::logging::sanitize_field(&ctx.meta.peer.to_string()),
-        destination = %crate::logging::sanitize_field(&ctx.meta.destination.to_string()),
-        outbound = %crate::logging::sanitize_field(outbound_tag),
+        inbound = %veex_core::logging::sanitize_field(ctx.meta.inbound_tag.as_str()),
+        peer = %veex_core::logging::sanitize_field(&ctx.meta.peer.to_string()),
+        destination = %veex_core::logging::sanitize_field(&ctx.meta.destination.to_string()),
+        outbound = %veex_core::logging::sanitize_field(outbound_tag),
         route_reason = %route_reason.as_str(),
         default_final = matches!(route_reason, RouteReason::Final),
         network = ctx.meta.network.as_str(),
@@ -273,9 +277,8 @@ mod tests {
     use tokio::sync::{mpsc, Mutex as AsyncMutex};
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
-    use crate::{
+    use veex_core::{
         dns::{DnsExecutorHandle, DnsRequest, DnsResponse},
-        execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder},
         io::{
             BoxedAsyncStream, PacketCarrier, PacketFrame, PacketMetadata, PacketSession,
             PacketSessionHandle, PacketWriter,
@@ -287,6 +290,8 @@ mod tests {
         types::{Destination, Host, Network},
         ProxyError,
     };
+
+    use crate::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder};
 
     use super::PacketDispatcher;
 

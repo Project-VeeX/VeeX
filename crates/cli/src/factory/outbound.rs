@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use veex_config::{ProxyConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
 use veex_core::{
-    execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder},
     logging::Logger,
     portal::{Dial, OutboundMeta},
     ProxyError,
 };
+use veex_execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder};
 use veex_portal_outbound::direct::{
     build_dialer as build_direct_dialer, build_packet_dialer as build_direct_packet_dialer,
     DirectOutbound,

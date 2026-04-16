@@ -7,7 +7,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::task::JoinError;
 use tracing::debug;
 
-use crate::{error::ProxyError, io::BoxedAsyncStream};
+use veex_core::{io::BoxedAsyncStream, ProxyError};
 
 /// Byte transfer statistics for a relay session.
 ///
@@ -386,7 +386,7 @@ mod tests {
         map_join_result, relay_bidirectional, relay_bidirectional_with_trace, Direction,
         OneWayRelayError, RelayTraceContext,
     };
-    use crate::io::BoxedAsyncStream;
+    use veex_core::io::BoxedAsyncStream;
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     enum ReadStep {
@@ -510,7 +510,7 @@ mod tests {
 
         assert_eq!(err.stats.bytes_up, 4);
         assert_eq!(err.stats.bytes_down, 4);
-        assert_eq!(err.error.kind(), crate::ErrorKind::Relay);
+        assert_eq!(err.error.kind(), veex_core::ErrorKind::Relay);
     }
 
     #[tokio::test]
@@ -576,7 +576,7 @@ mod tests {
 
         assert_eq!(err.stats.bytes_up, 4);
         assert_eq!(err.stats.bytes_down, 4);
-        assert_eq!(err.error.kind(), crate::ErrorKind::Relay);
+        assert_eq!(err.error.kind(), veex_core::ErrorKind::Relay);
     }
 
     #[tokio::test]
@@ -593,7 +593,7 @@ mod tests {
 
         assert_eq!(err.partial_bytes, 0);
         assert_eq!(err.direction, "upstream_task");
-        assert_eq!(err.error.kind(), crate::ErrorKind::Relay);
+        assert_eq!(err.error.kind(), veex_core::ErrorKind::Relay);
         assert!(
             err.error
                 .to_string()
@@ -622,6 +622,6 @@ mod tests {
         assert_eq!(err.stats.bytes_down, 0);
         assert_eq!(err.direction, "downstream_read");
         assert!(!err.has_half_close);
-        assert_eq!(err.error.kind(), crate::ErrorKind::Relay);
+        assert_eq!(err.error.kind(), veex_core::ErrorKind::Relay);
     }
 }

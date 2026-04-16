@@ -2,13 +2,10 @@ use std::sync::Arc;
 
 use thiserror::Error;
 use veex_config::ProxyConfig;
-use veex_core::{
-    execution::{
-        OutboundRegistry, PacketDispatch, PacketDispatcher, RoutedPacketDispatch,
-        RoutedStreamDispatch, StreamDispatch, StreamDispatcher,
-    },
-    portal::Inbound,
-    ProxyError,
+use veex_core::{portal::Inbound, ProxyError};
+use veex_execution::{
+    OutboundRegistry, PacketDispatch, PacketDispatcher, RoutedPacketDispatch, RoutedStreamDispatch,
+    StreamDispatch, StreamDispatcher,
 };
 
 use crate::factory::{
