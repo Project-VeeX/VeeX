@@ -17,7 +17,7 @@ use veex_core::{
     Destination, Dial, Host, Logger, Network, OutboundMeta, ProxyOutbound, SessionContext,
     SessionMeta,
 };
-use veex_outbound_trojan::{
+use veex_portal_outbound::trojan::{
     build_dialer, build_trojan_request, system_host_resolver, TrojanOutbound,
 };
 use veex_transport::TlsClientOptions;

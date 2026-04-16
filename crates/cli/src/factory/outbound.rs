@@ -5,11 +5,11 @@ use veex_core::{
     Dial, ExecutionOutbound, Logger, OutboundMeta, OutboundRegistry, OutboundRegistryBuilder,
     ProxyError,
 };
-use veex_outbound_direct::{
+use veex_portal_outbound::direct::{
     build_dialer as build_direct_dialer, build_packet_dialer as build_direct_packet_dialer,
     DirectOutbound,
 };
-use veex_outbound_trojan::{build_dialer as build_trojan_dialer, TrojanOutbound};
+use veex_portal_outbound::trojan::{build_dialer as build_trojan_dialer, TrojanOutbound};
 
 use crate::factory::{lower_outbound, LoweredOutbound, RuntimeServices};
 

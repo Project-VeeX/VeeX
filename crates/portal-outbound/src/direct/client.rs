@@ -164,7 +164,9 @@ mod tests {
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
-    use crate::dialer::{build_dialer_with_connector, system_host_resolver, MarkedConnectorFuture};
+    use super::super::dialer::{
+        build_dialer_with_connector, system_host_resolver, MarkedConnectorFuture,
+    };
 
     use super::DirectOutbound;
 

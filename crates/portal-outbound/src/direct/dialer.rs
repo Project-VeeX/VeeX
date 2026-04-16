@@ -15,7 +15,7 @@ use veex_transport::{
     HostResolver, TcpAttemptConnector, TcpConnectOptions,
 };
 
-use crate::error::{
+use super::error::{
     io_error_with_context, last_os_error_with_context, validate_routing_mark_support,
 };
 

@@ -29,7 +29,7 @@ use veex_config::{
 };
 use veex_core::{read_dns_tcp_message, write_dns_tcp_message, Destination, ErrorKind, Host};
 use veex_dns::parse_query_domain;
-use veex_outbound_trojan::build_trojan_request;
+use veex_portal_outbound::trojan::build_trojan_request;
 use veex_test_tracing::{
     assert_event_has_fields, assert_has_event, captured_events, install_test_subscriber,
 };

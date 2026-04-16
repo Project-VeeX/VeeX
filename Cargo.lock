@@ -805,9 +805,8 @@ dependencies = [
  "veex-core",
  "veex-dns",
  "veex-observability",
- "veex-outbound-direct",
- "veex-outbound-trojan",
  "veex-portal-inbound",
+ "veex-portal-outbound",
  "veex-test-tracing",
  "veex-transport",
 ]
@@ -871,36 +870,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "veex-outbound-direct"
-version = "0.6.4"
-dependencies = [
- "libc",
- "socket2 0.5.10",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "veex-core",
- "veex-test-tracing",
- "veex-transport",
-]
-
-[[package]]
-name = "veex-outbound-trojan"
-version = "0.6.4"
-dependencies = [
- "rcgen",
- "rustls",
- "tokio",
- "tokio-rustls",
- "tracing",
- "tracing-subscriber",
- "veex-core",
- "veex-protocol",
- "veex-test-tracing",
- "veex-transport",
-]
-
-[[package]]
 name = "veex-portal-inbound"
 version = "0.6.4"
 dependencies = [
@@ -909,6 +878,24 @@ dependencies = [
  "tracing",
  "veex-core",
  "veex-infra-linux",
+]
+
+[[package]]
+name = "veex-portal-outbound"
+version = "0.6.4"
+dependencies = [
+ "libc",
+ "rcgen",
+ "rustls",
+ "socket2 0.5.10",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "tracing-subscriber",
+ "veex-core",
+ "veex-protocol",
+ "veex-test-tracing",
+ "veex-transport",
 ]
 
 [[package]]

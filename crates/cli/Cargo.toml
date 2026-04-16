@@ -18,8 +18,7 @@ veex-core = { path = "../core" }
 veex-dns = { path = "../dns" }
 veex-portal-inbound = { path = "../portal-inbound" }
 veex-observability = { path = "../observability" }
-veex-outbound-direct = { path = "../outbound-direct" }
-veex-outbound-trojan = { path = "../outbound-trojan" }
+veex-portal-outbound = { path = "../portal-outbound" }
 veex-transport = { path = "../transport" }
 tokio.workspace = true
 

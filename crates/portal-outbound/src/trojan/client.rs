@@ -16,7 +16,7 @@ use veex_protocol::{
 };
 use veex_transport::{connect_tls, ConnectTraceContext, TlsClientOptions};
 
-use crate::error::validate_trojan_client;
+use super::error::validate_trojan_client;
 
 type UpstreamAddr = Destination;
 
@@ -181,9 +181,9 @@ mod tests {
     };
     use veex_transport::{HostResolveRequest, TlsClientOptions};
 
+    use super::super::build_trojan_request;
+    use super::super::dialer::build_dialer_with_connector;
     use super::TrojanOutbound;
-    use crate::build_trojan_request;
-    use crate::dialer::build_dialer_with_connector;
 
     fn event_count(events: &[CapturedEvent], event_name: &str) -> usize {
         events
@@ -208,7 +208,7 @@ mod tests {
             Arc::new(move |_request: HostResolveRequest| {
                 Box::pin(async move { Ok(vec![bad_addr, good_addr]) })
             }),
-            crate::dialer::system_tcp_connector(),
+            super::super::dialer::system_tcp_connector(),
         );
         let outbound = TrojanOutbound::new(
             OutboundMeta::new("proxy", "trojan"),
@@ -312,7 +312,7 @@ mod tests {
             Arc::new(move |_request: HostResolveRequest| {
                 Box::pin(async move { Ok(vec![first, second]) })
             }),
-            crate::dialer::system_tcp_connector(),
+            super::super::dialer::system_tcp_connector(),
         );
         let outbound = TrojanOutbound::new(
             OutboundMeta::new("proxy", "trojan"),
