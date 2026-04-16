@@ -8,7 +8,7 @@ use veex_core::{
     TransparentInbound,
 };
 
-use crate::{
+use super::super::{
     common::{build_transparent_session, validate_transparent_inbound, TransparentInboundState},
     destination::{SocketTProxyDestinationProvider, TProxyDestinationProvider},
 };
@@ -195,8 +195,8 @@ mod tests {
         StreamDispatch,
     };
 
+    use super::super::super::{destination::TProxyDestinationProvider, tproxy::TProxyError};
     use super::TProxyInbound;
-    use crate::{destination::TProxyDestinationProvider, TProxyError};
 
     struct RecordingSink {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,

@@ -804,12 +804,10 @@ dependencies = [
  "veex-config",
  "veex-core",
  "veex-dns",
- "veex-inbound-direct",
- "veex-inbound-socks",
- "veex-inbound-transparent",
  "veex-observability",
  "veex-outbound-direct",
  "veex-outbound-trojan",
+ "veex-portal-inbound",
  "veex-test-tracing",
  "veex-transport",
 ]
@@ -851,36 +849,6 @@ dependencies = [
  "veex-infra-linux",
  "veex-test-tracing",
  "veex-transport",
-]
-
-[[package]]
-name = "veex-inbound-direct"
-version = "0.6.4"
-dependencies = [
- "tokio",
- "tracing",
- "veex-core",
- "veex-infra-linux",
-]
-
-[[package]]
-name = "veex-inbound-socks"
-version = "0.6.4"
-dependencies = [
- "thiserror",
- "tokio",
- "tracing",
- "veex-core",
-]
-
-[[package]]
-name = "veex-inbound-transparent"
-version = "0.6.4"
-dependencies = [
- "tokio",
- "tracing",
- "veex-core",
- "veex-infra-linux",
 ]
 
 [[package]]
@@ -930,6 +898,17 @@ dependencies = [
  "veex-protocol",
  "veex-test-tracing",
  "veex-transport",
+]
+
+[[package]]
+name = "veex-portal-inbound"
+version = "0.6.4"
+dependencies = [
+ "thiserror",
+ "tokio",
+ "tracing",
+ "veex-core",
+ "veex-infra-linux",
 ]
 
 [[package]]

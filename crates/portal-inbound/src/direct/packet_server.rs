@@ -7,7 +7,7 @@ use veex_core::{
     PacketListenerReceiveHandler, PacketMetadata, PacketWriter, ProxyError, Result,
 };
 
-use crate::common::{resolve_local_destination, validate_packet_inbound};
+use super::common::{resolve_local_destination, validate_packet_inbound};
 
 pub struct DirectUdpInbound {
     meta: InboundMeta,
@@ -172,8 +172,8 @@ mod tests {
         PacketFrame, PacketWriter,
     };
 
+    use super::super::create_direct_packet_listener;
     use super::DirectUdpInbound;
-    use crate::create_direct_packet_listener;
 
     struct RecordingPacketSink {
         tx: Mutex<Option<oneshot::Sender<PacketFrame>>>,

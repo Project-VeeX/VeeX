@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use veex_core::{Destination, Host, InboundMeta, Listener, PacketListener, ProxyError, Result};
 
-use crate::DirectError;
+use super::error::DirectError;
 
 pub(super) fn validate_stream_inbound(
     meta: &InboundMeta,

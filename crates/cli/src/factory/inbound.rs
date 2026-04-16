@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use veex_config::ProxyConfig;
 use veex_core::{Inbound, PacketDispatch, ProxyError, StreamDispatch};
-use veex_inbound_direct::{
-    create_direct_packet_listener, create_direct_stream_listener, DirectInbound, DirectUdpInbound,
+use veex_portal_inbound::direct::{create_direct_packet_listener, create_direct_stream_listener};
+use veex_portal_inbound::socks::create_socks_listener;
+use veex_portal_inbound::transparent::{
+    create_redirect_stream_listener, create_tproxy_stream_listener,
 };
-use veex_inbound_socks::{create_socks_listener, SocksInbound};
-use veex_inbound_transparent::{
-    create_redirect_stream_listener, create_tproxy_stream_listener, RedirectInbound, TProxyInbound,
+use veex_portal_inbound::{
+    DirectInbound, DirectUdpInbound, RedirectInbound, SocksInbound, TProxyInbound,
 };
 
 use crate::factory::{lower_inbound, LoweredDirectNetwork, LoweredInbound};

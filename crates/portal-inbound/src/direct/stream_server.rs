@@ -14,7 +14,7 @@ use veex_core::{
     SessionBootstrap, StreamDispatch, StreamInbound,
 };
 
-use crate::common::{resolve_stream_destination, validate_stream_inbound};
+use super::common::{resolve_stream_destination, validate_stream_inbound};
 
 struct DirectInboundState {
     next_session_id: AtomicU64,

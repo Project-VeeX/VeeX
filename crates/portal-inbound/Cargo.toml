@@ -1,10 +1,11 @@
 [package]
-name = "veex-inbound-direct"
+name = "veex-portal-inbound"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 veex-core = { path = "../core" }

@@ -2,7 +2,7 @@ use tokio::net::TcpStream;
 use veex_core::Destination;
 use veex_infra_linux::{get_original_dst, get_tproxy_dst};
 
-use crate::{RedirectError, TProxyError};
+use super::{redirect::RedirectError, tproxy::TProxyError};
 
 pub(crate) trait RedirectDestinationProvider: Send + Sync {
     fn destination_from_stream(

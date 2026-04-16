@@ -8,7 +8,7 @@ use veex_core::{
     TransparentInbound,
 };
 
-use crate::{
+use super::super::{
     common::{build_transparent_session, validate_transparent_inbound, TransparentInboundState},
     destination::{RedirectDestinationProvider, SocketRedirectDestinationProvider},
 };
@@ -176,11 +176,11 @@ mod tests {
         StreamDispatch,
     };
 
-    use super::RedirectInbound;
-    use crate::{
+    use super::super::super::{
         destination::{RedirectDestinationProvider, SocketRedirectDestinationProvider},
-        RedirectError,
+        redirect::RedirectError,
     };
+    use super::RedirectInbound;
 
     struct RecordingSink {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,

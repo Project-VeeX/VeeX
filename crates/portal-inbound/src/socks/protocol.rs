@@ -6,7 +6,7 @@ use tokio::{
 };
 use veex_core::Destination;
 
-use crate::{
+use super::{
     codec::{
         decode_greeting, decode_request, encode_method_selection, encode_reply, Command, ReplyCode,
         NO_ACCEPTABLE_METHODS, NO_AUTHENTICATION,
@@ -184,8 +184,8 @@ mod tests {
         net::{TcpListener, TcpStream},
     };
 
+    use super::super::codec::Command;
     use super::establish_socks_stream;
-    use crate::codec::Command;
 
     #[tokio::test]
     async fn establish_socks_stream_returns_standardized_result() {

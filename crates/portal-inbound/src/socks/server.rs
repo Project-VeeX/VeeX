@@ -14,7 +14,10 @@ use veex_core::{
     StreamDispatch, StreamInbound,
 };
 
-use crate::protocol::{establish_socks_stream, SocksProtocolError};
+use super::{
+    codec::Command,
+    protocol::{establish_socks_stream, SocksProtocolError},
+};
 
 struct SocksInboundState {
     next_session_id: AtomicU64,
@@ -99,7 +102,7 @@ impl SocksInbound {
             ProxyError::from(err.into_inner())
         })?;
         let command = match established.command {
-            crate::codec::Command::Connect => "connect",
+            Command::Connect => "connect",
         };
 
         let session = self.bootstrap_session(peer, established.destination);

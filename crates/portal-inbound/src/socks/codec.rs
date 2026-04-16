@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use veex_core::{Destination, Host};
 
-use crate::error::SocksError;
+use super::error::SocksError;
 
 pub const SOCKS_VERSION: u8 = 0x05;
 pub const NO_AUTHENTICATION: u8 = 0x00;
