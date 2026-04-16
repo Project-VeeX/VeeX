@@ -22,7 +22,7 @@ struct DirectOutboundState {
 pub struct DirectOutbound {
     meta: OutboundMeta,
     logger: Logger,
-    stream_dialer: Dialer,
+    dialer: Dialer,
     packet_dialer: PacketDialer,
     state: Arc<DirectOutboundState>,
 }
@@ -32,7 +32,7 @@ impl fmt::Debug for DirectOutbound {
         f.debug_struct("DirectOutbound")
             .field("meta", &self.meta)
             .field("logger", &self.logger)
-            .field("stream_dialer", &self.stream_dialer)
+            .field("dialer", &self.dialer)
             .field("packet_dialer", &self.packet_dialer)
             .finish()
     }
@@ -42,13 +42,13 @@ impl DirectOutbound {
     pub fn new(
         meta: OutboundMeta,
         logger: Logger,
-        stream_dialer: Dialer,
+        dialer: Dialer,
         packet_dialer: PacketDialer,
     ) -> Result<Self> {
         let outbound = Self {
             meta,
             logger,
-            stream_dialer,
+            dialer,
             packet_dialer,
             state: Arc::new(DirectOutboundState {
                 closed: AtomicBool::new(false),
@@ -71,6 +71,41 @@ impl DirectOutbound {
 
     fn is_closed(&self) -> bool {
         self.state.closed.load(Ordering::Relaxed)
+    }
+
+    fn connect_upstream_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        let destination = ctx.meta.destination.clone();
+        let dialer = self.dialer.clone();
+        let trace = self.dialer.context(ctx, self.meta.tag.clone());
+        let closed = self.is_closed();
+
+        Box::pin(async move {
+            if closed {
+                return Err(ProxyError::Shutdown);
+            }
+            let stream = dialer
+                .connect(&destination.host, destination.port, trace)
+                .await?;
+
+            Ok(Box::new(stream) as BoxedAsyncStream)
+        })
+    }
+
+    fn connect_upstream_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
+        let destination = ctx.meta.destination.clone();
+        let dialer = self.packet_dialer.clone();
+        let trace = self.packet_dialer.context(ctx, self.meta.tag.clone());
+        let closed = self.is_closed();
+
+        Box::pin(async move {
+            if closed {
+                return Err(ProxyError::Shutdown);
+            }
+
+            dialer
+                .connect(&destination.host, destination.port, trace)
+                .await
+        })
     }
 }
 
@@ -96,44 +131,17 @@ impl Outbound for DirectOutbound {
 
 impl StreamOutbound for DirectOutbound {
     fn connect_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
-        let destination = ctx.meta.destination.clone();
-        let dialer = self.stream_dialer.clone();
-        let trace = self.stream_dialer.context(ctx, self.meta.tag.clone());
-        let closed = self.is_closed();
-
-        Box::pin(async move {
-            if closed {
-                return Err(ProxyError::Shutdown);
-            }
-            let stream = dialer
-                .connect(&destination.host, destination.port, trace)
-                .await?;
-
-            Ok(Box::new(stream) as BoxedAsyncStream)
-        })
+        self.connect_upstream_stream(ctx)
     }
 }
 
 impl ExecutionOutbound for DirectOutbound {
     fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
-        StreamOutbound::connect_stream(self, ctx)
+        self.connect_upstream_stream(ctx)
     }
 
     fn open_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
-        let destination = ctx.meta.destination.clone();
-        let dialer = self.packet_dialer.clone();
-        let trace = self.packet_dialer.context(ctx, self.meta.tag.clone());
-        let closed = self.is_closed();
-
-        Box::pin(async move {
-            if closed {
-                return Err(ProxyError::Shutdown);
-            }
-
-            dialer
-                .connect(&destination.host, destination.port, trace)
-                .await
-        })
+        self.connect_upstream_packet(ctx)
     }
 }
 
@@ -150,7 +158,8 @@ mod tests {
         time::sleep,
     };
     use veex_core::{
-        Destination, Dial, Dialer, Host, Logger, Network, Outbound, OutboundMeta, PacketDialer,
+        BoxFuture, Destination, Dial, DialContext, Dialer, ExecutionOutbound, Host, Logger,
+        Network, Outbound, OutboundMeta, PacketDialer, PacketSession, PacketSessionHandle,
         SessionContext, SessionMeta, StreamOutbound,
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
@@ -171,6 +180,19 @@ mod tests {
                 Box::pin(async { Err(veex_core::ProxyError::Shutdown) })
             }),
         )
+    }
+
+    #[derive(Default)]
+    struct TestPacketSession;
+
+    impl PacketSession for TestPacketSession {
+        fn send_packet(&self, _payload: Vec<u8>) -> BoxFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn recv_packet(&self) -> BoxFuture<'_, Vec<u8>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
     }
 
     #[test]
@@ -409,5 +431,138 @@ mod tests {
                 ("level", "WARN"),
             ],
         );
+    }
+
+    #[tokio::test]
+    async fn direct_outbound_open_packet_uses_packet_dialer_directly() {
+        #[derive(Debug, Clone, Eq, PartialEq)]
+        struct PacketDialCall {
+            host: Host,
+            port: u16,
+            outbound_tag: String,
+        }
+
+        let dialer = Dialer::new(
+            Dial {
+                detour: None,
+                connect_timeout: Some(Duration::from_secs(1)),
+                routing_mark: None,
+                domain_resolver: None,
+            },
+            Arc::new(|_host, _port, _dial, _ctx| {
+                Box::pin(async { Err(veex_core::ProxyError::Shutdown) })
+            }),
+        );
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let recorded_calls = Arc::clone(&calls);
+        let packet_dialer = PacketDialer::new(
+            Dial {
+                detour: None,
+                connect_timeout: Some(Duration::from_secs(1)),
+                routing_mark: None,
+                domain_resolver: None,
+            },
+            Arc::new(move |host, port, _dial, ctx: DialContext| {
+                let recorded_calls = Arc::clone(&recorded_calls);
+                Box::pin(async move {
+                    recorded_calls
+                        .lock()
+                        .expect("packet call mutex should lock")
+                        .push(PacketDialCall {
+                            host,
+                            port,
+                            outbound_tag: ctx.outbound_tag,
+                        });
+                    Ok(Arc::new(TestPacketSession) as PacketSessionHandle)
+                })
+            }),
+        );
+        let direct = DirectOutbound::new(
+            OutboundMeta::new("direct", "direct"),
+            Logger::new("direct", "direct"),
+            dialer,
+            packet_dialer,
+        )
+        .expect("direct should build");
+        let ctx = SessionContext::new(
+            SessionMeta {
+                id: 4,
+                network: Network::Udp,
+                inbound_tag: "direct-in".into(),
+                peer: "127.0.0.1:30001".parse().expect("peer addr should parse"),
+                destination: Destination::new(Host::Domain("example.com".into()), 53),
+                start: Instant::now(),
+            },
+            Vec::new(),
+        );
+
+        direct
+            .open_packet(&ctx)
+            .await
+            .expect("direct should open packet session");
+
+        assert_eq!(
+            calls
+                .lock()
+                .expect("packet call mutex should lock")
+                .as_slice(),
+            &[PacketDialCall {
+                host: Host::Domain("example.com".into()),
+                port: 53,
+                outbound_tag: "direct".into(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn closing_direct_outbound_blocks_packet_execution() {
+        let dialer = Dialer::new(
+            Dial {
+                detour: None,
+                connect_timeout: Some(Duration::from_secs(1)),
+                routing_mark: None,
+                domain_resolver: None,
+            },
+            Arc::new(|_host, _port, _dial, _ctx| {
+                Box::pin(async { Err(veex_core::ProxyError::Shutdown) })
+            }),
+        );
+        let packet_dialer = PacketDialer::new(
+            Dial {
+                detour: None,
+                connect_timeout: Some(Duration::from_secs(1)),
+                routing_mark: None,
+                domain_resolver: None,
+            },
+            Arc::new(|_host, _port, _dial, _ctx| {
+                Box::pin(async { Ok(Arc::new(TestPacketSession) as PacketSessionHandle) })
+            }),
+        );
+        let direct = DirectOutbound::new(
+            OutboundMeta::new("direct", "direct"),
+            Logger::new("direct", "direct"),
+            dialer,
+            packet_dialer,
+        )
+        .expect("direct should build");
+        direct.close().await.expect("direct close should succeed");
+        let ctx = SessionContext::new(
+            SessionMeta {
+                id: 5,
+                network: Network::Udp,
+                inbound_tag: "direct-in".into(),
+                peer: "127.0.0.1:30002".parse().expect("peer addr should parse"),
+                destination: Destination::new(Host::Ip("127.0.0.1".parse().unwrap()), 53),
+                start: Instant::now(),
+            },
+            Vec::new(),
+        );
+
+        let err = match direct.open_packet(&ctx).await {
+            Ok(_) => panic!("packet execution should observe shutdown"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), veex_core::ErrorKind::Shutdown);
     }
 }
