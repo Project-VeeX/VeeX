@@ -1,21 +1,51 @@
 # VeeX
 
-VeeX is a Rust proxy core for OpenWrt-class and Linux router environments. It focuses on a narrow execution plane for explicit proxy and transparent proxy deployments, with a deliberately small scope.
+VeeX is a Rust proxy core for OpenWrt-class and Linux router environments. It accepts a minimal sing-box-compatible JSON configuration subset and implements a deliberately narrow proxy execution surface rather than a full networking platform.
+
+The current deployment shape is:
+
+```text
+direct | socks | redirect | tproxy
+    -> VeeX
+    -> direct | trojan
+```
+
+## Current Surface
+
+- Inbounds:
+  - `direct` for TCP and minimal UDP packet ingress
+  - `socks`
+  - `redirect`
+  - `tproxy` for TCP stream ingress
+- Outbounds:
+  - `direct`
+  - `trojan`
+- Routing:
+  - ordered `route.rules`
+  - `action="sniff"` as an upgrade action
+  - `action="hijack-dns"` as a final action
+  - default `route.final`
+- Connect behavior:
+  - sequential multi-address fallback
+  - stage-specific TCP connect and TLS handshake timeouts
+- DNS:
+  - an internal DNS executor
+  - local, UDP, TCP, TLS, and HTTPS upstreams
+  - upstream access via outbound detour capability
+- CLI:
+  - `veex run`
+  - `veex check`
+  - `veex version`
 
 ## Scope
 
-- inbound: `direct`, `socks`, `redirect`, `tproxy` (TCP only)
-- outbound: `trojan`, `direct`
-- route: ordered `route.rules` pipeline, `action="sniff"` upgrades, `action="hijack-dns"`, and default `route.final`
-- connect: sequential multi-address fallback
-- interface: `veex run`, `veex check`, `veex version`
-- config: minimal sing-box-compatible JSON subset
+At the execution layer, VeeX has explicit stream and packet paths. When both paths exist for a capability, documentation should treat them as peer execution paths rather than as a primary path plus an appendix.
 
-Transparent-proxy recursion prevention is explicit now: VeeX does not auto-insert private/local or upstream-server direct rules. If a deployment needs those exceptions, define them yourself in `route.rules`.
+The current public component surface is still asymmetric: stream support is broader than packet support. Packet support is intentionally narrow today, centered on direct packet ingress and egress plus the DNS paths built on top of that foundation.
 
-VeeX is aimed at OpenWrt, ImmortalWrt, and other Linux router-oriented environments where a small execution plane is needed for `direct`, `socks`, `redirect`, or `tproxy` traffic that must reach `direct` or `trojan` outbounds. The current surface is still stream-first, with a minimal UDP packet path available for `direct-in -> direct-out`, plus a first DNS subsystem slice for `dns-in -> hijack-dns -> UDP/TCP/TLS/HTTPS upstream via detour outbound`, with TCP or UDP ingress selected by ordinary `direct` inbound routing. It is intended for operators, integrators, and downstream projects that need a CLI proxy core rather than a full network platform.
+Transparent proxy support is treated as explicit ingress handling, not as a hidden policy system. VeeX does not auto-insert private, local, or upstream-exception direct rules. If a deployment needs those exceptions, define them explicitly in `route.rules`.
 
-VeeX is not the right fit when the requirement is a full DNS platform, generalized UDP proxying, TUN, or a general routing platform. This repository is also limited to the core itself; OpenWrt packaging, `procd`, and LuCI integration belong outside this repository.
+This repository is not a full DNS platform, a generalized UDP proxy stack, a TUN implementation, or a general routing system. OpenWrt packaging, `procd`, and LuCI integration are outside this repository.
 
 ## Quick Start
 
@@ -49,9 +79,9 @@ Example configs:
 
 ## Docs
 
-- `docs/architecture.md` for the public architecture and current boundaries
-- `docs/roadmap.md` for phase history, current stage, and evolution direction
-- `docs/observability.md` for the public observability and error-model whitepaper
+- `docs/architecture.md` for the public architecture and capability boundaries
+- `docs/roadmap.md` for current priorities and future-direction constraints
+- `docs/observability.md` for observability and error-model guarantees
 - `CHANGELOG.md` for release-by-release deltas
 
 ## License

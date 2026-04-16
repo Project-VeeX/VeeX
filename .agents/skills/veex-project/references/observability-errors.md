@@ -6,7 +6,7 @@ The canonical public document is `docs/observability.md`. This file keeps only t
 
 ## Core Contract
 
-- `tracing` is the structured observability backbone for the current TCP execution path.
+- `tracing` is the structured observability backbone for the current execution model across stream and packet paths, even though stage coverage is richer on some paths than on others.
 - `ProxyError` remains the cross-crate runtime error boundary.
 - `ErrorKind` remains the stable failure-classification contract for runtime diagnostics and session summaries.
 - crate-local typed errors are allowed, but runtime boundaries still converge to `ProxyError`.

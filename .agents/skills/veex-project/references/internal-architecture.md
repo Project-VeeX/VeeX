@@ -177,5 +177,5 @@ Before accepting a design or patch, ask:
 - Does this preserve the single ordered rule pipeline?
 - Does this keep responsibilities in the correct layer?
 - Does this introduce hidden behavior?
-- Does this widen scope beyond the current TCP execution-plane target?
+- Does this widen scope beyond the current proxy execution target or reintroduce a fake hierarchy between stream and packet where the code already supports both?
 - Does this weaken tracing or error explainability?

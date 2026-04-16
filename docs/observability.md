@@ -17,7 +17,7 @@ The public observability model answers four questions:
 
 ## 2. Public Observability Model
 
-VeeX uses structured tracing for its main execution path. The current baseline is intentionally simple:
+VeeX uses structured tracing across its execution model. The current baseline is intentionally simple:
 
 - structured events with stable names
 - stable core fields for session and transport diagnostics
@@ -27,7 +27,7 @@ This document does not promise JSON logging, metrics export, file appenders, or 
 
 ## 3. Session Lifecycle Visibility
 
-The execution path is observable as a sequence of stages:
+The execution model is observable as a sequence of stages. Some stages are stream-specific, some are packet-specific, and some are shared:
 
 | Stage | What operators should be able to see |
 | --- | --- |
@@ -35,8 +35,8 @@ The execution path is observable as a sequence of stages:
 | route selection | which outbound was chosen and why |
 | sniff | whether routing context was enriched, timed out, or produced no match |
 | connect | which resolved address was attempted and whether it succeeded |
-| TLS | whether handshake setup succeeded or failed |
-| relay | whether data transfer completed normally or failed mid-stream |
+| TLS | whether handshake setup succeeded or failed on stream paths that use TLS |
+| relay or packet forwarding | whether stream transfer or packet forwarding completed normally or failed |
 | session finish | whether the session succeeded and how much traffic was observed |
 
 The intent is stage clarity, not log volume for its own sake.
@@ -143,7 +143,7 @@ The current observability whitepaper deliberately does not define:
 - a kernel-bypass observability layer
 - generalized observability for unsupported features outside the current VeeX scope
 
-VeeX focuses on making the existing execution plane observable before widening into larger telemetry systems.
+VeeX focuses on making the existing execution surface observable before widening into larger telemetry systems.
 
 ## 9. Validation Boundary
 
@@ -160,7 +160,7 @@ Public documentation should not overstate closure beyond the evidence actually r
 
 ## 10. Summary
 
-VeeX observability is designed around stage visibility, stable error classification, and production-facing diagnostics for router-oriented TCP execution paths.
+VeeX observability is designed around stage visibility, stable error classification, and production-facing diagnostics for router-oriented stream and packet execution paths.
 
 In one sentence:
 

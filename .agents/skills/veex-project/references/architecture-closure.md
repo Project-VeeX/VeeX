@@ -40,20 +40,21 @@ Outbound dialing keeps the default connect path simple:
 
 ## Lifecycle Direction
 
-Keep top-level service traits thin, but let protocol objects remain the stable runtime owners of their own minimal lifecycle.
+Keep top-level service traits thin, but let component objects remain the stable runtime owners of their own minimal lifecycle.
 
 In particular:
 
 - `Inbound` and `Outbound` may own only `meta` / `logger` / `start` / `close` style lifecycle surface
 - protocol execution behavior should stay in execution-model-specific traits such as `StreamInbound`, `TransparentInbound`, `StreamOutbound`, and `ProxyOutbound`, rather than a single mega trait
-- runtime should keep registry and start/close orchestration, but should not pull protocol state back out of protocol objects
-- listener handlers should bind during protocol construction rather than via start-time callback injection
+- runtime should keep registry and start/close orchestration, but should not pull long-lived component state back out of component objects
+- listener handlers should bind during component construction rather than via start-time callback injection
 - route and dispatcher views must reference the same outbound objects that runtime starts and closes
-- inbound protocol objects should depend on a narrow request-submission view (`InboundSink`) rather than `Dispatcher` directly
-- dispatcher should execute selected outbounds through a narrow dispatcher-facing view (`OutboundConnector`) rather than protocol-family matching
+- inbound components should hand sessions to `StreamDispatch` or `PacketDispatch` rather than reaching into dispatcher internals
+- dispatcher should execute selected outbounds through `ExecutionOutbound`, not through protocol-family matching or ad hoc runtime enums
 - `OutboundRegistry` is the sole outbound holder; do not recreate separate runtime, routing, or dispatcher copies
-- transparent destination recovery should stay in protocol-specific capability objects rather than `Listener`
+- transparent destination recovery should stay in component-specific destination providers rather than `Listener`
 - normalized trojan runtime state should prefer upstream address + key + TLS capability over raw config bags
+- shared `veex-protocol` currently means generic adapter types plus Trojan adapter logic; do not assume that every architectural protocol step must live in that crate
 - do not introduce public `struct Inbound` / `struct Outbound` base carriers just to centralize fields
 - do not add health, reload, or control-plane callback buses to the protocol traits just for convenience
 
@@ -65,7 +66,7 @@ Keep these rules:
 
 - `Listener` owns bind / accept / spawn / close and does not own protocol parsing, routing, or protocol-specific state machines
 - `Dialer` owns generic connect semantics such as timeout and routing mark, and does not own handshake or protocol framing
-- runtime protocol objects should keep only the normalized runtime fields they still actively use
+- component objects should keep only the normalized runtime fields they still actively use
 
 ## Relay Direction
 
@@ -84,7 +85,7 @@ Do not generalize configuration surfaces earlier than needed.
 
 Keep config abstractions aligned with actual consumers, and do not widen them only because a future shape is imaginable.
 
-Lower parse-time config aggregates before protocol construction. Runtime protocol objects should keep normalized runtime fields, not raw `*Options` bags.
+Lower parse-time config aggregates before component construction. Runtime component objects should keep normalized runtime fields, not raw `*Options` bags.
 
 ## Config Parse Direction
 
@@ -107,7 +108,7 @@ This separation is intentional. Do not collapse `preflight` and `serde` back int
 
 ## Observability Direction
 
-`tracing` is the structured observability backbone for the main TCP execution path. This is a closed decision.
+`tracing` is the structured observability backbone for the execution model across stream and packet paths. This is a closed decision.
 
 - Text output via `tracing-subscriber` is the current baseline; do not assume JSON logging, file appenders, metrics, or OpenTelemetry exist
 - Structured tracing fields are preferred over hand-built `key=value` strings on the hot path

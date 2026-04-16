@@ -6,7 +6,7 @@
 
 ## 1. Current Position
 
-As of the current repository state (`0.5.3`), VeeX has established a narrow but usable TCP execution-plane baseline for router-oriented environments, plus a first-stage UDP packet foundation and the first DNS-subsystem slice built on that foundation.
+As of the current repository state (`0.6.5`), VeeX has established an explicit stream/packet execution baseline for router-oriented environments, plus a still-narrow packet component surface and a DNS runtime slice built on top of that packet foundation.
 
 That baseline includes:
 
@@ -20,7 +20,7 @@ That baseline includes:
 - local UDP system-resolver queries plus UDP, TCP, DoT, or DoH DNS upstream queries
 - structured observability and stable error classification
 
-The project priority remains consolidation and validation of this execution plane rather than expansion into a broader network platform.
+The current priority remains consolidation and validation of this execution surface rather than expansion into a broader network platform.
 
 ## 2. Completed Phases
 
@@ -95,7 +95,7 @@ The current roadmap remains focused on tightening the existing surface:
 - real-device transparent-proxy validation, especially for `tproxy`, `routing_mark`, and `fw4/nft`
 - keeping config contract, examples, tests, and public docs aligned
 - preserving router, transport, and observability boundaries while implementation quality improves
-- continuing to harden the existing TCP path and the new minimal UDP packet path rather than broadening scope prematurely
+- continuing to harden the existing stream and packet execution paths, while acknowledging that the current packet-facing component surface is still narrower than the stream-facing surface
 
 ## 4. Out Of Scope For The Current Roadmap
 
@@ -121,16 +121,16 @@ Under those conditions, future discussion may include:
 
 - a richer but still explicit route matching or action surface
 - stronger sniff-assisted routing within the current model
-- incremental capabilities that still fit the current execution-plane role, including wider DNS support built on top of the packet foundation
+- incremental capabilities that still fit the current execution role, including wider DNS support built on top of the packet foundation
 
 ## 6. Summary
 
-VeeX is still in a consolidation phase: the main work is to harden, validate, and clarify the existing TCP path and the first-stage UDP packet foundation rather than to widen the project into a larger networking system.
+VeeX is still in a consolidation phase: the main work is to harden, validate, and clarify the existing stream and packet execution model, while keeping the packet-facing component surface intentionally narrow rather than widening the project into a larger networking system.
 
 In one sentence:
 
 ```text
-VeeX is prioritizing consolidation of its stream path and minimal packet path over broad platform expansion.
+VeeX is prioritizing consolidation of its stream/packet execution model and its narrow current packet surface over broad platform expansion.
 ```
 
 ## 7. Related Documents

@@ -82,18 +82,19 @@ Do not trigger this skill for:
 
 ## Gotchas
 
-- Do not describe VeeX as a full sing-box replacement. The current role is a TCP execution plane for OpenWrt-class proxy paths.
+- Do not describe VeeX as a full sing-box replacement. The current role is a proxy execution core for OpenWrt-class proxy paths, with explicit stream and packet execution paths and a deliberately narrow current packet and DNS surface.
 - Do not move OpenWrt packaging, `procd`, or LuCI integration back into this repository. The main repo owns Rust core, CLI, config, tests, and docs.
 - Do not confuse "unknown fields are ignored" with "the feature is implemented". Ignored and supported are different states.
 - Do not push Linux transparent-socket details back into `crates/core`; `core` must stay platform-agnostic.
 - Do not reuse the same mark for `tproxy` interception and `direct.routing_mark`; they serve different purposes.
 - Do not treat `listen="::"`, dual-stack behavior, or IPv4-mapped-IPv6 as edge cases. They are first-class real-world paths in this project.
+- Do not treat `portal-inbound` or `portal-outbound` as architecture layers. They are component aggregation crates inside the portal layer.
 
 ## Resource Navigation
 
 - `references/project-positioning.md`: product role, supported surface, non-goals, and repository boundary.
 - `docs/architecture.md`: public architecture, stable external boundary, and current capability framing.
-- `docs/roadmap.md`: phase history, current stage, and evolution direction.
+- `docs/roadmap.md`: current priorities, roadmap direction, and scope constraints for future expansion.
 - `references/repo-map.md`: workspace structure, crate ownership, landing zones, and dependency constraints.
 - `references/observability-errors.md`: current error-model closure, tracing baseline, and observability constraints.
 - `references/source-map.md`: stable sources, examples, and internal persistent references.

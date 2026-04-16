@@ -1,116 +1,284 @@
 # VeeX Architecture Whitepaper
 
 > Public architecture whitepaper for VeeX.
-> Focuses on the current execution model, capability boundary, and stable design semantics.
-> For phase history and roadmap, see `docs/roadmap.md`. For observability and error-model principles, see `docs/observability.md`.
+> Focuses on the current capability boundary, stable execution model, and implementation-independent terminology.
+> For roadmap direction, see `docs/roadmap.md`. For observability and error-model principles, see `docs/observability.md`.
 
 ## 1. Overview
 
-VeeX is a Rust execution core for OpenWrt-class and Linux router environments. Its role is intentionally narrow: provide a correct and observable TCP data plane plus a minimal UDP packet foundation for explicit-proxy and transparent-proxy-adjacent deployments.
+VeeX is a Rust proxy core for OpenWrt-class and Linux router environments. It accepts a minimal sing-box-compatible JSON configuration subset and implements a deliberately narrow proxy execution surface.
 
-The target topology is:
+The current deployment shape is:
 
 ```text
-SOCKS / REDIRECT / TPROXY
+direct | socks | redirect | tproxy
     -> VeeX
     -> direct | trojan
 ```
 
-VeeX is not designed to be a full proxy platform, a DNS system, or a general network policy engine.
+VeeX is not a full networking platform, a general-purpose DNS platform, or a generalized UDP proxy stack.
 
-## 2. Design Principles
+## 2. Layer And Pipeline
 
-### 2.1 Minimal Yet Correct
+VeeX documentation distinguishes between `Layer` and `Pipeline`.
 
-VeeX prefers a small, reliable capability surface over broad feature coverage. The current project deliberately focuses on:
+### 2.1 Layer
 
-- TCP ingress and egress
-- a minimal UDP packet execution path for `direct` inbound to `direct` outbound
-- explicit routing decisions
-- bounded context enrichment
-- connection execution
-- structured observability
-
-### 2.2 Single Source Of Truth
-
-Each responsibility belongs to one layer:
-
-| Capability | Owning layer |
-| --- | --- |
-| configuration parsing | config |
-| runtime orchestration | runtime / cli |
-| route decision | router |
-| outbound execution | outbound |
-| connection setup | transport |
-| stream forwarding | relay |
-
-This keeps behavior explainable and avoids hidden policy spread across multiple layers.
-
-### 2.3 Explicit Behavior
-
-VeeX does not rely on implicit policy injection for routing. Direct-routing exceptions, private-network handling, and upstream recursion prevention must be expressed explicitly in configuration.
-
-### 2.4 Observability First
-
-The architecture assumes that key execution stages must remain visible and explainable. Routing, sniff, connect, TLS, and relay are treated as distinct stages with distinct diagnostics.
-
-## 3. System Architecture
-
-The main stream data path is:
+Layer describes capability ownership.
 
 ```text
-Inbound
--> StreamDispatcher
--> Router
--> Outbound
--> Transport (TCP / TLS)
--> Relay
+portal
+  -> [protocol]
+  -> transport
+  -> execution
 ```
 
-The current minimal packet data path is:
+`protocol` is optional. Direct components do not pass through it.
+
+### 2.2 Pipeline
+
+Pipeline describes runtime execution order for a specific component path.
+
+Example outbound pipelines:
+
+- Trojan outbound:
 
 ```text
-Direct UDP Inbound
--> PacketDispatcher
--> Router
--> Outbound
--> Packet session
--> Reverse packet path
+dial -> tls -> protocol establish
 ```
+
+- Direct outbound:
+
+```text
+dial
+```
+
+Layer and Pipeline are intentionally different concepts. A crate layout also does not define a Layer on its own.
+
+## 3. Core Capability Boundary
 
 At a high level:
 
-| Component | Role |
+| Capability | Current owner |
 | --- | --- |
-| config | parse and validate the supported configuration surface |
-| runtime | build services and own process lifecycle |
-| router | evaluate ordered route rules and produce a route result |
-| sniff | enrich routing context without changing destination semantics |
-| outbound | execute the selected outbound behavior |
-| transport | perform TCP connect and optional TLS handshake |
-| relay | forward bytes between inbound and outbound streams |
-| packet dispatcher | maintain UDP associations, outbound packet sessions, and reverse packet flow |
+| config parsing and validation | `config` |
+| runtime assembly and lifecycle | `cli` |
+| route decision | `core::router` |
+| stream execution | `core::execution::stream` |
+| packet execution | `core::execution::packet` |
+| transport connect and TLS | `transport` |
+| shared outbound protocol adapter surface | `protocol` |
+| inbound components | `portal-inbound` |
+| outbound components | `portal-outbound` |
+| DNS runtime | `dns` |
 
-The current runtime ownership model is intentionally simple:
+The current workspace structure includes `core`, `transport`, `protocol`, `portal-inbound`, `portal-outbound`, `dns`, `infra-linux`, `observability`, `cli`, and `config`.
 
-- protocol objects are the stable runtime owners of their own listener or dialer, protocol state, and lifecycle
-- runtime and factory construct, register, start, and close services, but do not duplicate protocol state
-- configuration input is lowered before protocol construction; runtime protocol objects keep runtime fields rather than raw input option bags
+## 4. Execution
 
-The current runtime skeleton is also intentionally layered:
+Execution is an explicit dual-plane model:
 
-- top-level `Inbound` and `Outbound` traits stay thin and lifecycle-oriented
-- execution-model traits separate protocol families rather than collapsing all behavior into one mega trait
-- inbound protocol objects submit normalized execution requests through a narrow sink view (`InboundSink`) rather than depending on dispatcher internals directly
-- dispatcher stays thin: route still selects an outbound tag, dispatcher resolves that tag through a single outbound registry, and the selected outbound executes through one unified dispatcher-facing connector view (`OutboundConnector`) for stream and packet capabilities
-- transparent destination recovery remains protocol-specific and does not get folded into `Listener`
-- normalized trojan runtime fields use upstream address, key, and TLS capability rather than a raw config bag
-- `Listener` and `Dialer` are shared infrastructure capabilities, not protocol-logic containers
-- UDP association state belongs to the packet dispatcher, not to protocol-private inbound state
+- `StreamDispatch` for stream execution
+- `PacketDispatch` for packet execution
 
-## 4. Routing Model
+The stream path is:
 
-VeeX uses one ordered rule pipeline.
+```text
+inbound handoff
+-> StreamDispatch
+-> Router
+-> selected outbound
+-> relay
+```
+
+The current packet path is:
+
+```text
+packet ingress
+-> PacketDispatch
+-> Router
+-> selected outbound packet session
+-> association-managed reverse flow
+```
+
+These two execution paths are peers. VeeX does not collapse them into a single TCP/UDP abstraction, and documentation should not describe one of them as architecturally subordinate to the other.
+
+## 5. Transport
+
+`veex-transport` is the foundation stream-carrier layer.
+
+Its current responsibilities are:
+
+- host resolution
+- TCP connect
+- sequential multi-address fallback
+- TLS handshake
+- certificate verifier setup
+
+Its current non-responsibilities are:
+
+- proxy protocol framing
+- route selection
+- relay logic
+- listener behavior
+
+The current transport crate is stream-oriented. Direct UDP packet dialing remains a component-level responsibility in `portal-outbound::direct`.
+
+## 6. Protocol
+
+Protocol is the optional protocol-semantics layer. It exists only where a component has proxy protocol meaning beyond carrier setup.
+
+Current protocol-bearing paths:
+
+- outbound-side:
+  - Trojan
+- inbound-side:
+  - SOCKS5 server-side processing
+
+Current protocol rules:
+
+- protocol does not own listener accept loops
+- protocol does not own TCP connect
+- protocol does not own route selection or dispatch
+- protocol runs on top of an already accepted or already connected carrier
+
+The current shared protocol crate, `veex-protocol`, contains:
+
+- generic adapter types
+- Trojan stream adapter logic
+
+SOCKS5 inbound protocol processing is currently a local module inside `portal-inbound::socks`. It is an inbound protocol step in the architecture sense, but it is not yet part of the shared `veex-protocol` crate.
+
+## 7. Portal
+
+Portal is the component layer. It owns:
+
+- component lifecycle
+- runtime fields such as `meta` and `logger`
+- listener or dialer composition
+- component-local pipeline organization
+- handoff into execution
+
+Portal does not absorb transport internals or execution internals.
+
+Current top-level component traits remain intentionally thin:
+
+- `Inbound`
+- `StreamInbound`
+- `TransparentInbound`
+- `Outbound`
+- `StreamOutbound`
+- `ProxyOutbound`
+
+## 8. Inbound Model
+
+Inbound currently has two stable shapes.
+
+### 8.1 No Access Protocol
+
+This shape applies to:
+
+- `direct`
+- `transparent`
+
+Layer view:
+
+```text
+portal -> listener -> execution
+```
+
+`direct` does not perform handshake or protocol parsing. It lowers destination metadata from the accepted carrier and hands the session to execution.
+
+`transparent` is also a no-access-protocol model. `redirect` and `tproxy` are special ingress modes, not protocols. Their defining behavior is listener-side destination recovery and metadata lowering.
+
+### 8.2 Access Protocol Present
+
+This shape currently applies to:
+
+- `socks`
+
+Layer view:
+
+```text
+portal -> inbound protocol -> execution
+```
+
+The SOCKS inbound portal accepts the carrier through a listener, runs SOCKS5 server-side protocol processing on the accepted stream, receives a normalized request result, and then hands the session to `StreamDispatch`.
+
+## 9. Listener
+
+`Listener` and `PacketListener` are shared ingress primitives.
+
+Their current responsibilities are:
+
+- bind
+- listen
+- accept or receive
+- spawn and close listener tasks
+- expose carrier-local metadata to component code
+
+Their current non-responsibilities are:
+
+- proxy protocol parsing
+- route selection
+- outbound behavior
+
+Transparent destination recovery is still component-specific and remains outside `core::portal::listener`.
+
+## 10. Outbound Model
+
+Outbound currently has two stable shapes.
+
+### 10.1 No Protocol
+
+This shape applies to:
+
+- `direct`
+
+Layer view:
+
+```text
+portal -> transport -> execution
+```
+
+Direct outbound uses `Dialer` for streams and `PacketDialer` for packet sessions. These are peer carrier paths inside the direct outbound model. Direct outbound does not enter the protocol layer.
+
+### 10.2 Protocol Present
+
+This shape applies to:
+
+- `trojan`
+
+Layer view:
+
+```text
+portal -> protocol -> transport -> execution
+```
+
+Trojan protocol logic remains outside the component crate in `veex-protocol`. The outbound component does not hold a protocol field. Instead, protocol is invoked inside the connect pipeline after TCP and TLS setup.
+
+## 11. Dialer
+
+`Dialer` and `PacketDialer` are outbound-side carrier dialing primitives.
+
+The current `Dial` model includes:
+
+- `detour`
+- `connect_timeout`
+- `routing_mark`
+- `domain_resolver`
+
+Dispatcher does not call transport directly. The runtime flow is:
+
+```text
+session -> selected outbound -> dialer or packet_dialer
+```
+
+Dialers derive request-specific dialing context from `SessionContext`, including resolver context propagation.
+
+## 12. Routing And Sniff
+
+VeeX uses one ordered route pipeline.
 
 ```text
 for rule in ordered rules:
@@ -126,105 +294,77 @@ for rule in ordered rules:
 return default final action
 ```
 
-This model has two public consequences:
+Current public consequences:
 
-- upgrade actions enrich routing context and allow later rules to see that richer context
-- final actions terminate routing and select the outbound path
+- `action="sniff"` is an upgrade action
+- `action="hijack-dns"` is a final action
+- `route.final` remains the default final decision
+- private, loopback, and link-local handling belong in ordinary `route.rules`
 
-`route.final` remains the default decision when no rule returns a final result.
-In the current accepted configuration subset, final routing actions are `outbound` selection and `action="hijack-dns"`, while `action="sniff"` remains the only supported upgrade action.
+Sniff is bounded context enrichment. It can enrich route-visible domain context, but it does not override the original destination and does not change transport policy by itself.
 
-Private, loopback, and link-local direct handling belongs in ordinary `route.rules`, not in a hidden bypass subsystem.
+## 13. DNS
 
-## 5. Sniff Model
+`veex-dns` is a separate runtime subsystem.
 
-Sniff is a bounded context-enrichment step inside routing. Its purpose is to extract domain information that later route rules may use.
+Its current roles are:
 
-Current public behavior:
+- execute client DNS queries
+- resolve outbound domain names through a controlled resolver path
+- select DNS upstreams through a DNS-specific router
+- reach upstream servers through outbound detour capability
 
-- supports TLS SNI and HTTP `Host`
-- writes enriched domain context for routing
-- does not override the original destination
-- does not trigger DNS behavior
-- does not change transport policy
-- is best effort rather than session-fatal
+Current DNS upstream transports include:
 
-Sniff-dependent rules must be placed after the sniff rule that enriches the routing context.
+- `local`
+- `udp`
+- `tcp`
+- `tls`
+- `https`
 
-## 6. Connection And Timeout Model
+`hijack-dns` is integrated as a route final action. Stream and packet execution can both hand requests to the DNS executor.
 
-When a destination resolves to multiple candidate addresses, VeeX tries them sequentially.
+## 14. CLI And Factory
 
-```text
-resolve -> addr1 -> addr2 -> addr3
-```
+`cli` is the runtime assembly layer.
 
-Current behavior:
+It is responsible for:
 
-- attempts are ordered, not parallel
-- each connect attempt is bounded by the configured connect timeout
-- success stops the sequence
-- there is no Happy Eyeballs or parallel dialing behavior
+- lowering validated config into runtime inputs
+- constructing outbounds
+- constructing DNS services
+- constructing dispatchers
+- constructing inbounds
+- starting and closing runtime services
 
-Timeouts remain stage-specific:
+It is not responsible for implementing listener behavior, transport behavior, or protocol logic.
 
-- sniff timeout
-- TCP connect timeout
-- TLS handshake timeout
+## 15. Current Non-Goals
 
-VeeX does not merge these into a single global session deadline.
+The current architecture does not imply support for:
 
-## 7. Transparent Proxy Positioning
-
-Transparent proxy support is part of the intended project surface, but VeeX still treats it as a user-space execution plane rather than a kernel policy platform.
-
-Important consequences:
-
-- `redirect` and `tproxy` are ingress modes, not separate architecture models
-- `tproxy` interception marks and `direct.routing_mark` serve different purposes
-- dual-stack and IPv4-mapped IPv6 behavior are first-class deployment concerns
-- explicit route rules remain the policy surface
-
-## 8. Current Capability Boundary
-
-The current public capability surface includes:
-
-- inbound: `direct` for TCP and minimal UDP, `socks`, `redirect`, `tproxy` for TCP
-- outbound: `direct` for TCP stream and UDP packet session, `trojan` for TCP stream
-- routing: ordered `route.rules`, `route.final`, `action="sniff"` upgrades, and `action="hijack-dns"` final handoff
-- connect behavior: sequential multi-address fallback
-- runtime: foreground daemon-style execution with config checking
-- packet execution: dispatcher-owned UDP association mapping for `direct-in -> direct-out`
-- dns: minimal internal executor for `dns-in -> hijack-dns -> local UDP via system nameservers or UDP/TCP/TLS/HTTPS upstream`, with ingress and upstream transport selected independently
-
-The current public non-goals include:
-
-- built-in FakeDNS, cache, DoQ, or HTTP/2+/connection-pooled DNS upstreams
-- generalized UDP proxying beyond the current `direct-in -> direct-out` foundation
-- TUN
-- kernel-level bypass semantics
-- destination override based on sniffed data
-- a generalized protocol-routing platform
 - full sing-box compatibility
+- generalized UDP proxying beyond the current direct packet foundation
+- TUN
+- FakeDNS
+- destination override from sniffed metadata
+- Happy Eyeballs or parallel dialing
+- a protocol-agnostic mega framework that hides the real stream and packet models
 
-## 9. Relationship To Router Integrations
+## 16. Summary
 
-VeeX is intended to serve router-oriented deployments, including OpenWrt-class environments, but it does not attempt to absorb the entire integration stack.
+VeeX uses explicit stream and packet execution paths, a transport layer for carrier setup, an optional protocol layer for protocol-bearing components, and a portal layer for component lifecycle and pipeline organization.
 
-This repository owns the execution core, configuration surface, examples, and core documentation. Packaging, service integration, and UI layers remain outside the main repository boundary.
-
-## 10. Summary
-
-VeeX is a focused execution core built around one routing pipeline, bounded context enrichment, explicit policy, and observable stage boundaries, with a deliberately small UDP packet foundation and a minimal DNS hijack slice built on top of that foundation.
+The current component surface is still uneven across those paths: some components are stream-only today, while others implement both stream and packet behavior. That implementation asymmetry should be documented as a component fact, not as an execution-layer hierarchy.
 
 In one sentence:
 
 ```text
-VeeX is a focused execution core built around ordered routing, bounded context enrichment, and a minimal UDP packet foundation.
+VeeX is a proxy core with explicit stream and packet execution boundaries, optional protocol steps, and a deliberately narrow current packet and DNS surface.
 ```
 
-## 11. Related Documents
+## 17. Related Documents
 
-- `docs/roadmap.md` for milestones and evolution direction
+- `docs/roadmap.md` for current priorities and future-direction constraints
 - `docs/observability.md` for public observability and error-model principles
 - `CHANGELOG.md` for release-by-release changes
