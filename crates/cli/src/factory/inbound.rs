@@ -130,11 +130,11 @@ mod tests {
     use veex_core::{
         execution::{
             ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder, PacketDispatcher,
-            StreamDispatcher,
+            RoutedPacketDispatch, RoutedStreamDispatch, StreamDispatcher,
         },
         io::BoxedAsyncStream,
         portal::{BoxFuture, Outbound, OutboundMeta},
-        routing::{RoutedPacketDispatch, RoutedStreamDispatch, Router},
+        routing::Router,
         session::SessionContext,
     };
     struct UnusedExecutionOutbound {

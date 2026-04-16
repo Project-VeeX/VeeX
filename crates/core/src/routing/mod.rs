@@ -1,8 +1,8 @@
-mod dispatch;
+mod result;
 mod router;
 mod sniff;
 
-pub use dispatch::{RouteError, RouteResult, RoutedPacketDispatch, RoutedStreamDispatch};
+pub use result::{RouteError, RouteResult};
 pub use router::{
     RouteAction, RouteDecision, RouteFinalAction, RouteInput, RouteReason, RouteRule, RouteTarget,
     RouteUpgradeAction, Router, SniffAction,

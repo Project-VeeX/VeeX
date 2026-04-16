@@ -4,10 +4,10 @@ use thiserror::Error;
 use veex_config::ProxyConfig;
 use veex_core::{
     execution::{
-        OutboundRegistry, PacketDispatch, PacketDispatcher, StreamDispatch, StreamDispatcher,
+        OutboundRegistry, PacketDispatch, PacketDispatcher, RoutedPacketDispatch,
+        RoutedStreamDispatch, StreamDispatch, StreamDispatcher,
     },
     portal::Inbound,
-    routing::{RoutedPacketDispatch, RoutedStreamDispatch},
     ProxyError,
 };
 
