@@ -5,7 +5,8 @@ use veex_observability::{emit_session_finish, SessionSummary};
 
 use crate::{
     dns::DnsExecutorHandle,
-    execution::{stream::io::BoxedAsyncStream, traits::DnsHijack, OutboundRegistry},
+    execution::{traits::DnsHijack, OutboundRegistry},
+    io::{BoxedAsyncStream, StreamCarrier},
     logging::sanitize_field,
     portal::traits::BoxFuture,
     routing::{RouteFinalAction, RouteReason, RouteResult},
@@ -47,14 +48,13 @@ impl StreamDispatcher {
         }
     }
 
-    pub async fn dispatch_routed(
-        &self,
-        routed: RouteResult<BoxedAsyncStream>,
-    ) -> crate::Result<()> {
+    pub async fn dispatch_routed(&self, routed: RouteResult<StreamCarrier>) -> crate::Result<()> {
         let RouteResult {
             mut ctx,
             decision,
-            input: inbound_stream,
+            input: StreamCarrier {
+                stream: inbound_stream,
+            },
         } = routed;
         let outbound_tag = match &decision.final_action {
             RouteFinalAction::Route(target) => {
@@ -241,7 +241,7 @@ mod tests {
         BoxFuture, BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DnsResponse,
         ErrorKind, ExecutionOutbound, Logger, Network, Outbound, OutboundMeta, OutboundRegistry,
         OutboundRegistryBuilder, RouteDecision, RouteFinalAction, RouteReason, RouteResult,
-        SessionContext, SessionMeta, SessionRoute, SessionState, StreamOutbound,
+        SessionContext, SessionMeta, SessionRoute, SessionState, StreamCarrier, StreamOutbound,
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
@@ -530,7 +530,7 @@ mod tests {
             .dispatch_routed(RouteResult {
                 ctx,
                 decision: RouteDecision::route("proxy", RouteReason::Final),
-                input: Box::new(ClosedStream),
+                input: StreamCarrier::new(Box::new(ClosedStream)),
             })
             .await
             .expect("dispatch_routed should succeed");
@@ -572,10 +572,10 @@ mod tests {
             .dispatch_routed(RouteResult {
                 ctx,
                 decision: RouteDecision::route("proxy", RouteReason::Final),
-                input: Box::new(ScriptedStream::new([
+                input: StreamCarrier::new(Box::new(ScriptedStream::new([
                     ReadStep::Data(b"ping"),
                     ReadStep::Error(io::Error::other("boom")),
-                ])),
+                ]))),
             })
             .await
             .expect_err("dispatch_routed should surface relay failure");
@@ -650,7 +650,7 @@ mod tests {
                     final_action: RouteFinalAction::HijackDns,
                     reason: RouteReason::Rule,
                 },
-                input: Box::new(stream),
+                input: StreamCarrier::new(Box::new(stream)),
             })
             .await
             .expect("tcp dns hijack should succeed");

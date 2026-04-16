@@ -14,13 +14,13 @@ use crate::{
                 log_packet_association_hit, PacketAssociation,
             },
             dns::hijack_packet_dns,
-            io::{PacketAssociationKey, PacketFrame, PacketMetadata, PacketWriter},
         },
         traits::DnsHijack,
         OutboundRegistry,
     },
+    io::{PacketAssociationKey, PacketCarrier, PacketFrame, PacketMetadata, PacketWriter},
     portal::traits::BoxFuture,
-    routing::{PacketRouteInput, RouteFinalAction, RouteReason, RouteResult},
+    routing::{RouteFinalAction, RouteReason, RouteResult},
     session::SessionContext,
     types::Network,
 };
@@ -150,16 +150,16 @@ impl PacketDispatcher {
         Ok(true)
     }
 
-    pub async fn dispatch_routed(
-        &self,
-        routed: RouteResult<PacketRouteInput>,
-    ) -> crate::Result<()> {
+    pub async fn dispatch_routed(&self, routed: RouteResult<PacketCarrier>) -> crate::Result<()> {
         let RouteResult {
             ctx,
             decision,
             input,
         } = routed;
-        let PacketRouteInput { packet, writer } = input;
+        let PacketCarrier {
+            frame: packet,
+            writer,
+        } = input;
 
         if packet.metadata.network != Network::Udp {
             return Err(ProxyError::protocol(format!(
@@ -275,8 +275,9 @@ mod tests {
 
     use crate::{
         dns::{DnsExecutorHandle, DnsRequest, DnsResponse},
+        io::PacketCarrier,
         logging::Logger,
-        routing::{PacketRouteInput, RouteDecision, RouteFinalAction, RouteReason, RouteResult},
+        routing::{RouteDecision, RouteFinalAction, RouteReason, RouteResult},
         types::Host,
         BoxFuture, BoxedAsyncStream, Destination, ExecutionOutbound, Network, Outbound,
         OutboundMeta, OutboundRegistry, OutboundRegistryBuilder, PacketFrame, PacketMetadata,
@@ -457,10 +458,10 @@ mod tests {
                     Vec::new(),
                 ),
                 decision: RouteDecision::route("direct", RouteReason::Final),
-                input: PacketRouteInput {
-                    packet: PacketFrame::new(metadata.clone(), b"ping".to_vec()),
-                    writer: Arc::clone(&writer),
-                },
+                input: PacketCarrier::new(
+                    PacketFrame::new(metadata.clone(), b"ping".to_vec()),
+                    Arc::clone(&writer),
+                ),
             })
             .await
             .expect("first packet should dispatch");
@@ -561,8 +562,8 @@ mod tests {
                     Vec::new(),
                 ),
                 decision: RouteDecision::route("direct", RouteReason::Final),
-                input: PacketRouteInput {
-                    packet: PacketFrame::new(
+                input: PacketCarrier::new(
+                    PacketFrame::new(
                         PacketMetadata::new(
                             "direct-in",
                             SocketAddr::from(([127, 0, 0, 1], 53001)),
@@ -572,7 +573,7 @@ mod tests {
                         b"ping".to_vec(),
                     ),
                     writer,
-                },
+                ),
             })
             .await
             .expect("packet should dispatch");
@@ -625,8 +626,8 @@ mod tests {
                     final_action: RouteFinalAction::HijackDns,
                     reason: RouteReason::Rule,
                 },
-                input: PacketRouteInput {
-                    packet: PacketFrame::new(
+                input: PacketCarrier::new(
+                    PacketFrame::new(
                         PacketMetadata::new(
                             "dns-in",
                             SocketAddr::from(([127, 0, 0, 1], 53053)),
@@ -636,7 +637,7 @@ mod tests {
                         b"dns-query".to_vec(),
                     ),
                     writer,
-                },
+                ),
             })
             .await
             .expect("dns hijack should succeed");

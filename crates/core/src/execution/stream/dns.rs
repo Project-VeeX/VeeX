@@ -4,7 +4,7 @@ use tracing::{info, warn};
 
 use crate::{
     dns::{read_dns_tcp_message, write_dns_tcp_message, DnsExecutorHandle, DnsRequest},
-    execution::stream::io::BoxedAsyncStream,
+    io::BoxedAsyncStream,
     logging::sanitize_field,
     routing::RouteReason,
     session::SessionContext,

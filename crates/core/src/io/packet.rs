@@ -85,6 +85,17 @@ pub trait PacketWriter: Send + Sync {
     fn send_to(&self, peer: SocketAddr, payload: Vec<u8>) -> BoxFuture<'_, ()>;
 }
 
+pub struct PacketCarrier {
+    pub frame: PacketFrame,
+    pub writer: Arc<dyn PacketWriter>,
+}
+
+impl PacketCarrier {
+    pub fn new(frame: PacketFrame, writer: Arc<dyn PacketWriter>) -> Self {
+        Self { frame, writer }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};

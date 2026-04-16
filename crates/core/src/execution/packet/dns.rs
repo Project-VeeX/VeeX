@@ -4,7 +4,7 @@ use tracing::{info, warn};
 
 use crate::{
     dns::{DnsExecutorHandle, DnsRequest},
-    execution::packet::io::{PacketFrame, PacketWriter},
+    io::{PacketFrame, PacketWriter},
     logging::sanitize_field,
     routing::RouteReason,
 };

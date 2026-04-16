@@ -3,6 +3,7 @@
 pub mod dns;
 pub mod error;
 pub mod execution;
+pub mod io;
 pub mod listen;
 pub mod logging;
 pub mod portal;
@@ -17,11 +18,13 @@ pub use dns::{
 };
 pub use error::{ErrorKind, ProxyError, Result};
 pub use execution::{
-    relay_bidirectional, AsyncStream, BoxedAsyncStream, ExecutionOutbound, OutboundRegistry,
-    OutboundRegistryBuilder, PacketAssociationKey, PacketDispatch, PacketDispatcher, PacketFrame,
-    PacketMetadata, PacketSession, PacketSessionHandle, PacketWriter, RelayErrorWithStats,
-    RelayStats, SessionContext, SessionMeta, SessionRoute, SessionState, StreamDispatch,
-    StreamDispatcher,
+    relay_bidirectional, ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder,
+    PacketDispatch, PacketDispatcher, RelayErrorWithStats, RelayStats, SessionContext, SessionMeta,
+    SessionRoute, SessionState, StreamDispatch, StreamDispatcher,
+};
+pub use io::{
+    AsyncStream, BoxedAsyncStream, PacketAssociationKey, PacketCarrier, PacketFrame,
+    PacketMetadata, PacketSession, PacketSessionHandle, PacketWriter, StreamCarrier,
 };
 pub use listen::{format_listen_addr, parse_listen_addr};
 pub use logging::{sanitize_field, Logger};
@@ -38,10 +41,9 @@ pub use portal::{
     },
 };
 pub use routing::{
-    sniff_stream, PacketRouteInput, PrefixedStream, RouteAction, RouteDecision, RouteError,
-    RouteFinalAction, RouteInput, RouteReason, RouteResult, RouteRule, RouteTarget,
-    RouteUpgradeAction, RoutedPacketDispatch, RoutedStreamDispatch, Router, SniffAction,
-    SniffOutcome, SniffedProtocol,
+    sniff_stream, PrefixedStream, RouteAction, RouteDecision, RouteError, RouteFinalAction,
+    RouteInput, RouteReason, RouteResult, RouteRule, RouteTarget, RouteUpgradeAction,
+    RoutedPacketDispatch, RoutedStreamDispatch, Router, SniffAction, SniffOutcome, SniffedProtocol,
 };
 pub use session::{build_session_bootstrap, SessionBootstrap};
 pub use shutdown::{shutdown_channel, ShutdownSignal, ShutdownTrigger};

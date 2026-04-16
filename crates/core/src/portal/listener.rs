@@ -14,7 +14,7 @@ use tokio::{
 
 use crate::{
     error::{ProxyError, Result},
-    execution::packet::io::PacketWriter,
+    io::PacketWriter,
     types::Listen,
 };
 

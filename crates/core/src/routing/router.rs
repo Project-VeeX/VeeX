@@ -4,15 +4,13 @@ use ipnet::IpNet;
 use tracing::{debug, info, warn};
 
 use crate::{
-    execution::stream::io::BoxedAsyncStream,
+    io::{BoxedAsyncStream, PacketCarrier, StreamCarrier},
     logging::sanitize_field,
     session::SessionContext,
     types::{Destination, Host},
 };
 
-use super::{
-    sniff_stream_internal, PacketRouteInput, RouteError, RouteResult, SniffExecution, SniffResult,
-};
+use super::{sniff_stream_internal, RouteError, RouteResult, SniffExecution, SniffResult};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouteReason {
@@ -481,10 +479,10 @@ impl Router {
 
     pub async fn route_stream(
         &self,
-        input: BoxedAsyncStream,
+        input: StreamCarrier,
         ctx: SessionContext,
-    ) -> Result<RouteResult<BoxedAsyncStream>, RouteError> {
-        let mut stream = input;
+    ) -> Result<RouteResult<StreamCarrier>, RouteError> {
+        let mut stream = input.stream;
         let inbound_tag = Some(ctx.meta.inbound_tag.as_str());
         let destination = &ctx.meta.destination;
         let mut route_context = RouteRuntimeContext::from_destination(destination);
@@ -524,7 +522,7 @@ impl Router {
                         return Ok(RouteResult {
                             ctx,
                             decision,
-                            input: stream,
+                            input: StreamCarrier::new(stream),
                         });
                     }
                 }
@@ -540,15 +538,15 @@ impl Router {
         Ok(RouteResult {
             ctx,
             decision,
-            input: stream,
+            input: StreamCarrier::new(stream),
         })
     }
 
     pub async fn route_packet(
         &self,
-        input: PacketRouteInput,
+        input: PacketCarrier,
         ctx: SessionContext,
-    ) -> Result<RouteResult<PacketRouteInput>, RouteError> {
+    ) -> Result<RouteResult<PacketCarrier>, RouteError> {
         let decision = self.select(&ctx);
         Ok(RouteResult {
             ctx,
@@ -905,7 +903,7 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 
-    use crate::{Destination, Network, SessionContext, SessionMeta};
+    use crate::{Destination, Network, SessionContext, SessionMeta, StreamCarrier};
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     use super::{RouteAction, RouteFinalAction, RouteInput, RouteReason, RouteRule, Router};
@@ -1285,10 +1283,10 @@ mod tests {
 
         let routed = router
             .route_stream(
-                Box::new(ScriptedStream::new([
+                StreamCarrier::new(Box::new(ScriptedStream::new([
                     ReadStep::Data(payload.clone()),
                     ReadStep::Eof,
-                ])),
+                ]))),
                 ctx,
             )
             .await
@@ -1297,7 +1295,7 @@ mod tests {
         assert_eq!(routed.decision.outbound_tag(), Some("proxy"));
         assert_eq!(routed.decision.reason, RouteReason::Rule);
 
-        let mut replay = routed.input;
+        let mut replay = routed.input.stream;
         let mut replayed = Vec::new();
         replay
             .read_to_end(&mut replayed)
@@ -1337,10 +1335,10 @@ mod tests {
 
         let routed = router
             .route_stream(
-                Box::new(ScriptedStream::new([
+                StreamCarrier::new(Box::new(ScriptedStream::new([
                     ReadStep::Data(tls_client_hello_with_sni("www.google.com")),
                     ReadStep::Eof,
-                ])),
+                ]))),
                 ctx,
             )
             .await
@@ -1381,10 +1379,10 @@ mod tests {
 
         let routed = router
             .route_stream(
-                Box::new(ScriptedStream::new([
+                StreamCarrier::new(Box::new(ScriptedStream::new([
                     ReadStep::Data(tls_client_hello_with_sni("www.google.com")),
                     ReadStep::Eof,
-                ])),
+                ]))),
                 ctx,
             )
             .await
@@ -1414,7 +1412,7 @@ mod tests {
         );
 
         let routed = router
-            .route_stream(Box::new(PendingStream), ctx)
+            .route_stream(StreamCarrier::new(Box::new(PendingStream)), ctx)
             .await
             .expect("stream routing should succeed");
         assert_eq!(routed.decision.outbound_tag(), Some("final"));
@@ -1447,7 +1445,7 @@ mod tests {
         );
 
         let routed = router
-            .route_stream(Box::new(PendingStream), ctx)
+            .route_stream(StreamCarrier::new(Box::new(PendingStream)), ctx)
             .await
             .expect("stream routing should succeed");
         assert_eq!(routed.decision.outbound_tag(), Some("late"));
@@ -1482,9 +1480,9 @@ mod tests {
 
         let routed = router
             .route_stream(
-                Box::new(ScriptedStream::new([ReadStep::Error(io::Error::other(
-                    "boom",
-                ))])),
+                StreamCarrier::new(Box::new(ScriptedStream::new([ReadStep::Error(
+                    io::Error::other("boom"),
+                )]))),
                 ctx,
             )
             .await
@@ -1531,7 +1529,7 @@ mod tests {
         );
 
         let routed = router
-            .route_stream(Box::new(PendingStream), ctx)
+            .route_stream(StreamCarrier::new(Box::new(PendingStream)), ctx)
             .await
             .expect("stream routing should succeed");
         assert_eq!(routed.decision.outbound_tag(), Some("late"));
@@ -1607,10 +1605,10 @@ mod tests {
 
         let routed = router
             .route_stream(
-                Box::new(ScriptedStream::new([
+                StreamCarrier::new(Box::new(ScriptedStream::new([
                     ReadStep::Data(tls_client_hello_with_sni("www.google.com")),
                     ReadStep::Eof,
-                ])),
+                ]))),
                 ctx,
             )
             .await

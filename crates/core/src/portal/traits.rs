@@ -4,7 +4,7 @@ use tokio::net::TcpStream;
 
 use crate::{
     error::Result,
-    execution::stream::io::BoxedAsyncStream,
+    io::BoxedAsyncStream,
     logging::Logger,
     portal::meta::{InboundMeta, OutboundMeta},
     session::SessionContext,

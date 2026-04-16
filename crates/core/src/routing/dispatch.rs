@@ -10,10 +10,10 @@ use thiserror::Error;
 
 use crate::{
     execution::{
-        packet::io::{PacketFrame, PacketWriter},
         traits::{PacketDispatch, StreamDispatch},
         PacketDispatcher, StreamDispatcher,
     },
+    io::{BoxedAsyncStream, PacketCarrier, PacketFrame, PacketWriter, StreamCarrier},
     portal::traits::BoxFuture,
     session::{SessionContext, SessionMeta},
 };
@@ -24,11 +24,6 @@ pub struct RouteResult<I> {
     pub ctx: SessionContext,
     pub decision: RouteDecision,
     pub input: I,
-}
-
-pub struct PacketRouteInput {
-    pub packet: PacketFrame,
-    pub writer: Arc<dyn PacketWriter>,
 }
 
 #[derive(Debug, Error)]
@@ -59,11 +54,14 @@ impl RoutedStreamDispatch {
 impl StreamDispatch for RoutedStreamDispatch {
     fn dispatch_stream(
         &self,
-        inbound_stream: crate::BoxedAsyncStream,
+        inbound_stream: BoxedAsyncStream,
         ctx: SessionContext,
     ) -> BoxFuture<'_, ()> {
         Box::pin(async move {
-            let routed = self.router.route_stream(inbound_stream, ctx).await?;
+            let routed = self
+                .router
+                .route_stream(StreamCarrier::new(inbound_stream), ctx)
+                .await?;
             self.executor.dispatch_routed(routed).await
         })
     }
@@ -117,7 +115,7 @@ impl PacketDispatch for RoutedPacketDispatch {
             let ctx = self.build_session_context(&packet);
             let routed = self
                 .router
-                .route_packet(PacketRouteInput { packet, writer }, ctx)
+                .route_packet(PacketCarrier::new(packet, writer), ctx)
                 .await?;
 
             self.executor.dispatch_routed(routed).await

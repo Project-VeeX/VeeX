@@ -91,7 +91,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        execution::stream::io::BoxedAsyncStream,
+        io::BoxedAsyncStream,
         logging::Logger,
         portal::{meta::OutboundMeta, traits::BoxFuture},
         session::SessionContext,

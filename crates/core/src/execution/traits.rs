@@ -3,10 +3,7 @@ use std::sync::Arc;
 use crate::{
     dns::DnsExecutorHandle,
     error::ProxyError,
-    execution::{
-        packet::io::{PacketFrame, PacketSessionHandle, PacketWriter},
-        stream::io::BoxedAsyncStream,
-    },
+    io::{BoxedAsyncStream, PacketFrame, PacketSessionHandle, PacketWriter},
     portal::traits::{BoxFuture, Outbound},
     routing::RouteReason,
     session::SessionContext,

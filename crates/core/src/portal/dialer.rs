@@ -3,8 +3,8 @@ use std::{fmt, future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::net::TcpStream;
 
 use crate::{
-    dns::ResolveContext, error::Result, execution::packet::io::PacketSessionHandle,
-    session::SessionContext, types::Host,
+    dns::ResolveContext, error::Result, io::PacketSessionHandle, session::SessionContext,
+    types::Host,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

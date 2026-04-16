@@ -9,9 +9,12 @@ use std::{
 use tokio::sync::Notify;
 use tracing::{debug, info, warn};
 
-use crate::{error::ProxyError, logging::sanitize_field, routing::RouteReason};
-
-use super::io::{PacketAssociationKey, PacketSessionHandle, PacketWriter};
+use crate::{
+    error::ProxyError,
+    io::{PacketAssociationKey, PacketSessionHandle, PacketWriter},
+    logging::sanitize_field,
+    routing::RouteReason,
+};
 
 /// Packet-side forwarding state, roughly parallel to stream relay state.
 ///
