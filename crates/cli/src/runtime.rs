@@ -4,9 +4,11 @@ use thiserror::Error;
 use tracing::{error, info, warn};
 use veex_config::ProxyConfig;
 use veex_core::{logging::sanitize_field, portal::Inbound, ProxyError};
-use veex_execution::OutboundRegistry;
 
-use crate::bootstrap::{build_runtime_state, BootstrapError, RuntimeState};
+use crate::{
+    bootstrap::{build_runtime_state, BootstrapError, RuntimeState},
+    factory::RuntimeOutbounds,
+};
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -112,8 +114,8 @@ async fn start_inbounds(inbounds: &[std::sync::Arc<dyn Inbound>]) -> Result<(), 
     Ok(())
 }
 
-async fn start_outbounds(outbounds: &OutboundRegistry) -> Result<(), RuntimeError> {
-    for outbound in outbounds.lifecycle_iter() {
+async fn start_outbounds(outbounds: &RuntimeOutbounds) -> Result<(), RuntimeError> {
+    for outbound in outbounds.lifecycle() {
         let outbound_tag = outbound.meta().tag.clone();
         let outbound_field = sanitize_field(&outbound_tag).into_owned();
         info!(
@@ -155,8 +157,8 @@ async fn close_inbounds(inbounds: &[std::sync::Arc<dyn Inbound>]) -> Result<(), 
     Ok(())
 }
 
-async fn close_outbounds(outbounds: &OutboundRegistry) -> Result<(), RuntimeError> {
-    for outbound in outbounds.lifecycle_iter() {
+async fn close_outbounds(outbounds: &RuntimeOutbounds) -> Result<(), RuntimeError> {
+    for outbound in outbounds.lifecycle() {
         let outbound_tag = outbound.meta().tag.clone();
         let outbound_field = sanitize_field(&outbound_tag).into_owned();
         if let Err(err) = outbound.close().await {
@@ -177,6 +179,7 @@ async fn close_outbounds(outbounds: &OutboundRegistry) -> Result<(), RuntimeErro
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashMap,
         pin::Pin,
         sync::atomic::{AtomicBool, Ordering},
         sync::Arc,
@@ -193,9 +196,10 @@ mod tests {
         types::{Destination, Host, Network},
         ErrorKind, ProxyError,
     };
-    use veex_execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder};
+    use veex_execution::{ExecutionFuture, ExecutionOutbound, OutboundCatalog};
 
     use super::{close_outbounds, start_outbounds};
+    use crate::factory::RuntimeOutbounds;
 
     struct ClosedStream;
 
@@ -265,7 +269,11 @@ mod tests {
     }
 
     impl ExecutionOutbound for TestDispatchOutbound {
-        fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        fn tag(&self) -> &str {
+            &self.meta.tag
+        }
+
+        fn open_stream(&self, _ctx: &SessionContext) -> ExecutionFuture<'_, BoxedAsyncStream> {
             let closed = self.closed.load(Ordering::Relaxed);
             Box::pin(async move {
                 if closed {
@@ -291,23 +299,27 @@ mod tests {
         )
     }
 
-    fn finalized_registry(outbound: Arc<dyn ExecutionOutbound>) -> OutboundRegistry {
-        let mut builder = OutboundRegistryBuilder::default();
-        builder
-            .register(Arc::clone(&outbound))
-            .expect("outbound should register");
-        builder.finalize(outbound)
+    fn finalized_runtime_outbounds(outbound: Arc<TestDispatchOutbound>) -> RuntimeOutbounds {
+        let execution: Arc<dyn ExecutionOutbound> = outbound.clone();
+        let lifecycle: Arc<dyn Outbound> = outbound;
+        let mut outbounds = HashMap::new();
+        outbounds.insert(execution.tag().to_string(), Arc::clone(&execution));
+        RuntimeOutbounds::new(
+            Arc::new(OutboundCatalog::new(outbounds, execution)),
+            vec![lifecycle],
+        )
     }
 
     #[tokio::test]
     async fn runtime_close_outbounds_is_visible_to_dispatch_view() {
-        let registry = finalized_registry(Arc::new(TestDispatchOutbound::new("direct")));
+        let registry = finalized_runtime_outbounds(Arc::new(TestDispatchOutbound::new("direct")));
 
         close_outbounds(&registry)
             .await
             .expect("runtime close should succeed");
 
         let outbound = registry
+            .catalog()
             .get("direct")
             .expect("registry should return dispatch view");
         let err = match outbound.open_stream(&test_context()).await {
@@ -319,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_start_outbounds_reopens_dispatch_view() {
-        let registry = finalized_registry(Arc::new(TestDispatchOutbound::new("direct")));
+        let registry = finalized_runtime_outbounds(Arc::new(TestDispatchOutbound::new("direct")));
 
         close_outbounds(&registry)
             .await
@@ -329,6 +341,7 @@ mod tests {
             .expect("runtime start should succeed");
 
         let outbound = registry
+            .catalog()
             .get("direct")
             .expect("registry should return dispatch view");
         outbound
@@ -339,7 +352,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_close_outbounds_is_idempotent() {
-        let registry = finalized_registry(Arc::new(TestDispatchOutbound::new("direct")));
+        let registry = finalized_runtime_outbounds(Arc::new(TestDispatchOutbound::new("direct")));
 
         close_outbounds(&registry)
             .await

@@ -9,7 +9,7 @@ use veex_core::{
     session::{SessionContext, SessionMeta},
     types::{Destination, Network},
 };
-use veex_execution::{ExecutionOutbound, OutboundRegistry};
+use veex_execution::{ExecutionOutbound, OutboundCatalog};
 
 #[derive(Clone)]
 pub(crate) struct DnsDialer {
@@ -31,7 +31,7 @@ impl DnsDialer {
     pub(crate) fn new(
         server_tag: String,
         dial: Dial,
-        outbounds: &Arc<OutboundRegistry>,
+        outbounds: &Arc<OutboundCatalog>,
     ) -> veex_core::Result<Self> {
         let outbound = match dial.detour.as_deref() {
             Some(tag) => outbounds.require(tag)?,
@@ -105,6 +105,7 @@ impl DnsDialer {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashMap,
         net::{IpAddr, Ipv4Addr, SocketAddr},
         sync::Arc,
     };
@@ -118,7 +119,7 @@ mod tests {
         types::{Destination, Host, Network},
         ProxyError,
     };
-    use veex_execution::{ExecutionOutbound, OutboundRegistryBuilder};
+    use veex_execution::{ExecutionFuture, ExecutionOutbound, OutboundCatalog};
 
     use super::DnsDialer;
 
@@ -151,7 +152,11 @@ mod tests {
     }
 
     impl ExecutionOutbound for UnusedExecutionOutbound {
-        fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        fn tag(&self) -> &str {
+            &self.meta.tag
+        }
+
+        fn open_stream(&self, _ctx: &SessionContext) -> ExecutionFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("unused")) })
         }
     }
@@ -193,7 +198,7 @@ mod tests {
     #[test]
     fn dns_dialer_uses_default_outbound_when_detour_is_missing() {
         let default_outbound = Arc::new(UnusedExecutionOutbound::new());
-        let registry = OutboundRegistryBuilder::default().finalize(default_outbound);
+        let registry = OutboundCatalog::new(HashMap::new(), default_outbound);
 
         let dialer = DnsDialer::new(
             "bootstrap".into(),

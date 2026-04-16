@@ -12,5 +12,6 @@ pub(crate) use lowering::{
     LoweredOutbound,
 };
 pub use outbound::build_outbounds;
+pub(crate) use outbound::RuntimeOutbounds;
 pub use router::build_router;
 pub(crate) use services::RuntimeServices;

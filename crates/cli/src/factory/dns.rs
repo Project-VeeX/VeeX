@@ -6,7 +6,7 @@ use veex_core::{
     ProxyError,
 };
 use veex_dns::DnsExecutor;
-use veex_execution::OutboundRegistry;
+use veex_execution::OutboundCatalog;
 
 use crate::factory::lower_dns;
 
@@ -17,7 +17,7 @@ pub struct BuiltDnsServices {
 
 pub fn build_dns_services(
     config: &ProxyConfig,
-    outbounds: Arc<OutboundRegistry>,
+    outbounds: Arc<OutboundCatalog>,
 ) -> Result<Option<BuiltDnsServices>, ProxyError> {
     let Some(dns) = config.dns.as_ref() else {
         return Ok(None);

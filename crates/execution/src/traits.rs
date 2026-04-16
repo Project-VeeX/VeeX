@@ -1,23 +1,26 @@
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use veex_core::{
     dns::DnsExecutorHandle,
     io::{BoxedAsyncStream, PacketFrame, PacketSessionHandle, PacketWriter},
-    portal::traits::{BoxFuture, Outbound},
     routing::RouteReason,
     session::SessionContext,
     ProxyError,
 };
 
+pub type ExecutionFuture<'a, T> = Pin<Box<dyn Future<Output = veex_core::Result<T>> + Send + 'a>>;
+
 /// Dispatch-facing outbound capability used by the execution layer.
 ///
 /// Stream execution is required. Packet execution remains optional and
 /// defaults to a protocol error for outbounds that do not implement it.
-pub trait ExecutionOutbound: Outbound {
-    fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream>;
+pub trait ExecutionOutbound: Send + Sync {
+    fn tag(&self) -> &str;
 
-    fn open_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
-        let outbound_tag = self.meta().tag.clone();
+    fn open_stream(&self, ctx: &SessionContext) -> ExecutionFuture<'_, BoxedAsyncStream>;
+
+    fn open_packet(&self, ctx: &SessionContext) -> ExecutionFuture<'_, PacketSessionHandle> {
+        let outbound_tag = self.tag().to_string();
         let network = ctx.meta.network;
         Box::pin(async move {
             Err(ProxyError::protocol(format!(
@@ -34,7 +37,7 @@ pub trait StreamDispatch: Send + Sync {
         &self,
         inbound_stream: BoxedAsyncStream,
         ctx: SessionContext,
-    ) -> BoxFuture<'_, ()>;
+    ) -> ExecutionFuture<'_, ()>;
 }
 
 pub trait PacketDispatch: Send + Sync {
@@ -42,7 +45,7 @@ pub trait PacketDispatch: Send + Sync {
         &self,
         packet: PacketFrame,
         writer: Arc<dyn PacketWriter>,
-    ) -> BoxFuture<'_, ()>;
+    ) -> ExecutionFuture<'_, ()>;
 }
 
 pub(crate) trait DnsHijack: Send + Sync {
@@ -55,9 +58,9 @@ pub(crate) trait DnsHijack: Send + Sync {
         executor: Arc<dyn DnsExecutorHandle>,
         input: Self::Input,
         route_reason: RouteReason,
-    ) -> BoxFuture<'_, ()>;
+    ) -> ExecutionFuture<'_, ()>;
 
-    fn hijack(&self, input: Self::Input, route_reason: RouteReason) -> BoxFuture<'_, ()> {
+    fn hijack(&self, input: Self::Input, route_reason: RouteReason) -> ExecutionFuture<'_, ()> {
         match self.dns_executor().cloned() {
             Some(executor) => self.hijack_with_executor(executor, input, route_reason),
             None => Box::pin(async move {

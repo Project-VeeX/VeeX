@@ -4,17 +4,18 @@ use thiserror::Error;
 use veex_config::ProxyConfig;
 use veex_core::{portal::Inbound, ProxyError};
 use veex_execution::{
-    OutboundRegistry, PacketDispatch, PacketDispatcher, RoutedPacketDispatch, RoutedStreamDispatch,
-    StreamDispatch, StreamDispatcher,
+    PacketDispatch, PacketDispatcher, RoutedPacketDispatch, RoutedStreamDispatch, StreamDispatch,
+    StreamDispatcher,
 };
 
 use crate::factory::{
-    build_dns_services, build_inbounds, build_outbounds, build_router, RuntimeServices,
+    build_dns_services, build_inbounds, build_outbounds, build_router, RuntimeOutbounds,
+    RuntimeServices,
 };
 
 pub struct RuntimeState {
     pub inbounds: Vec<Arc<dyn Inbound>>,
-    pub outbounds: Arc<OutboundRegistry>,
+    pub outbounds: Arc<RuntimeOutbounds>,
 }
 
 #[derive(Debug, Error)]
@@ -38,7 +39,7 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
     let outbounds = build_outbounds(config, &services).map_err(BootstrapError::OutboundBuild)?;
     ensure_required_outbounds_built(config, outbounds.as_ref())?;
     let router = build_router(config);
-    let dns_services = build_dns_services(config, Arc::clone(&outbounds))
+    let dns_services = build_dns_services(config, Arc::clone(outbounds.catalog()))
         .map_err(BootstrapError::OutboundBuild)?;
     if let Some(services_handle) = dns_services.as_ref() {
         services
@@ -47,11 +48,11 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
     }
     let dns_executor = dns_services.map(|services| services.executor);
     let stream_executor = Arc::new(StreamDispatcher::with_dns_executor(
-        Arc::clone(&outbounds),
+        Arc::clone(outbounds.catalog()),
         dns_executor.clone(),
     ));
     let packet_executor = Arc::new(PacketDispatcher::with_dns_executor(
-        Arc::clone(&outbounds),
+        Arc::clone(outbounds.catalog()),
         dns_executor,
     ));
     let stream_sink: Arc<dyn StreamDispatch> =
@@ -69,7 +70,7 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
 
 fn ensure_required_outbounds_built(
     config: &ProxyConfig,
-    outbounds: &OutboundRegistry,
+    outbounds: &RuntimeOutbounds,
 ) -> Result<(), BootstrapError> {
     if !outbounds.contains(&config.route.final_outbound) {
         return Err(BootstrapError::MissingFinalOutbound(

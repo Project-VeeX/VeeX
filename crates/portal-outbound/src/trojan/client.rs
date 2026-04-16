@@ -14,7 +14,7 @@ use veex_core::{
     types::Destination,
     ProxyError, Result,
 };
-use veex_execution::ExecutionOutbound;
+use veex_execution::{ExecutionFuture, ExecutionOutbound};
 use veex_protocol::{
     adapter::{StreamAdapter, StreamParams},
     trojan::{validate_trojan_key, TrojanStreamAdapter},
@@ -157,7 +157,11 @@ impl ProxyOutbound for TrojanOutbound {
 }
 
 impl ExecutionOutbound for TrojanOutbound {
-    fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+    fn tag(&self) -> &str {
+        &self.meta.tag
+    }
+
+    fn open_stream(&self, ctx: &SessionContext) -> ExecutionFuture<'_, BoxedAsyncStream> {
         ProxyOutbound::connect_proxy_stream(self, ctx)
     }
 }

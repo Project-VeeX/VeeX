@@ -130,7 +130,7 @@ mod tests {
         session::SessionContext,
     };
     use veex_execution::{
-        ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder, PacketDispatcher,
+        ExecutionFuture, ExecutionOutbound, OutboundCatalog, PacketDispatcher,
         RoutedPacketDispatch, RoutedStreamDispatch, StreamDispatcher,
     };
     struct UnusedExecutionOutbound {
@@ -162,15 +162,20 @@ mod tests {
     }
 
     impl ExecutionOutbound for UnusedExecutionOutbound {
-        fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        fn tag(&self) -> &str {
+            &self.meta.tag
+        }
+
+        fn open_stream(&self, _ctx: &SessionContext) -> ExecutionFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("unused")) })
         }
     }
 
-    fn test_outbounds() -> Arc<OutboundRegistry> {
-        Arc::new(
-            OutboundRegistryBuilder::default().finalize(Arc::new(UnusedExecutionOutbound::new())),
-        )
+    fn test_outbounds() -> Arc<OutboundCatalog> {
+        let outbound: Arc<dyn ExecutionOutbound> = Arc::new(UnusedExecutionOutbound::new());
+        let mut outbounds = std::collections::HashMap::new();
+        outbounds.insert(outbound.tag().to_string(), Arc::clone(&outbound));
+        Arc::new(OutboundCatalog::new(outbounds, outbound))
     }
 
     #[test]

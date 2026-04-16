@@ -7,7 +7,6 @@ use std::{
 use veex_core::{
     dns::DnsExecutorHandle,
     io::{PacketAssociationKey, PacketCarrier, PacketFrame, PacketMetadata, PacketWriter},
-    portal::traits::BoxFuture,
     routing::{RouteFinalAction, RouteReason, RouteResult},
     session::SessionContext,
     types::Network,
@@ -23,7 +22,7 @@ use crate::{
         dns::hijack_packet_dns,
     },
     traits::DnsHijack,
-    OutboundRegistry,
+    ExecutionFuture, OutboundCatalog,
 };
 
 const DEFAULT_PACKET_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -33,19 +32,19 @@ const DEFAULT_PACKET_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// This path is intentionally independent from the stream dispatcher and owns
 /// association lifecycle, packet outbound session binding, and reverse packet flow.
 pub struct PacketDispatcher {
-    outbounds: Arc<OutboundRegistry>,
+    outbounds: Arc<OutboundCatalog>,
     dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
     associations: Arc<Mutex<HashMap<PacketAssociationKey, Arc<PacketAssociation>>>>,
     idle_timeout: Duration,
 }
 
 impl PacketDispatcher {
-    pub fn new(outbounds: Arc<OutboundRegistry>) -> Self {
+    pub fn new(outbounds: Arc<OutboundCatalog>) -> Self {
         Self::with_dns_executor_and_idle_timeout(outbounds, None, DEFAULT_PACKET_IDLE_TIMEOUT)
     }
 
     pub fn with_dns_executor(
-        outbounds: Arc<OutboundRegistry>,
+        outbounds: Arc<OutboundCatalog>,
         dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
     ) -> Self {
         Self::with_dns_executor_and_idle_timeout(
@@ -55,12 +54,12 @@ impl PacketDispatcher {
         )
     }
 
-    pub fn with_idle_timeout(outbounds: Arc<OutboundRegistry>, idle_timeout: Duration) -> Self {
+    pub fn with_idle_timeout(outbounds: Arc<OutboundCatalog>, idle_timeout: Duration) -> Self {
         Self::with_dns_executor_and_idle_timeout(outbounds, None, idle_timeout)
     }
 
     pub fn with_dns_executor_and_idle_timeout(
-        outbounds: Arc<OutboundRegistry>,
+        outbounds: Arc<OutboundCatalog>,
         dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
         idle_timeout: Duration,
     ) -> Self {
@@ -224,7 +223,7 @@ impl DnsHijack for PacketDispatcher {
         executor: Arc<dyn DnsExecutorHandle>,
         (session_id, packet, writer): Self::Input,
         route_reason: RouteReason,
-    ) -> BoxFuture<'_, ()> {
+    ) -> ExecutionFuture<'_, ()> {
         Box::pin(async move {
             hijack_packet_dns(&executor, session_id, packet, writer, route_reason).await
         })
@@ -266,6 +265,7 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashMap,
         net::{IpAddr, Ipv4Addr, SocketAddr},
         sync::{
             atomic::{AtomicUsize, Ordering},
@@ -291,7 +291,7 @@ mod tests {
         ProxyError,
     };
 
-    use crate::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder};
+    use crate::{ExecutionFuture, ExecutionOutbound, OutboundCatalog};
 
     use super::PacketDispatcher;
 
@@ -372,11 +372,15 @@ mod tests {
     }
 
     impl ExecutionOutbound for TestDispatchOutbound {
-        fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        fn tag(&self) -> &str {
+            &self.meta.tag
+        }
+
+        fn open_stream(&self, _ctx: &SessionContext) -> ExecutionFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("stream path is not used in this test")) })
         }
 
-        fn open_packet(&self, _ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
+        fn open_packet(&self, _ctx: &SessionContext) -> ExecutionFuture<'_, PacketSessionHandle> {
             self.connect_count.fetch_add(1, Ordering::Relaxed);
             let session = Arc::clone(&self.session);
             Box::pin(async move { Ok(session) })
@@ -410,16 +414,14 @@ mod tests {
         })
     }
 
-    fn finalized_registry(outbound: Arc<dyn ExecutionOutbound>) -> Arc<OutboundRegistry> {
-        let mut builder = OutboundRegistryBuilder::default();
-        builder
-            .register(Arc::clone(&outbound))
-            .expect("registry should accept outbound");
-        Arc::new(builder.finalize(outbound))
+    fn finalized_catalog(outbound: Arc<dyn ExecutionOutbound>) -> Arc<OutboundCatalog> {
+        let mut outbounds = HashMap::new();
+        outbounds.insert(outbound.tag().to_string(), Arc::clone(&outbound));
+        Arc::new(OutboundCatalog::new(outbounds, outbound))
     }
 
-    fn empty_registry() -> Arc<OutboundRegistry> {
-        finalized_registry(
+    fn empty_catalog() -> Arc<OutboundCatalog> {
+        finalized_catalog(
             Arc::new(TestDispatchOutbound::new("direct", empty_test_session()))
                 as Arc<dyn ExecutionOutbound>,
         )
@@ -436,7 +438,7 @@ mod tests {
         });
         let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
         let dispatcher = PacketDispatcher::with_idle_timeout(
-            finalized_registry(outbound.clone() as Arc<dyn ExecutionOutbound>),
+            finalized_catalog(outbound.clone() as Arc<dyn ExecutionOutbound>),
             Duration::from_secs(1),
         );
         let writer_sent = Arc::new(Mutex::new(Vec::new()));
@@ -547,7 +549,7 @@ mod tests {
         });
         let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
         let dispatcher = PacketDispatcher::with_idle_timeout(
-            finalized_registry(outbound as Arc<dyn ExecutionOutbound>),
+            finalized_catalog(outbound as Arc<dyn ExecutionOutbound>),
             Duration::from_millis(50),
         );
         let writer: Arc<dyn PacketWriter> = Arc::new(RecordingWriter {
@@ -604,7 +606,7 @@ mod tests {
     async fn packet_dispatcher_hands_hijack_dns_to_executor_without_association() {
         let (_guard, trace_buffer) = install_test_subscriber();
         let dispatcher = PacketDispatcher::with_dns_executor(
-            empty_registry(),
+            empty_catalog(),
             Some(Arc::new(TestDnsExecutor {
                 responses: Arc::new(Mutex::new(vec![b"dns-response".to_vec()])),
                 query_count: AtomicUsize::new(0),

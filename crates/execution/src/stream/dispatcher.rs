@@ -7,12 +7,14 @@ use veex_core::{
     dns::DnsExecutorHandle,
     io::{BoxedAsyncStream, StreamCarrier},
     logging::sanitize_field,
-    portal::traits::BoxFuture,
     routing::{RouteFinalAction, RouteReason, RouteResult},
     session::SessionContext,
 };
 
-use crate::{traits::DnsHijack, OutboundRegistry};
+use crate::{
+    traits::{DnsHijack, ExecutionFuture},
+    OutboundCatalog,
+};
 
 use super::{
     dns::hijack_stream_dns,
@@ -20,7 +22,7 @@ use super::{
 };
 
 pub struct StreamDispatcher {
-    outbounds: Arc<OutboundRegistry>,
+    outbounds: Arc<OutboundCatalog>,
     dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
 }
 
@@ -35,12 +37,12 @@ struct DispatchTraceContext {
 }
 
 impl StreamDispatcher {
-    pub fn new(outbounds: Arc<OutboundRegistry>) -> Self {
+    pub fn new(outbounds: Arc<OutboundCatalog>) -> Self {
         Self::with_dns_executor(outbounds, None)
     }
 
     pub fn with_dns_executor(
-        outbounds: Arc<OutboundRegistry>,
+        outbounds: Arc<OutboundCatalog>,
         dns_executor: Option<Arc<dyn DnsExecutorHandle>>,
     ) -> Self {
         Self {
@@ -159,7 +161,7 @@ impl DnsHijack for StreamDispatcher {
         executor: Arc<dyn DnsExecutorHandle>,
         (inbound_stream, ctx): Self::Input,
         route_reason: RouteReason,
-    ) -> BoxFuture<'_, ()> {
+    ) -> ExecutionFuture<'_, ()> {
         Box::pin(
             async move { hijack_stream_dns(&executor, inbound_stream, ctx, route_reason).await },
         )
@@ -230,7 +232,7 @@ fn log_relay_failed(trace: &DispatchTraceContext, relay_err: &RelayErrorWithStat
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::VecDeque,
+        collections::{HashMap, VecDeque},
         io,
         pin::Pin,
         sync::{Arc, Mutex},
@@ -253,7 +255,7 @@ mod tests {
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
-    use crate::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder};
+    use crate::{ExecutionFuture, ExecutionOutbound, OutboundCatalog};
 
     struct ClosedStream;
 
@@ -449,7 +451,11 @@ mod tests {
     }
 
     impl ExecutionOutbound for CaptureOutbound {
-        fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        fn tag(&self) -> &str {
+            &self.meta.tag
+        }
+
+        fn open_stream(&self, ctx: &SessionContext) -> ExecutionFuture<'_, BoxedAsyncStream> {
             StreamOutbound::connect_stream(self, ctx)
         }
     }
@@ -499,21 +505,23 @@ mod tests {
     }
 
     impl ExecutionOutbound for ScriptedOutbound {
-        fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        fn tag(&self) -> &str {
+            &self.meta.tag
+        }
+
+        fn open_stream(&self, ctx: &SessionContext) -> ExecutionFuture<'_, BoxedAsyncStream> {
             StreamOutbound::connect_stream(self, ctx)
         }
     }
 
-    fn finalized_registry(outbound: Arc<dyn ExecutionOutbound>) -> Arc<OutboundRegistry> {
-        let mut builder = OutboundRegistryBuilder::default();
-        builder
-            .register(Arc::clone(&outbound))
-            .expect("outbound should register");
-        Arc::new(builder.finalize(outbound))
+    fn finalized_catalog(outbound: Arc<dyn ExecutionOutbound>) -> Arc<OutboundCatalog> {
+        let mut outbounds = HashMap::new();
+        outbounds.insert(outbound.tag().to_string(), Arc::clone(&outbound));
+        Arc::new(OutboundCatalog::new(outbounds, outbound))
     }
 
-    fn empty_registry() -> Arc<OutboundRegistry> {
-        finalized_registry(Arc::new(CaptureOutbound {
+    fn empty_catalog() -> Arc<OutboundCatalog> {
+        finalized_catalog(Arc::new(CaptureOutbound {
             meta: OutboundMeta::new("direct", "capture"),
             logger: Logger::new("direct", "capture"),
             captured: Arc::new(Mutex::new(None)),
@@ -523,7 +531,7 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_writes_route_and_passes_state_to_outbound() {
         let (outbound, captured) = CaptureOutbound::new("proxy");
-        let dispatcher = StreamDispatcher::new(finalized_registry(Arc::new(outbound)));
+        let dispatcher = StreamDispatcher::new(finalized_catalog(Arc::new(outbound)));
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 7,
@@ -558,14 +566,13 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_preserves_partial_relay_stats_on_failure() {
         let (_guard, events) = install_test_subscriber();
-        let dispatcher =
-            StreamDispatcher::new(finalized_registry(Arc::new(ScriptedOutbound::new(
-                "proxy",
-                Box::new(ScriptedStream::new([
-                    ReadStep::Data(b"pong"),
-                    ReadStep::Eof,
-                ])),
-            ))));
+        let dispatcher = StreamDispatcher::new(finalized_catalog(Arc::new(ScriptedOutbound::new(
+            "proxy",
+            Box::new(ScriptedStream::new([
+                ReadStep::Data(b"pong"),
+                ReadStep::Eof,
+            ])),
+        ))));
         let ctx = SessionContext::new(
             SessionMeta {
                 id: 9,
@@ -630,7 +637,7 @@ mod tests {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let responses = Arc::new(Mutex::new(vec![b"\x12\x34dns-response".to_vec()]));
         let dispatcher = StreamDispatcher::with_dns_executor(
-            empty_registry(),
+            empty_catalog(),
             Some(Arc::new(TestDnsExecutor {
                 requests: Arc::clone(&requests),
                 responses,

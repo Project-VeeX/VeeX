@@ -16,7 +16,7 @@ use veex_core::{
     session::SessionContext,
     ProxyError, Result,
 };
-use veex_execution::ExecutionOutbound;
+use veex_execution::{ExecutionFuture, ExecutionOutbound};
 
 #[derive(Debug)]
 struct DirectOutboundState {
@@ -140,11 +140,15 @@ impl StreamOutbound for DirectOutbound {
 }
 
 impl ExecutionOutbound for DirectOutbound {
-    fn open_stream(&self, ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+    fn tag(&self) -> &str {
+        &self.meta.tag
+    }
+
+    fn open_stream(&self, ctx: &SessionContext) -> ExecutionFuture<'_, BoxedAsyncStream> {
         self.connect_upstream_stream(ctx)
     }
 
-    fn open_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
+    fn open_packet(&self, ctx: &SessionContext) -> ExecutionFuture<'_, PacketSessionHandle> {
         self.connect_upstream_packet(ctx)
     }
 }

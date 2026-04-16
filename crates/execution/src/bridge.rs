@@ -8,13 +8,12 @@ use std::{
 
 use veex_core::{
     io::{BoxedAsyncStream, PacketCarrier, PacketFrame, PacketWriter, StreamCarrier},
-    portal::traits::BoxFuture,
     routing::Router,
     session::{SessionContext, SessionMeta},
 };
 
 use super::{
-    traits::{PacketDispatch, StreamDispatch},
+    traits::{ExecutionFuture, PacketDispatch, StreamDispatch},
     PacketDispatcher, StreamDispatcher,
 };
 
@@ -34,7 +33,7 @@ impl StreamDispatch for RoutedStreamDispatch {
         &self,
         inbound_stream: BoxedAsyncStream,
         ctx: SessionContext,
-    ) -> BoxFuture<'_, ()> {
+    ) -> ExecutionFuture<'_, ()> {
         Box::pin(async move {
             let routed = self
                 .router
@@ -84,7 +83,7 @@ impl PacketDispatch for RoutedPacketDispatch {
         &self,
         packet: PacketFrame,
         writer: Arc<dyn PacketWriter>,
-    ) -> BoxFuture<'_, ()> {
+    ) -> ExecutionFuture<'_, ()> {
         Box::pin(async move {
             if self.dispatcher.dispatch_associated(packet.clone()).await? {
                 return Ok(());

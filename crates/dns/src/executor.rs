@@ -16,7 +16,7 @@ use veex_core::{
     types::Host,
     ProxyError,
 };
-use veex_execution::OutboundRegistry;
+use veex_execution::OutboundCatalog;
 
 use crate::{
     build_a_query, parse_query_domain, parse_response_ips,
@@ -38,7 +38,7 @@ struct DnsServerRuntime {
 impl DnsServerRuntime {
     fn new(
         server: DnsServer,
-        outbounds: &Arc<OutboundRegistry>,
+        outbounds: &Arc<OutboundCatalog>,
         query_timeout: Duration,
     ) -> veex_core::Result<Self> {
         let dialer = match &server.transport {
@@ -63,7 +63,7 @@ pub struct DnsExecutor {
 impl DnsExecutor {
     pub fn new(
         config: DnsRuntimeConfig,
-        outbounds: Arc<OutboundRegistry>,
+        outbounds: Arc<OutboundCatalog>,
     ) -> veex_core::Result<Self> {
         let query_timeout = DEFAULT_DNS_QUERY_TIMEOUT;
         let mut servers = HashMap::new();
@@ -429,6 +429,7 @@ impl DomainResolverHandle for DnsExecutor {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashMap,
         net::{IpAddr, Ipv4Addr, SocketAddr},
         sync::{
             atomic::{AtomicUsize, Ordering},
@@ -446,7 +447,7 @@ mod tests {
         types::{Destination, Host, Network},
         ProxyError,
     };
-    use veex_execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder};
+    use veex_execution::{ExecutionFuture, ExecutionOutbound, OutboundCatalog};
 
     use crate::{
         build_a_query,
@@ -505,11 +506,15 @@ mod tests {
     }
 
     impl ExecutionOutbound for TestOutbound {
-        fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
+        fn tag(&self) -> &str {
+            &self.meta.tag
+        }
+
+        fn open_stream(&self, _ctx: &SessionContext) -> ExecutionFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("stream path unused")) })
         }
 
-        fn open_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
+        fn open_packet(&self, ctx: &SessionContext) -> ExecutionFuture<'_, PacketSessionHandle> {
             let session = Arc::clone(&self.session);
             let connected_destinations = Arc::clone(&self.connected_destinations);
             let destination = ctx.meta.destination.clone();
@@ -530,7 +535,7 @@ mod tests {
     }
 
     fn register_test_outbound(
-        registry: &mut OutboundRegistryBuilder,
+        registry: &mut Vec<Arc<dyn ExecutionOutbound>>,
         tag: &str,
         session: PacketSessionHandle,
         connected_destinations: Arc<Mutex<Vec<Destination>>>,
@@ -541,21 +546,23 @@ mod tests {
             session,
             connected_destinations,
         }) as Arc<dyn ExecutionOutbound>;
-        registry
-            .register(Arc::clone(&outbound))
-            .expect("test outbound should register");
+        registry.push(Arc::clone(&outbound));
         outbound
     }
 
-    fn finalize_builder(
-        builder: OutboundRegistryBuilder,
+    fn finalize_catalog(
+        builder: Vec<Arc<dyn ExecutionOutbound>>,
         default_outbound: Arc<dyn ExecutionOutbound>,
-    ) -> Arc<OutboundRegistry> {
-        Arc::new(builder.finalize(default_outbound))
+    ) -> Arc<OutboundCatalog> {
+        let outbounds = builder
+            .into_iter()
+            .map(|outbound| (outbound.tag().to_string(), outbound))
+            .collect();
+        Arc::new(OutboundCatalog::new(outbounds, default_outbound))
     }
 
     fn register_default_test_outbound(
-        registry: &mut OutboundRegistryBuilder,
+        registry: &mut Vec<Arc<dyn ExecutionOutbound>>,
         tag: &str,
         session: PacketSessionHandle,
         connected_destinations: Arc<Mutex<Vec<Destination>>>,
@@ -572,7 +579,7 @@ mod tests {
             sent_count: AtomicUsize::new(0),
             sent_payloads: Arc::new(Mutex::new(Vec::new())),
         });
-        let mut registry = OutboundRegistryBuilder::default();
+        let mut registry = Vec::new();
         let default_outbound = register_default_test_outbound(
             &mut registry,
             "direct",
@@ -617,7 +624,7 @@ mod tests {
                     server_tag: "direct".into(),
                 }],
             },
-            finalize_builder(registry, default_outbound),
+            finalize_catalog(registry, default_outbound),
         )
         .expect("dns executor should build");
 
@@ -650,7 +657,7 @@ mod tests {
             sent_count: AtomicUsize::new(0),
             sent_payloads: Arc::new(Mutex::new(Vec::new())),
         });
-        let mut registry = OutboundRegistryBuilder::default();
+        let mut registry = Vec::new();
         let default_outbound = register_default_test_outbound(
             &mut registry,
             "direct",
@@ -701,7 +708,7 @@ mod tests {
                     server_tag: "remote".into(),
                 }],
             },
-            finalize_builder(registry, default_outbound),
+            finalize_catalog(registry, default_outbound),
         )
         .expect("dns executor should build");
 
@@ -726,7 +733,7 @@ mod tests {
 
     #[tokio::test]
     async fn domain_resolver_rejects_recursive_default_path_without_safe_server() {
-        let mut registry = OutboundRegistryBuilder::default();
+        let mut registry = Vec::new();
         let default_outbound = register_default_test_outbound(
             &mut registry,
             "proxy",
@@ -749,7 +756,7 @@ mod tests {
                 }],
                 rules: Vec::new(),
             },
-            finalize_builder(registry, default_outbound),
+            finalize_catalog(registry, default_outbound),
         )
         .expect("dns executor should build");
 
@@ -767,7 +774,7 @@ mod tests {
 
     #[tokio::test]
     async fn domain_resolver_rejects_excessive_recursion_depth() {
-        let mut registry = OutboundRegistryBuilder::default();
+        let mut registry = Vec::new();
         let default_outbound = register_default_test_outbound(
             &mut registry,
             "direct",
@@ -790,7 +797,7 @@ mod tests {
                 }],
                 rules: Vec::new(),
             },
-            finalize_builder(registry, default_outbound),
+            finalize_catalog(registry, default_outbound),
         )
         .expect("dns executor should build");
 
@@ -825,7 +832,7 @@ mod tests {
                 }],
                 rules: Vec::new(),
             },
-            Arc::new(OutboundRegistryBuilder::default().finalize(default_outbound)),
+            Arc::new(OutboundCatalog::new(HashMap::new(), default_outbound)),
         );
 
         assert!(executor.is_ok());
