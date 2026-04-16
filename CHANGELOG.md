@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.5
+
+- Extracted shared protocol seams without changing component boundaries: Trojan outbound now uses a dedicated protocol adapter path, while direct outbound remains explicitly protocol-free.
+- Split SOCKS inbound server-side protocol handling out of the portal shell, and further compacted direct and transparent inbound portals around the protocol-free `portal -> listener -> execution` model.
+- Aggregated inbound and outbound component crates into `veex-portal-inbound` and `veex-portal-outbound`, keeping `portal`, `protocol`, `transport`, and `execution` as separate architectural layers.
+
 ## 0.6.4
 
 - Fixed DNS resolution metadata handling so resolver-domain control data is no longer propagated as outbound buffered payload.

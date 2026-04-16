@@ -791,7 +791,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "veex-cli"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "rcgen",
  "rustls",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "veex-config"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "humantime",
  "ipnet",
@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "veex-core"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "ipnet",
  "thiserror",
@@ -839,7 +839,7 @@ dependencies = [
 
 [[package]]
 name = "veex-dns"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "async-trait",
  "tokio",
@@ -852,7 +852,7 @@ dependencies = [
 
 [[package]]
 name = "veex-infra-linux"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "libc",
  "socket2 0.5.10",
@@ -864,14 +864,14 @@ dependencies = [
 
 [[package]]
 name = "veex-observability"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "veex-portal-inbound"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "thiserror",
  "tokio",
@@ -882,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "veex-portal-outbound"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "libc",
  "rcgen",
@@ -900,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "veex-protocol"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "sha2",
  "tokio",
@@ -909,7 +909,7 @@ dependencies = [
 
 [[package]]
 name = "veex-test-tracing"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -917,7 +917,7 @@ dependencies = [
 
 [[package]]
 name = "veex-transport"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "rcgen",
  "rustls",
