@@ -12,7 +12,7 @@ use crate::{
     },
     logging::sanitize_field,
     portal::traits::BoxFuture,
-    router::{RouteFinalAction, RouteReason, Router},
+    routing::{RouteFinalAction, RouteReason, Router},
 };
 
 use super::{

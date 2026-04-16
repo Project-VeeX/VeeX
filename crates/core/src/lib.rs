@@ -6,10 +6,9 @@ pub mod execution;
 pub mod listen;
 pub mod logging;
 pub mod portal;
-pub mod router;
+pub mod routing;
 pub mod session;
 pub mod shutdown;
-pub mod sniff;
 pub mod types;
 
 pub use dns::{
@@ -38,11 +37,11 @@ pub use portal::{
         TransparentInbound,
     },
 };
-pub use router::{
-    RouteAction, RouteDecision, RouteFinalAction, RouteInput, RouteReason, RouteRule, RouteTarget,
-    RouteUpgradeAction, Router, SniffAction,
+pub use routing::{
+    sniff_stream, PrefixedStream, RouteAction, RouteDecision, RouteFinalAction, RouteInput,
+    RouteReason, RouteRule, RouteTarget, RouteUpgradeAction, Router, SniffAction, SniffOutcome,
+    SniffedProtocol,
 };
 pub use session::{build_session_bootstrap, SessionBootstrap};
 pub use shutdown::{shutdown_channel, ShutdownSignal, ShutdownTrigger};
-pub use sniff::{sniff_stream, PrefixedStream, SniffOutcome, SniffedProtocol};
 pub use types::{Destination, Host, Listen, Network};

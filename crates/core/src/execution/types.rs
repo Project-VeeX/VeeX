@@ -3,7 +3,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
 use crate::{
     dns::ResolveContext,
     error::ProxyError,
-    router::RouteReason,
+    routing::RouteReason,
     types::{Destination, Network},
 };
 
@@ -197,7 +197,7 @@ mod tests {
     };
 
     use super::{OutboundRegistryBuilder, SessionContext, SessionMeta};
-    use crate::router::RouteReason;
+    use crate::routing::RouteReason;
 
     struct TestOutbound {
         meta: OutboundMeta,

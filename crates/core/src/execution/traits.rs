@@ -9,7 +9,7 @@ use crate::{
         types::SessionContext,
     },
     portal::traits::{BoxFuture, Outbound},
-    router::RouteReason,
+    routing::RouteReason,
 };
 
 /// Dispatch-facing outbound capability used by the execution layer.

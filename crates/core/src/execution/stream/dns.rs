@@ -6,7 +6,7 @@ use crate::{
     dns::{read_dns_tcp_message, write_dns_tcp_message, DnsExecutorHandle, DnsRequest},
     execution::{stream::io::BoxedAsyncStream, types::SessionContext},
     logging::sanitize_field,
-    router::RouteReason,
+    routing::RouteReason,
 };
 
 pub(crate) async fn hijack_stream_dns(

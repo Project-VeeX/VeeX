@@ -6,9 +6,10 @@ use tracing::{debug, info, warn};
 use crate::{
     execution::{stream::io::BoxedAsyncStream, types::SessionContext},
     logging::sanitize_field,
-    sniff::{sniff_stream_internal, SniffExecution, SniffResult},
     types::{Destination, Host},
 };
+
+use super::{sniff_stream_internal, SniffExecution, SniffResult};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouteReason {

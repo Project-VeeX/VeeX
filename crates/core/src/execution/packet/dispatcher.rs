@@ -23,7 +23,7 @@ use crate::{
         types::{OutboundRegistry, SessionContext, SessionMeta},
     },
     portal::traits::BoxFuture,
-    router::{RouteFinalAction, RouteReason, Router},
+    routing::{RouteFinalAction, RouteReason, Router},
     types::Network,
 };
 
@@ -305,7 +305,7 @@ mod tests {
     use crate::{
         dns::{DnsExecutorHandle, DnsRequest, DnsResponse},
         logging::Logger,
-        router::{RouteAction, RouteFinalAction, RouteRule},
+        routing::{RouteAction, RouteFinalAction, RouteRule},
         types::Host,
         BoxFuture, BoxedAsyncStream, Destination, ExecutionOutbound, Network, Outbound,
         OutboundMeta, OutboundRegistry, OutboundRegistryBuilder, PacketDispatch, PacketFrame,

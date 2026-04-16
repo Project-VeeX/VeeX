@@ -11,7 +11,7 @@ pub mod stream;
 pub mod traits;
 pub mod types;
 
-pub use crate::router::RouteReason;
+pub use crate::routing::RouteReason;
 pub use packet::dispatcher::PacketDispatcher;
 pub use packet::io::{
     PacketAssociationKey, PacketFrame, PacketMetadata, PacketSession, PacketSessionHandle,

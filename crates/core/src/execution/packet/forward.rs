@@ -9,7 +9,7 @@ use std::{
 use tokio::sync::Notify;
 use tracing::{debug, info, warn};
 
-use crate::{error::ProxyError, logging::sanitize_field, router::RouteReason};
+use crate::{error::ProxyError, logging::sanitize_field, routing::RouteReason};
 
 use super::io::{PacketAssociationKey, PacketSessionHandle, PacketWriter};
 

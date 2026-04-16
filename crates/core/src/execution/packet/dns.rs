@@ -6,7 +6,7 @@ use crate::{
     dns::{DnsExecutorHandle, DnsRequest},
     execution::packet::io::{PacketFrame, PacketWriter},
     logging::sanitize_field,
-    router::RouteReason,
+    routing::RouteReason,
 };
 
 pub(crate) async fn hijack_packet_dns(
