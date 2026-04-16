@@ -6,10 +6,10 @@ use crate::{
     execution::{
         packet::io::{PacketFrame, PacketSessionHandle, PacketWriter},
         stream::io::BoxedAsyncStream,
-        types::SessionContext,
     },
     portal::traits::{BoxFuture, Outbound},
     routing::RouteReason,
+    session::SessionContext,
 };
 
 /// Dispatch-facing outbound capability used by the execution layer.

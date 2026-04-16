@@ -8,11 +8,12 @@ use crate::{
     execution::{
         stream::io::BoxedAsyncStream,
         traits::{DnsHijack, StreamDispatch},
-        types::{OutboundRegistry, SessionContext},
+        OutboundRegistry,
     },
     logging::sanitize_field,
     portal::traits::BoxFuture,
     routing::{RouteFinalAction, RouteReason, Router},
+    session::SessionContext,
 };
 
 use super::{

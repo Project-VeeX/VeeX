@@ -4,9 +4,10 @@ use tokio::net::TcpStream;
 
 use crate::{
     error::Result,
-    execution::{stream::io::BoxedAsyncStream, types::SessionContext},
+    execution::stream::io::BoxedAsyncStream,
     logging::Logger,
     portal::meta::{InboundMeta, OutboundMeta},
+    session::SessionContext,
 };
 
 /// A boxed future that is Send-safe, returned by trait methods.

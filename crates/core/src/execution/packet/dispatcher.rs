@@ -12,18 +12,19 @@ use crate::{
     error::ProxyError,
     execution::{
         packet::{
-            dns::hijack_packet_dns,
-            forward::{
+            association::{
                 log_packet_association_close, log_packet_association_close_error,
                 log_packet_association_hit, PacketAssociation,
             },
+            dns::hijack_packet_dns,
             io::{PacketAssociationKey, PacketFrame, PacketMetadata, PacketWriter},
         },
         traits::{DnsHijack, PacketDispatch},
-        types::{OutboundRegistry, SessionContext, SessionMeta},
+        OutboundRegistry,
     },
     portal::traits::BoxFuture,
     routing::{RouteFinalAction, RouteReason, Router},
+    session::{SessionContext, SessionMeta},
     types::Network,
 };
 
@@ -170,18 +171,7 @@ impl PacketDispatcher {
                 existing
             }
             None => {
-                let session_id = self.next_association_id();
-                let ctx = SessionContext::new(
-                    SessionMeta {
-                        id: session_id,
-                        network: packet.metadata.network,
-                        inbound_tag: packet.metadata.inbound_tag.clone(),
-                        peer: packet.metadata.peer,
-                        destination: packet.metadata.destination.clone(),
-                        start: Instant::now(),
-                    },
-                    Vec::new(),
-                );
+                let ctx = self.build_session_context(&packet.metadata);
                 let decision = self.router.select(&ctx);
 
                 match &decision.final_action {
@@ -224,6 +214,20 @@ impl PacketDispatcher {
         }
 
         Ok(())
+    }
+
+    fn build_session_context(&self, metadata: &PacketMetadata) -> SessionContext {
+        SessionContext::new(
+            SessionMeta {
+                id: self.next_association_id(),
+                network: metadata.network,
+                inbound_tag: metadata.inbound_tag.clone(),
+                peer: metadata.peer,
+                destination: metadata.destination.clone(),
+                start: Instant::now(),
+            },
+            Vec::new(),
+        )
     }
 }
 
