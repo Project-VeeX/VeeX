@@ -14,7 +14,7 @@ use veex_core::{
     SessionBootstrap, StreamDispatch, StreamInbound,
 };
 
-use crate::DirectError;
+use crate::common::{resolve_stream_destination, validate_stream_inbound};
 
 struct DirectInboundState {
     next_session_id: AtomicU64,
@@ -56,34 +56,12 @@ impl DirectInbound {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.meta.tag.trim().is_empty() {
-            return Err(ProxyError::config("direct inbound tag must not be empty"));
-        }
-        if self.meta.r#type.trim().is_empty() {
-            return Err(ProxyError::config("direct inbound type must not be empty"));
-        }
-        if self.listener.listen().listen().trim().is_empty() {
-            return Err(ProxyError::config(
-                "direct inbound listen must not be empty",
-            ));
-        }
-        if self.listener.listen().listen_port() == 0 {
-            return Err(ProxyError::config(
-                "direct inbound listen_port must be within 1..=65535",
-            ));
-        }
-        if matches!(self.override_host.as_ref(), Some(Host::Domain(domain)) if domain.trim().is_empty())
-        {
-            return Err(ProxyError::config(
-                "direct inbound override_address must not be empty",
-            ));
-        }
-        if matches!(self.override_port, Some(0)) {
-            return Err(ProxyError::config(
-                "direct inbound override_port must be within 1..=65535",
-            ));
-        }
-        self.listener.bind_addr().map(|_| ())
+        validate_stream_inbound(
+            &self.meta,
+            &self.listener,
+            &self.override_host,
+            self.override_port,
+        )
     }
 
     fn bind_listener_handler(self: &Arc<Self>) -> Result<()> {
@@ -112,35 +90,21 @@ impl DirectInbound {
         )
     }
 
-    fn resolve_destination(
-        &self,
-        stream: &TcpStream,
-    ) -> std::result::Result<Destination, DirectError> {
-        let local_addr = stream.local_addr()?;
-        let mut destination = Destination::from_ip(local_addr.ip(), local_addr.port());
-        if let Some(host) = &self.override_host {
-            destination.host = host.clone();
-        }
-        if let Some(port) = self.override_port {
-            destination.port = port;
-        }
-        Ok(destination)
-    }
-
     async fn handle_stream(&self, stream: TcpStream, peer: SocketAddr) -> Result<()> {
-        let destination = match self.resolve_destination(&stream) {
-            Ok(destination) => destination,
-            Err(err) => {
-                warn!(
-                    event = "destination_resolve_failed",
-                    inbound = %self.logger.tag_field(),
-                    peer = %sanitize_field(&peer.to_string()),
-                    error = %err,
-                    "direct inbound destination lookup failed"
-                );
-                return Err(err.into());
-            }
-        };
+        let destination =
+            match resolve_stream_destination(&stream, &self.override_host, self.override_port) {
+                Ok(destination) => destination,
+                Err(err) => {
+                    warn!(
+                        event = "destination_resolve_failed",
+                        inbound = %self.logger.tag_field(),
+                        peer = %sanitize_field(&peer.to_string()),
+                        error = %err,
+                        "direct inbound destination lookup failed"
+                    );
+                    return Err(err.into());
+                }
+            };
         let session = self.bootstrap_session(peer, destination);
         info!(
             event = "session_start",

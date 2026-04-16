@@ -7,6 +7,8 @@ use veex_core::{
     PacketListenerReceiveHandler, PacketMetadata, PacketWriter, ProxyError, Result,
 };
 
+use crate::common::{resolve_local_destination, validate_packet_inbound};
+
 pub struct DirectUdpInbound {
     meta: InboundMeta,
     logger: Logger,
@@ -39,38 +41,12 @@ impl DirectUdpInbound {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.meta.tag.trim().is_empty() {
-            return Err(ProxyError::config(
-                "direct udp inbound tag must not be empty",
-            ));
-        }
-        if self.meta.r#type.trim().is_empty() {
-            return Err(ProxyError::config(
-                "direct udp inbound type must not be empty",
-            ));
-        }
-        if self.listener.listen().listen().trim().is_empty() {
-            return Err(ProxyError::config(
-                "direct udp inbound listen must not be empty",
-            ));
-        }
-        if self.listener.listen().listen_port() == 0 {
-            return Err(ProxyError::config(
-                "direct udp inbound listen_port must be within 1..=65535",
-            ));
-        }
-        if matches!(self.override_host.as_ref(), Some(Host::Domain(domain)) if domain.trim().is_empty())
-        {
-            return Err(ProxyError::config(
-                "direct udp inbound override_address must not be empty",
-            ));
-        }
-        if matches!(self.override_port, Some(0)) {
-            return Err(ProxyError::config(
-                "direct udp inbound override_port must be within 1..=65535",
-            ));
-        }
-        self.listener.bind_addr().map(|_| ())
+        validate_packet_inbound(
+            &self.meta,
+            &self.listener,
+            &self.override_host,
+            self.override_port,
+        )
     }
 
     fn bind_listener_handler(self: &Arc<Self>) -> Result<()> {
@@ -87,19 +63,9 @@ impl DirectUdpInbound {
         self.listener.bind_handler(handler)
     }
 
-    fn resolve_destination(&self, local_addr: SocketAddr) -> Destination {
-        let mut destination = Destination::from_ip(local_addr.ip(), local_addr.port());
-        if let Some(host) = &self.override_host {
-            destination.host = host.clone();
-        }
-        if let Some(port) = self.override_port {
-            destination.port = port;
-        }
-        destination
-    }
-
     async fn handle_receive(&self, receive: PacketListenerReceive) -> Result<()> {
-        let destination = self.resolve_destination(receive.local_addr);
+        let destination =
+            resolve_local_destination(receive.local_addr, &self.override_host, self.override_port);
         let destination_field = sanitize_field(&destination.to_string()).into_owned();
         handle_packet(
             Arc::clone(&self.sink),
