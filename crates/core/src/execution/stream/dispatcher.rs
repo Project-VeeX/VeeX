@@ -238,10 +238,15 @@ mod tests {
 
     use super::StreamDispatcher;
     use crate::{
-        BoxFuture, BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DnsResponse,
-        ErrorKind, ExecutionOutbound, Logger, Network, Outbound, OutboundMeta, OutboundRegistry,
-        OutboundRegistryBuilder, RouteDecision, RouteFinalAction, RouteReason, RouteResult,
-        SessionContext, SessionMeta, SessionRoute, SessionState, StreamCarrier, StreamOutbound,
+        dns::{DnsExecutorHandle, DnsRequest, DnsResponse},
+        execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder},
+        io::{BoxedAsyncStream, StreamCarrier},
+        logging::Logger,
+        portal::{BoxFuture, Outbound, OutboundMeta, StreamOutbound},
+        routing::{RouteDecision, RouteFinalAction, RouteReason, RouteResult},
+        session::{SessionContext, SessionMeta, SessionRoute, SessionState},
+        types::{Destination, Network},
+        ErrorKind,
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 

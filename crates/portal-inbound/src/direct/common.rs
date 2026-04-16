@@ -1,7 +1,11 @@
 use std::net::SocketAddr;
 
 use tokio::net::TcpStream;
-use veex_core::{Destination, Host, InboundMeta, Listener, PacketListener, ProxyError, Result};
+use veex_core::{
+    portal::{InboundMeta, Listener, PacketListener},
+    types::{Destination, Host},
+    ProxyError, Result,
+};
 
 use super::error::DirectError;
 

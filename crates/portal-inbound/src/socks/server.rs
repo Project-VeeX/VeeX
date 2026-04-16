@@ -9,9 +9,13 @@ use std::{
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
-    build_session_bootstrap, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound,
-    InboundMeta, Listener, ListenerAcceptHandler, Logger, ProxyError, Result, SessionBootstrap,
-    StreamDispatch, StreamInbound,
+    execution::StreamDispatch,
+    io::BoxedAsyncStream,
+    logging::{sanitize_field, Logger},
+    portal::{BoxFuture, Inbound, InboundMeta, Listener, ListenerAcceptHandler, StreamInbound},
+    session::{build_session_bootstrap, SessionBootstrap},
+    types::Destination,
+    ProxyError, Result,
 };
 
 use super::{
@@ -201,8 +205,12 @@ mod tests {
         sync::oneshot,
     };
     use veex_core::{
-        BoxFuture, Destination, Inbound, InboundMeta, Listener, ListenerFactory, Logger,
-        StreamDispatch,
+        execution::StreamDispatch,
+        io::BoxedAsyncStream,
+        logging::Logger,
+        portal::{BoxFuture, Inbound, InboundMeta, Listener, ListenerFactory},
+        session::SessionContext,
+        types::{Destination, Listen},
     };
 
     use super::SocksInbound;
@@ -214,8 +222,8 @@ mod tests {
     impl StreamDispatch for RecordingSink {
         fn dispatch_stream(
             &self,
-            _inbound_stream: veex_core::BoxedAsyncStream,
-            ctx: veex_core::SessionContext,
+            _inbound_stream: BoxedAsyncStream,
+            ctx: SessionContext,
         ) -> BoxFuture<'_, ()> {
             let destination = ctx.meta.destination.clone();
             let tx = self.tx.lock().expect("tx mutex should lock").take();
@@ -282,7 +290,7 @@ mod tests {
     }
 
     fn test_listener(addr: SocketAddr) -> Listener {
-        let listen = veex_core::Listen::new(addr.ip().to_string(), addr.port());
+        let listen = Listen::new(addr.ip().to_string(), addr.port());
         let factory: Arc<ListenerFactory> = Arc::new(|addr| {
             Box::pin(async move {
                 let listener = std::net::TcpListener::bind(addr)?;

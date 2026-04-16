@@ -1,6 +1,10 @@
 use std::{future::Future, pin::Pin};
 
-use veex_core::{BoxedAsyncStream, Destination, PacketSessionHandle, Result};
+use veex_core::{
+    io::{BoxedAsyncStream, PacketSessionHandle},
+    types::Destination,
+    Result,
+};
 
 pub type StreamAdapterFuture<'a> =
     Pin<Box<dyn Future<Output = Result<BoxedAsyncStream>> + Send + 'a>>;

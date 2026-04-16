@@ -7,8 +7,12 @@ use tokio::{
 };
 use tracing::{debug, info, warn};
 use veex_core::{
-    sanitize_field, Dial, DialContext, Dialer, Host, PacketDialer, PacketSession,
-    PacketSessionHandle, ProxyError, ResolveContext, Result,
+    dns::ResolveContext,
+    io::{PacketSession, PacketSessionHandle},
+    logging::sanitize_field,
+    portal::{BoxFuture, Dial, DialContext, Dialer, PacketDialer},
+    types::Host,
+    ProxyError, Result,
 };
 use veex_transport::{
     connect_host_with_resolver, resolve_host, ConnectTraceContext, HostResolveRequest,
@@ -423,7 +427,7 @@ impl DirectPacketSession {
 }
 
 impl PacketSession for DirectPacketSession {
-    fn send_packet(&self, payload: Vec<u8>) -> veex_core::BoxFuture<'_, ()> {
+    fn send_packet(&self, payload: Vec<u8>) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             let written = self.socket.send(&payload).await?;
             if written != payload.len() {
@@ -436,7 +440,7 @@ impl PacketSession for DirectPacketSession {
         })
     }
 
-    fn recv_packet(&self) -> veex_core::BoxFuture<'_, Vec<u8>> {
+    fn recv_packet(&self) -> BoxFuture<'_, Vec<u8>> {
         Box::pin(async move {
             let mut buf = vec![0u8; u16::MAX as usize];
             let size = self.socket.recv(&mut buf).await?;

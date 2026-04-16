@@ -6,8 +6,11 @@ use veex_config::{
     RouteUpgradeActionConfig, TrojanTlsConfig,
 };
 use veex_core::{
-    Destination, Dial, Host, InboundMeta, Listen, Network, OutboundMeta, RouteAction,
-    RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, SniffAction,
+    portal::{Dial, InboundMeta, OutboundMeta},
+    routing::{
+        RouteAction, RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, SniffAction,
+    },
+    types::{Destination, Host, Listen, Network},
 };
 use veex_dns::{
     DnsHttpsOptions, DnsRule, DnsRuntimeConfig, DnsServer, DnsServerTransport, DEFAULT_DOH_PATH,

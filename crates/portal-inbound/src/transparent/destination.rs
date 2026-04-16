@@ -1,5 +1,5 @@
 use tokio::net::TcpStream;
-use veex_core::Destination;
+use veex_core::types::Destination;
 use veex_infra_linux::{get_original_dst, get_tproxy_dst};
 
 use super::{redirect::RedirectError, tproxy::TProxyError};

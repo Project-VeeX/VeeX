@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use tokio::net::TcpStream;
-use veex_core::{Dial, DialContext, Dialer, ResolveContext};
+use veex_core::{
+    dns::ResolveContext,
+    portal::{Dial, DialContext, Dialer},
+};
 use veex_transport::{
     connect_host_with_resolver, resolve_host, ConnectTraceContext, HostResolver,
     TcpAttemptConnector, TcpConnectOptions,

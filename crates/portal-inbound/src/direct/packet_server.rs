@@ -2,9 +2,15 @@ use std::{net::SocketAddr, sync::Arc};
 
 use tracing::{debug, info, warn};
 use veex_core::{
-    sanitize_field, BoxFuture, Destination, Host, Inbound, InboundMeta, Logger, Network,
-    PacketDispatch, PacketFrame, PacketListener, PacketListenerReceive,
-    PacketListenerReceiveHandler, PacketMetadata, PacketWriter, ProxyError, Result,
+    execution::PacketDispatch,
+    io::{PacketFrame, PacketMetadata, PacketWriter},
+    logging::{sanitize_field, Logger},
+    portal::{
+        BoxFuture, Inbound, InboundMeta, PacketListener, PacketListenerReceive,
+        PacketListenerReceiveHandler,
+    },
+    types::{Destination, Host, Network},
+    ProxyError, Result,
 };
 
 use super::common::{resolve_local_destination, validate_packet_inbound};
@@ -168,8 +174,11 @@ mod tests {
 
     use tokio::{net::UdpSocket, sync::oneshot};
     use veex_core::{
-        BoxFuture, Destination, Host, Inbound, InboundMeta, Listen, Logger, PacketDispatch,
-        PacketFrame, PacketWriter,
+        execution::PacketDispatch,
+        io::{PacketFrame, PacketWriter},
+        logging::Logger,
+        portal::{BoxFuture, Inbound, InboundMeta},
+        types::{Destination, Host, Listen},
     };
 
     use super::super::create_direct_packet_listener;

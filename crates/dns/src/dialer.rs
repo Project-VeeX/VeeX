@@ -2,8 +2,13 @@ use std::{fmt, sync::Arc, time::Instant};
 
 use tracing::debug;
 use veex_core::{
-    sanitize_field, BoxedAsyncStream, Destination, Dial, DnsRequest, ExecutionOutbound, Network,
-    OutboundRegistry, PacketSessionHandle, SessionContext, SessionMeta,
+    dns::DnsRequest,
+    execution::{ExecutionOutbound, OutboundRegistry},
+    io::{BoxedAsyncStream, PacketSessionHandle},
+    logging::sanitize_field,
+    portal::Dial,
+    session::{SessionContext, SessionMeta},
+    types::{Destination, Network},
 };
 
 #[derive(Clone)]
@@ -105,8 +110,14 @@ mod tests {
     };
 
     use veex_core::{
-        BoxFuture, BoxedAsyncStream, Destination, Dial, DnsRequest, Host, Logger, Network,
-        Outbound, OutboundMeta, ProxyError, SessionContext,
+        dns::DnsRequest,
+        execution::{ExecutionOutbound, OutboundRegistryBuilder},
+        io::BoxedAsyncStream,
+        logging::Logger,
+        portal::{BoxFuture, Dial, Outbound, OutboundMeta},
+        session::SessionContext,
+        types::{Destination, Host, Network},
+        ProxyError,
     };
 
     use super::DnsDialer;
@@ -139,7 +150,7 @@ mod tests {
         }
     }
 
-    impl veex_core::ExecutionOutbound for UnusedExecutionOutbound {
+    impl ExecutionOutbound for UnusedExecutionOutbound {
         fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("unused")) })
         }
@@ -182,7 +193,7 @@ mod tests {
     #[test]
     fn dns_dialer_uses_default_outbound_when_detour_is_missing() {
         let default_outbound = Arc::new(UnusedExecutionOutbound::new());
-        let registry = veex_core::OutboundRegistryBuilder::default().finalize(default_outbound);
+        let registry = OutboundRegistryBuilder::default().finalize(default_outbound);
 
         let dialer = DnsDialer::new(
             "bootstrap".into(),

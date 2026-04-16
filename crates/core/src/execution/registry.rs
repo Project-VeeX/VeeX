@@ -91,11 +91,12 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
+        execution::ExecutionOutbound,
         io::BoxedAsyncStream,
         logging::Logger,
-        portal::{meta::OutboundMeta, traits::BoxFuture},
+        portal::{meta::OutboundMeta, traits::BoxFuture, Outbound},
         session::SessionContext,
-        ExecutionOutbound, Outbound, ProxyError,
+        ProxyError,
     };
 
     use super::OutboundRegistryBuilder;

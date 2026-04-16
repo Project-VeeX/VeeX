@@ -7,8 +7,13 @@ use std::{
 };
 
 use veex_core::{
-    BoxFuture, BoxedAsyncStream, Destination, Dialer, ExecutionOutbound, Logger, Outbound,
-    OutboundMeta, ProxyError, ProxyOutbound, Result, SessionContext,
+    execution::ExecutionOutbound,
+    io::BoxedAsyncStream,
+    logging::Logger,
+    portal::{BoxFuture, Dialer, Outbound, OutboundMeta, ProxyOutbound},
+    session::SessionContext,
+    types::Destination,
+    ProxyError, Result,
 };
 use veex_protocol::{
     adapter::{StreamAdapter, StreamParams},
@@ -173,8 +178,10 @@ mod tests {
     use tokio::{io::AsyncReadExt, net::TcpListener};
     use tokio_rustls::TlsAcceptor;
     use veex_core::{
-        Destination, Dial, Host, Logger, Network, OutboundMeta, ProxyOutbound, SessionContext,
-        SessionMeta,
+        logging::Logger,
+        portal::{Dial, OutboundMeta, ProxyOutbound},
+        session::{SessionContext, SessionMeta},
+        types::{Destination, Host, Network},
     };
     use veex_test_tracing::{
         assert_has_event, captured_events, install_test_subscriber, CapturedEvent,

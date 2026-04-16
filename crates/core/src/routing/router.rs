@@ -903,7 +903,11 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 
-    use crate::{Destination, Network, SessionContext, SessionMeta, StreamCarrier};
+    use crate::{
+        io::StreamCarrier,
+        session::{SessionContext, SessionMeta},
+        types::{Destination, Network},
+    };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     use super::{RouteAction, RouteFinalAction, RouteInput, RouteReason, RouteRule, Router};

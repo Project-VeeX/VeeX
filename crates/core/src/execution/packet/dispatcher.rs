@@ -275,13 +275,17 @@ mod tests {
 
     use crate::{
         dns::{DnsExecutorHandle, DnsRequest, DnsResponse},
-        io::PacketCarrier,
+        execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder},
+        io::{
+            BoxedAsyncStream, PacketCarrier, PacketFrame, PacketMetadata, PacketSession,
+            PacketSessionHandle, PacketWriter,
+        },
         logging::Logger,
+        portal::{BoxFuture, Outbound, OutboundMeta},
         routing::{RouteDecision, RouteFinalAction, RouteReason, RouteResult},
-        types::Host,
-        BoxFuture, BoxedAsyncStream, Destination, ExecutionOutbound, Network, Outbound,
-        OutboundMeta, OutboundRegistry, OutboundRegistryBuilder, PacketFrame, PacketMetadata,
-        PacketSession, PacketSessionHandle, PacketWriter, ProxyError, SessionContext,
+        session::{SessionContext, SessionMeta},
+        types::{Destination, Host, Network},
+        ProxyError,
     };
 
     use super::PacketDispatcher;
@@ -444,7 +448,7 @@ mod tests {
         dispatcher
             .dispatch_routed(RouteResult {
                 ctx: SessionContext::new(
-                    crate::SessionMeta {
+                    SessionMeta {
                         id: 1,
                         network: Network::Udp,
                         inbound_tag: "direct-in".into(),
@@ -548,7 +552,7 @@ mod tests {
         dispatcher
             .dispatch_routed(RouteResult {
                 ctx: SessionContext::new(
-                    crate::SessionMeta {
+                    SessionMeta {
                         id: 1,
                         network: Network::Udp,
                         inbound_tag: "direct-in".into(),
@@ -609,7 +613,7 @@ mod tests {
         dispatcher
             .dispatch_routed(RouteResult {
                 ctx: SessionContext::new(
-                    crate::SessionMeta {
+                    SessionMeta {
                         id: 1,
                         network: Network::Udp,
                         inbound_tag: "dns-in".into(),

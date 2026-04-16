@@ -13,7 +13,7 @@ use tokio::{
     time::timeout,
 };
 use tracing::{debug, info, warn};
-use veex_core::{sanitize_field, Host, ProxyError, ResolveContext, Result};
+use veex_core::{dns::ResolveContext, logging::sanitize_field, types::Host, ProxyError, Result};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConnectTraceContext {
@@ -460,7 +460,7 @@ mod tests {
         connect_host, connect_resolved_addresses, ConnectTraceContext, TcpAttemptConnector,
         TcpConnectOptions,
     };
-    use veex_core::Host;
+    use veex_core::types::Host;
     use veex_test_tracing::{
         assert_has_event, captured_events, install_test_subscriber, CapturedEvent,
     };

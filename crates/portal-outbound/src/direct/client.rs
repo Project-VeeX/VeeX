@@ -10,8 +10,12 @@ use std::{
 };
 
 use veex_core::{
-    BoxFuture, BoxedAsyncStream, Dialer, ExecutionOutbound, Logger, Outbound, OutboundMeta,
-    PacketDialer, PacketSessionHandle, ProxyError, Result, SessionContext, StreamOutbound,
+    execution::ExecutionOutbound,
+    io::{BoxedAsyncStream, PacketSessionHandle},
+    logging::Logger,
+    portal::{BoxFuture, Dialer, Outbound, OutboundMeta, PacketDialer, StreamOutbound},
+    session::SessionContext,
+    ProxyError, Result,
 };
 
 #[derive(Debug)]
@@ -158,9 +162,15 @@ mod tests {
         time::sleep,
     };
     use veex_core::{
-        BoxFuture, Destination, Dial, DialContext, Dialer, ExecutionOutbound, Host, Logger,
-        Network, Outbound, OutboundMeta, PacketDialer, PacketSession, PacketSessionHandle,
-        SessionContext, SessionMeta, StreamOutbound,
+        execution::ExecutionOutbound,
+        io::{PacketSession, PacketSessionHandle},
+        logging::Logger,
+        portal::{
+            BoxFuture, Dial, DialContext, Dialer, Outbound, OutboundMeta, PacketDialer,
+            StreamOutbound,
+        },
+        session::{SessionContext, SessionMeta},
+        types::{Destination, Host, Network},
     };
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 

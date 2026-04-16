@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use veex_core::{Destination, DnsRequest, DnsResponse, Network};
+use veex_core::{
+    dns::{DnsRequest, DnsResponse},
+    types::{Destination, Network},
+};
 
 use crate::{dialer::DnsDialer, traits::DnsUpstream};
 

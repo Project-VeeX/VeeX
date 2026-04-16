@@ -1,6 +1,9 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use veex_core::{Destination, Dial, Network};
+use veex_core::{
+    portal::Dial,
+    types::{Destination, Network},
+};
 use veex_transport::TlsClientOptions;
 
 use crate::traits::DnsUpstream;

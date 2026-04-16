@@ -12,39 +12,5 @@ pub mod session;
 pub mod shutdown;
 pub mod types;
 
-pub use dns::{
-    read_dns_tcp_message, write_dns_tcp_message, DnsExecutorHandle, DnsRequest, DnsResponse,
-    DomainResolverHandle, ResolveContext, ResolvePurpose,
-};
 pub use error::{ErrorKind, ProxyError, Result};
-pub use execution::{
-    relay_bidirectional, ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder,
-    PacketDispatch, PacketDispatcher, RelayErrorWithStats, RelayStats, SessionContext, SessionMeta,
-    SessionRoute, SessionState, StreamDispatch, StreamDispatcher,
-};
-pub use io::{
-    AsyncStream, BoxedAsyncStream, PacketAssociationKey, PacketCarrier, PacketFrame,
-    PacketMetadata, PacketSession, PacketSessionHandle, PacketWriter, StreamCarrier,
-};
-pub use listen::{format_listen_addr, parse_listen_addr};
-pub use logging::{sanitize_field, Logger};
-pub use portal::{
-    dialer::{Dial, DialConnect, DialContext, Dialer, PacketConnect, PacketDialer},
-    listener::{
-        Listener, ListenerAcceptHandler, ListenerFactory, PacketListener, PacketListenerFactory,
-        PacketListenerReceive, PacketListenerReceiveHandler,
-    },
-    meta::{InboundMeta, OutboundMeta},
-    traits::{
-        BoxFuture, Inbound, Outbound, ProxyOutbound, StreamInbound, StreamOutbound,
-        TransparentInbound,
-    },
-};
-pub use routing::{
-    sniff_stream, PrefixedStream, RouteAction, RouteDecision, RouteError, RouteFinalAction,
-    RouteInput, RouteReason, RouteResult, RouteRule, RouteTarget, RouteUpgradeAction,
-    RoutedPacketDispatch, RoutedStreamDispatch, Router, SniffAction, SniffOutcome, SniffedProtocol,
-};
-pub use session::{build_session_bootstrap, SessionBootstrap};
 pub use shutdown::{shutdown_channel, ShutdownSignal, ShutdownTrigger};
-pub use types::{Destination, Host, Listen, Network};

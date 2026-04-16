@@ -1,7 +1,7 @@
 use std::{fmt, io};
 
 use tokio::io::AsyncWriteExt;
-use veex_core::{BoxedAsyncStream, ProxyError, Result};
+use veex_core::{io::BoxedAsyncStream, ProxyError, Result};
 
 use crate::adapter::{StreamAdapter, StreamAdapterFuture, StreamParams};
 
@@ -62,10 +62,9 @@ fn request_write_error(err: io::Error) -> ProxyError {
 
 #[cfg(test)]
 mod tests {
-    use tokio::io::AsyncReadExt;
-    use veex_core::Destination;
-
     use crate::adapter::{StreamAdapter, StreamParams};
+    use tokio::io::AsyncReadExt;
+    use veex_core::types::Destination;
 
     use crate::trojan::encode::build_trojan_request;
 

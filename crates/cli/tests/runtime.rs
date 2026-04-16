@@ -27,7 +27,11 @@ use veex_config::{
     RouteTargetConfig, SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
     DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
 };
-use veex_core::{read_dns_tcp_message, write_dns_tcp_message, Destination, ErrorKind, Host};
+use veex_core::{
+    dns::{read_dns_tcp_message, write_dns_tcp_message},
+    types::{Destination, Host},
+    ErrorKind,
+};
 use veex_dns::parse_query_domain;
 use veex_portal_outbound::trojan::build_trojan_request;
 use veex_test_tracing::{

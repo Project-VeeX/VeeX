@@ -7,7 +7,7 @@ use veex_cli::{
     runtime::run_with_shutdown,
 };
 use veex_config::{load_from_path_with_diagnostics, ConfigError, ParseDiagnostics};
-use veex_core::sanitize_field;
+use veex_core::logging::sanitize_field;
 use veex_observability::{LogLevel, LoggingOptions};
 
 const EXIT_OK: u8 = 0;

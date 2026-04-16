@@ -108,7 +108,8 @@ where
     }
 }
 
-pub async fn sniff_stream<S>(stream: S, timeout: Duration) -> SniffOutcome<S>
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) async fn sniff_stream<S>(stream: S, timeout: Duration) -> SniffOutcome<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {

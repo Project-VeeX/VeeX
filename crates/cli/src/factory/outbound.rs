@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use veex_config::{ProxyConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
 use veex_core::{
-    Dial, ExecutionOutbound, Logger, OutboundMeta, OutboundRegistry, OutboundRegistryBuilder,
+    execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder},
+    logging::Logger,
+    portal::{Dial, OutboundMeta},
     ProxyError,
 };
 use veex_portal_outbound::direct::{
@@ -25,8 +27,7 @@ pub fn build_outbounds(
     for outbound in config.outbounds.iter().map(lower_outbound) {
         match outbound {
             LoweredOutbound::Direct(direct) => {
-                let logger =
-                    veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
+                let logger = Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
                 let dialer =
                     build_direct_dialer(direct.dial.clone(), Arc::clone(&services.host_resolver))?;
                 let packet_dialer =
@@ -43,8 +44,7 @@ pub fn build_outbounds(
                 registry.register(instance)?;
             }
             LoweredOutbound::Trojan(trojan) => {
-                let logger =
-                    veex_core::Logger::new(trojan.meta.tag.clone(), trojan.meta.r#type.clone());
+                let logger = Logger::new(trojan.meta.tag.clone(), trojan.meta.r#type.clone());
                 let dialer = build_trojan_dialer(trojan.dial, Arc::clone(&services.host_resolver));
                 let instance: Arc<dyn ExecutionOutbound> = Arc::new(TrojanOutbound::new(
                     trojan.meta,
@@ -94,7 +94,11 @@ mod tests {
         TrojanOutboundConfig, TrojanTlsConfig, DEFAULT_CONNECT_TIMEOUT,
         DEFAULT_DIRECT_OUTBOUND_TAG, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
     };
-    use veex_core::{Destination, ErrorKind, Host, Network, SessionContext, SessionMeta};
+    use veex_core::{
+        session::{SessionContext, SessionMeta},
+        types::{Destination, Host, Network},
+        ErrorKind,
+    };
 
     use super::{build_outbounds, IMPLICIT_DIRECT_OUTBOUND_TAG};
     use crate::factory::RuntimeServices;

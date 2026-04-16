@@ -4,8 +4,10 @@ use async_trait::async_trait;
 use tokio::time::timeout;
 use tracing::warn;
 use veex_core::{
-    read_dns_tcp_message, write_dns_tcp_message, BoxedAsyncStream, Destination, DnsRequest,
-    DnsResponse, Host, Network, PacketSessionHandle, ProxyError,
+    dns::{read_dns_tcp_message, write_dns_tcp_message, DnsRequest, DnsResponse},
+    io::{AsyncStream, BoxedAsyncStream, PacketSessionHandle},
+    types::{Destination, Host, Network},
+    ProxyError,
 };
 use veex_infra_linux::load_system_dns_servers;
 use veex_transport::{connect_tls_stream, ConnectTraceContext, TlsClientOptions};
@@ -80,7 +82,7 @@ fn require_dns_dialer(
 }
 
 pub(crate) async fn exchange_dns_over_stream(
-    stream: &mut dyn veex_core::AsyncStream,
+    stream: &mut dyn AsyncStream,
     query: &[u8],
     query_timeout: Duration,
 ) -> veex_core::Result<DnsResponse> {

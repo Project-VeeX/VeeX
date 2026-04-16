@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use veex_core::{DnsRequest, ResolveContext};
+use veex_core::dns::{DnsRequest, ResolveContext};
 
 use crate::{types::upstream_network, DnsServer};
 
@@ -57,7 +57,11 @@ pub(crate) fn build_upstream_resolve_context(
 mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
-    use veex_core::{Destination, Dial, Host, ResolveContext};
+    use veex_core::{
+        dns::ResolveContext,
+        portal::Dial,
+        types::{Destination, Host},
+    };
 
     use crate::types::{DnsServer, DnsServerTransport};
 

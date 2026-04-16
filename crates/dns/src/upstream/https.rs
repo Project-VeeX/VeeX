@@ -3,7 +3,12 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::time::timeout;
 use tracing::info;
-use veex_core::{sanitize_field, Destination, DnsRequest, DnsResponse, Network, ProxyError};
+use veex_core::{
+    dns::{DnsRequest, DnsResponse},
+    logging::sanitize_field,
+    types::{Destination, Network},
+    ProxyError,
+};
 
 use crate::{dialer::DnsDialer, http, traits::DnsUpstream, types::DnsHttpsOptions};
 

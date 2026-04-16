@@ -1,5 +1,5 @@
 use veex_config::ProxyConfig;
-use veex_core::Router;
+use veex_core::routing::Router;
 
 use crate::factory::lower_route;
 
@@ -19,7 +19,9 @@ mod tests {
         DEFAULT_TLS_HANDSHAKE_TIMEOUT,
     };
     use veex_core::{
-        Destination, Host, RouteFinalAction, RouteReason, RouteTarget, SessionContext, SessionMeta,
+        routing::{RouteFinalAction, RouteReason, RouteTarget},
+        session::{SessionContext, SessionMeta},
+        types::{Destination, Host, Network},
     };
 
     use super::build_router;
@@ -87,7 +89,7 @@ mod tests {
         SessionContext::new(
             SessionMeta {
                 id: 1,
-                network: veex_core::Network::Tcp,
+                network: Network::Tcp,
                 inbound_tag: "socks-in".into(),
                 peer: SocketAddr::from(([127, 0, 0, 1], 30000)),
                 destination: Destination::new(host, 443),

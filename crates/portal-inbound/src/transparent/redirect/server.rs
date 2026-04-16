@@ -3,9 +3,15 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
-    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound, InboundMeta, Listener,
-    ListenerAcceptHandler, Logger, ProxyError, Result, SessionBootstrap, StreamDispatch,
-    TransparentInbound,
+    execution::StreamDispatch,
+    io::BoxedAsyncStream,
+    logging::{sanitize_field, Logger},
+    portal::{
+        BoxFuture, Inbound, InboundMeta, Listener, ListenerAcceptHandler, TransparentInbound,
+    },
+    session::SessionBootstrap,
+    types::Destination,
+    ProxyError, Result,
 };
 
 use super::super::{
@@ -172,8 +178,12 @@ mod tests {
 
     use tokio::{net::TcpListener, net::TcpStream, sync::oneshot};
     use veex_core::{
-        BoxFuture, Destination, Inbound, InboundMeta, Listener, ListenerFactory, Logger,
-        StreamDispatch,
+        execution::StreamDispatch,
+        io::BoxedAsyncStream,
+        logging::Logger,
+        portal::{BoxFuture, Inbound, InboundMeta, Listener, ListenerFactory},
+        session::SessionContext,
+        types::{Destination, Listen},
     };
 
     use super::super::super::{
@@ -189,8 +199,8 @@ mod tests {
     impl StreamDispatch for RecordingSink {
         fn dispatch_stream(
             &self,
-            _inbound_stream: veex_core::BoxedAsyncStream,
-            ctx: veex_core::SessionContext,
+            _inbound_stream: BoxedAsyncStream,
+            ctx: SessionContext,
         ) -> BoxFuture<'_, ()> {
             let destination = ctx.meta.destination.clone();
             let tx = self.tx.lock().expect("tx mutex should lock").take();
@@ -321,7 +331,7 @@ mod tests {
             dyn Fn(SocketAddr) -> std::result::Result<TcpListener, RedirectError> + Send + Sync,
         >,
     ) -> Listener {
-        let listen = veex_core::Listen::new(addr.ip().to_string(), addr.port());
+        let listen = Listen::new(addr.ip().to_string(), addr.port());
         let factory: Arc<ListenerFactory> = Arc::new(move |addr| {
             let factory = Arc::clone(&factory);
             Box::pin(async move { factory(addr).map_err(Into::into) })

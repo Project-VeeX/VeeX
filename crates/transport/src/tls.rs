@@ -16,7 +16,7 @@ use tokio::{
 };
 use tokio_rustls::TlsConnector;
 use tracing::{info, warn};
-use veex_core::{sanitize_field, BoxedAsyncStream, Host, ProxyError, Result};
+use veex_core::{io::BoxedAsyncStream, logging::sanitize_field, types::Host, ProxyError, Result};
 
 use crate::tcp::ConnectTraceContext;
 use crate::verifier::{
@@ -467,7 +467,7 @@ mod tests {
         time::sleep,
     };
     use tokio_rustls::TlsAcceptor;
-    use veex_core::Host;
+    use veex_core::types::Host;
 
     use super::{
         connect_tls, is_ignorable_tls_close_notify_error, server_name_for_tls, TlsClientOptions,

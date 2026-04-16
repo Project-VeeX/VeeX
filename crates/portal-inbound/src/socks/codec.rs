@@ -1,6 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-use veex_core::{Destination, Host};
+use veex_core::types::{Destination, Host};
 
 use super::error::SocksError;
 
@@ -159,7 +159,7 @@ pub fn encode_reply(code: ReplyCode, bound_addr: Option<SocketAddr>) -> Vec<u8> 
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-    use veex_core::Host;
+    use veex_core::types::Host;
 
     use super::{
         decode_greeting, decode_request, encode_reply, AddressType, Command, ReplyCode,

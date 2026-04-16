@@ -10,8 +10,12 @@ use std::{
 
 use tracing::{info, warn};
 use veex_core::{
-    sanitize_field, BoxFuture, DnsExecutorHandle, DnsRequest, DnsResponse, DomainResolverHandle,
-    Host, OutboundRegistry, ProxyError, ResolveContext,
+    dns::{DnsExecutorHandle, DnsRequest, DnsResponse, DomainResolverHandle, ResolveContext},
+    execution::OutboundRegistry,
+    logging::sanitize_field,
+    portal::BoxFuture,
+    types::Host,
+    ProxyError,
 };
 
 use crate::{
@@ -434,9 +438,14 @@ mod tests {
 
     use tokio::sync::{mpsc, Mutex};
     use veex_core::{
-        BoxedAsyncStream, Destination, DnsExecutorHandle, DnsRequest, DomainResolverHandle,
-        ExecutionOutbound, Host, Logger, Network, Outbound, OutboundMeta, OutboundRegistry,
-        OutboundRegistryBuilder, PacketSessionHandle, ProxyError, ResolveContext, SessionContext,
+        dns::{DnsExecutorHandle, DnsRequest, DomainResolverHandle, ResolveContext},
+        execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder},
+        io::{BoxedAsyncStream, PacketSession, PacketSessionHandle},
+        logging::Logger,
+        portal::{BoxFuture, Dial, Outbound, OutboundMeta},
+        session::SessionContext,
+        types::{Destination, Host, Network},
+        ProxyError,
     };
 
     use crate::{
@@ -452,8 +461,8 @@ mod tests {
         sent_payloads: Arc<Mutex<Vec<Vec<u8>>>>,
     }
 
-    impl veex_core::PacketSession for TestPacketSession {
-        fn send_packet(&self, payload: Vec<u8>) -> veex_core::BoxFuture<'_, ()> {
+    impl PacketSession for TestPacketSession {
+        fn send_packet(&self, payload: Vec<u8>) -> BoxFuture<'_, ()> {
             self.sent_count.fetch_add(1, Ordering::Relaxed);
             let sent_payloads = Arc::clone(&self.sent_payloads);
             Box::pin(async move {
@@ -462,7 +471,7 @@ mod tests {
             })
         }
 
-        fn recv_packet(&self) -> veex_core::BoxFuture<'_, Vec<u8>> {
+        fn recv_packet(&self) -> BoxFuture<'_, Vec<u8>> {
             Box::pin(async move {
                 self.recv
                     .lock()
@@ -490,20 +499,17 @@ mod tests {
             &self.logger
         }
 
-        fn close(&self) -> veex_core::BoxFuture<'_, ()> {
+        fn close(&self) -> BoxFuture<'_, ()> {
             Box::pin(async { Ok(()) })
         }
     }
 
     impl ExecutionOutbound for TestOutbound {
-        fn open_stream(&self, _ctx: &SessionContext) -> veex_core::BoxFuture<'_, BoxedAsyncStream> {
+        fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("stream path unused")) })
         }
 
-        fn open_packet(
-            &self,
-            ctx: &SessionContext,
-        ) -> veex_core::BoxFuture<'_, PacketSessionHandle> {
+        fn open_packet(&self, ctx: &SessionContext) -> BoxFuture<'_, PacketSessionHandle> {
             let session = Arc::clone(&self.session);
             let connected_destinations = Arc::clone(&self.connected_destinations);
             let destination = ctx.meta.destination.clone();
@@ -584,7 +590,7 @@ mod tests {
                             Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                             53,
                         ),
-                        dial: veex_core::Dial {
+                        dial: Dial {
                             detour: Some("direct".into()),
                             connect_timeout: None,
                             routing_mark: None,
@@ -598,7 +604,7 @@ mod tests {
                             Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                             54,
                         ),
-                        dial: veex_core::Dial {
+                        dial: Dial {
                             detour: Some("direct".into()),
                             connect_timeout: None,
                             routing_mark: None,
@@ -668,7 +674,7 @@ mod tests {
                             Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                             53,
                         ),
-                        dial: veex_core::Dial {
+                        dial: Dial {
                             detour: Some("direct".into()),
                             connect_timeout: None,
                             routing_mark: None,
@@ -682,7 +688,7 @@ mod tests {
                             Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                             54,
                         ),
-                        dial: veex_core::Dial {
+                        dial: Dial {
                             detour: Some("proxy".into()),
                             connect_timeout: None,
                             routing_mark: None,
@@ -734,7 +740,7 @@ mod tests {
                     tag: "remote".into(),
                     transport: DnsServerTransport::Udp,
                     destination: Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
-                    dial: veex_core::Dial {
+                    dial: Dial {
                         detour: Some("proxy".into()),
                         connect_timeout: None,
                         routing_mark: None,
@@ -775,7 +781,7 @@ mod tests {
                     tag: "direct".into(),
                     transport: DnsServerTransport::Udp,
                     destination: Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
-                    dial: veex_core::Dial {
+                    dial: Dial {
                         detour: Some("direct".into()),
                         connect_timeout: None,
                         routing_mark: None,
@@ -815,7 +821,7 @@ mod tests {
                     tag: "local".into(),
                     transport: DnsServerTransport::Local,
                     destination: Destination::new(Host::Domain("local".into()), 53),
-                    dial: veex_core::Dial::default(),
+                    dial: Dial::default(),
                 }],
                 rules: Vec::new(),
             },

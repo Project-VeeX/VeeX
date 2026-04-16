@@ -1,6 +1,6 @@
 use std::sync::{Arc, OnceLock};
 
-use veex_core::{DomainResolverHandle, ProxyError};
+use veex_core::{dns::DomainResolverHandle, ProxyError};
 use veex_transport::{resolve_host, HostResolveRequest, HostResolver};
 
 #[derive(Clone)]

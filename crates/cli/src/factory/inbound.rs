@@ -1,7 +1,12 @@
 use std::sync::Arc;
 
 use veex_config::ProxyConfig;
-use veex_core::{Inbound, PacketDispatch, ProxyError, StreamDispatch};
+use veex_core::{
+    execution::{PacketDispatch, StreamDispatch},
+    logging::Logger,
+    portal::Inbound,
+    ProxyError,
+};
 use veex_portal_inbound::direct::{create_direct_packet_listener, create_direct_stream_listener};
 use veex_portal_inbound::socks::create_socks_listener;
 use veex_portal_inbound::transparent::{
@@ -24,8 +29,7 @@ pub fn build_inbounds(
         match inbound {
             LoweredInbound::Direct(direct) => match direct.network {
                 LoweredDirectNetwork::Tcp => {
-                    let logger =
-                        veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
+                    let logger = Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
                     let listener = create_direct_stream_listener(direct.listen);
                     let instance = DirectInbound::new(
                         direct.meta,
@@ -38,8 +42,7 @@ pub fn build_inbounds(
                     inbounds.push(instance as Arc<dyn Inbound>);
                 }
                 LoweredDirectNetwork::Udp => {
-                    let logger =
-                        veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
+                    let logger = Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
                     let listener = create_direct_packet_listener(direct.listen);
                     let instance = DirectUdpInbound::new(
                         direct.meta,
@@ -53,7 +56,7 @@ pub fn build_inbounds(
                 }
                 LoweredDirectNetwork::Both => {
                     let tcp_logger =
-                        veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
+                        Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
                     let tcp_listener = create_direct_stream_listener(direct.listen.clone());
                     let tcp_instance = DirectInbound::new(
                         direct.meta.clone(),
@@ -66,7 +69,7 @@ pub fn build_inbounds(
                     inbounds.push(tcp_instance as Arc<dyn Inbound>);
 
                     let udp_logger =
-                        veex_core::Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
+                        Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
                     let udp_listener = create_direct_packet_listener(direct.listen);
                     let udp_instance = DirectUdpInbound::new(
                         direct.meta,
@@ -80,16 +83,14 @@ pub fn build_inbounds(
                 }
             },
             LoweredInbound::Socks(socks) => {
-                let logger =
-                    veex_core::Logger::new(socks.meta.tag.clone(), socks.meta.r#type.clone());
+                let logger = Logger::new(socks.meta.tag.clone(), socks.meta.r#type.clone());
                 let listener = create_socks_listener(socks.listen);
                 let instance =
                     SocksInbound::new(socks.meta, logger, Arc::clone(&stream_sink), listener)?;
                 inbounds.push(instance as Arc<dyn Inbound>);
             }
             LoweredInbound::Redirect(redirect) => {
-                let logger =
-                    veex_core::Logger::new(redirect.meta.tag.clone(), redirect.meta.r#type.clone());
+                let logger = Logger::new(redirect.meta.tag.clone(), redirect.meta.r#type.clone());
                 let listener = create_redirect_stream_listener(redirect.listen);
                 let instance = RedirectInbound::new(
                     redirect.meta,
@@ -100,8 +101,7 @@ pub fn build_inbounds(
                 inbounds.push(instance as Arc<dyn Inbound>);
             }
             LoweredInbound::TProxy(tproxy) => {
-                let logger =
-                    veex_core::Logger::new(tproxy.meta.tag.clone(), tproxy.meta.r#type.clone());
+                let logger = Logger::new(tproxy.meta.tag.clone(), tproxy.meta.r#type.clone());
                 let listener = create_tproxy_stream_listener(tproxy.listen);
                 let instance = TProxyInbound::new(
                     tproxy.meta,
@@ -128,10 +128,15 @@ mod tests {
         ProxyConfig, RouteConfig, TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT,
     };
     use veex_core::{
-        BoxFuture, BoxedAsyncStream, Logger, Outbound, OutboundMeta, OutboundRegistry,
-        OutboundRegistryBuilder, ProxyError, SessionContext,
+        execution::{
+            ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder, PacketDispatcher,
+            StreamDispatcher,
+        },
+        io::BoxedAsyncStream,
+        portal::{BoxFuture, Outbound, OutboundMeta},
+        routing::{RoutedPacketDispatch, RoutedStreamDispatch, Router},
+        session::SessionContext,
     };
-
     struct UnusedExecutionOutbound {
         meta: OutboundMeta,
         logger: Logger,
@@ -160,7 +165,7 @@ mod tests {
         }
     }
 
-    impl veex_core::ExecutionOutbound for UnusedExecutionOutbound {
+    impl ExecutionOutbound for UnusedExecutionOutbound {
         fn open_stream(&self, _ctx: &SessionContext) -> BoxFuture<'_, BoxedAsyncStream> {
             Box::pin(async { Err(ProxyError::protocol("unused")) })
         }
@@ -200,13 +205,13 @@ mod tests {
                 rules: vec![],
             },
         };
-        let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::RoutedStreamDispatch::new(
-            veex_core::Router::with_default_outbound("direct"),
-            Arc::new(veex_core::StreamDispatcher::new(test_outbounds())),
+        let sink: Arc<dyn StreamDispatch> = Arc::new(RoutedStreamDispatch::new(
+            Router::with_default_outbound("direct"),
+            Arc::new(StreamDispatcher::new(test_outbounds())),
         ));
-        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::RoutedPacketDispatch::new(
-            veex_core::Router::with_default_outbound("direct"),
-            Arc::new(veex_core::PacketDispatcher::new(test_outbounds())),
+        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(RoutedPacketDispatch::new(
+            Router::with_default_outbound("direct"),
+            Arc::new(PacketDispatcher::new(test_outbounds())),
         ));
 
         let inbounds = build_inbounds(&config, sink, packet_sink).expect("inbounds should build");
@@ -243,13 +248,13 @@ mod tests {
                 rules: vec![],
             },
         };
-        let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::RoutedStreamDispatch::new(
-            veex_core::Router::with_default_outbound("direct"),
-            Arc::new(veex_core::StreamDispatcher::new(test_outbounds())),
+        let sink: Arc<dyn StreamDispatch> = Arc::new(RoutedStreamDispatch::new(
+            Router::with_default_outbound("direct"),
+            Arc::new(StreamDispatcher::new(test_outbounds())),
         ));
-        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::RoutedPacketDispatch::new(
-            veex_core::Router::with_default_outbound("direct"),
-            Arc::new(veex_core::PacketDispatcher::new(test_outbounds())),
+        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(RoutedPacketDispatch::new(
+            Router::with_default_outbound("direct"),
+            Arc::new(PacketDispatcher::new(test_outbounds())),
         ));
 
         let inbounds = build_inbounds(&config, sink, packet_sink).expect("inbounds should build");
@@ -286,13 +291,13 @@ mod tests {
                 rules: vec![],
             },
         };
-        let sink: Arc<dyn StreamDispatch> = Arc::new(veex_core::RoutedStreamDispatch::new(
-            veex_core::Router::with_default_outbound("direct"),
-            Arc::new(veex_core::StreamDispatcher::new(test_outbounds())),
+        let sink: Arc<dyn StreamDispatch> = Arc::new(RoutedStreamDispatch::new(
+            Router::with_default_outbound("direct"),
+            Arc::new(StreamDispatcher::new(test_outbounds())),
         ));
-        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(veex_core::RoutedPacketDispatch::new(
-            veex_core::Router::with_default_outbound("direct"),
-            Arc::new(veex_core::PacketDispatcher::new(test_outbounds())),
+        let packet_sink: Arc<dyn PacketDispatch> = Arc::new(RoutedPacketDispatch::new(
+            Router::with_default_outbound("direct"),
+            Arc::new(PacketDispatcher::new(test_outbounds())),
         ));
 
         let inbounds = build_inbounds(&config, sink, packet_sink).expect("inbounds should build");

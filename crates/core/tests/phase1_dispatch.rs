@@ -1,18 +1,22 @@
-use veex_core::Router;
+use veex_core::{
+    routing::{RouteRule, Router},
+    session::{SessionContext, SessionMeta},
+    types::{Destination, Network},
+};
 
 #[test]
 fn router_can_route_exact_domain_to_direct() {
-    let router = Router::with_default_outbound("proxy").with_rule(veex_core::RouteRule {
+    let router = Router::with_default_outbound("proxy").with_rule(RouteRule {
         domain: vec!["trojan.example.com".into()],
-        ..veex_core::RouteRule::new("direct")
+        ..RouteRule::new("direct")
     });
-    let ctx = veex_core::SessionContext::new(
-        veex_core::SessionMeta {
+    let ctx = SessionContext::new(
+        SessionMeta {
             id: 1,
-            network: veex_core::Network::Tcp,
+            network: Network::Tcp,
             inbound_tag: "socks-in".into(),
             peer: std::net::SocketAddr::from(([127, 0, 0, 1], 30000)),
-            destination: veex_core::Destination::from_domain("trojan.example.com", 443),
+            destination: Destination::from_domain("trojan.example.com", 443),
             start: std::time::Instant::now(),
         },
         Vec::new(),

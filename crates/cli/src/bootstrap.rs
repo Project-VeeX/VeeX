@@ -3,8 +3,12 @@ use std::sync::Arc;
 use thiserror::Error;
 use veex_config::ProxyConfig;
 use veex_core::{
-    Inbound, OutboundRegistry, PacketDispatch, PacketDispatcher, ProxyError, RoutedPacketDispatch,
-    RoutedStreamDispatch, StreamDispatch, StreamDispatcher,
+    execution::{
+        OutboundRegistry, PacketDispatch, PacketDispatcher, StreamDispatch, StreamDispatcher,
+    },
+    portal::Inbound,
+    routing::{RoutedPacketDispatch, RoutedStreamDispatch},
+    ProxyError,
 };
 
 use crate::factory::{

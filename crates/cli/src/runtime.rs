@@ -3,7 +3,9 @@ use std::future::Future;
 use thiserror::Error;
 use tracing::{error, info, warn};
 use veex_config::ProxyConfig;
-use veex_core::{sanitize_field, OutboundRegistry, ProxyError};
+use veex_core::{
+    execution::OutboundRegistry, logging::sanitize_field, portal::Inbound, ProxyError,
+};
 
 use crate::bootstrap::{build_runtime_state, BootstrapError, RuntimeState};
 
@@ -87,9 +89,7 @@ where
     Ok(())
 }
 
-async fn start_inbounds(
-    inbounds: &[std::sync::Arc<dyn veex_core::Inbound>],
-) -> Result<(), RuntimeError> {
+async fn start_inbounds(inbounds: &[std::sync::Arc<dyn Inbound>]) -> Result<(), RuntimeError> {
     for inbound in inbounds {
         let inbound_tag = inbound.meta().tag.clone();
         let inbound_field = sanitize_field(&inbound_tag).into_owned();
@@ -137,9 +137,7 @@ async fn start_outbounds(outbounds: &OutboundRegistry) -> Result<(), RuntimeErro
     Ok(())
 }
 
-async fn close_inbounds(
-    inbounds: &[std::sync::Arc<dyn veex_core::Inbound>],
-) -> Result<(), RuntimeError> {
+async fn close_inbounds(inbounds: &[std::sync::Arc<dyn Inbound>]) -> Result<(), RuntimeError> {
     for inbound in inbounds {
         let inbound_tag = inbound.meta().tag.clone();
         let inbound_field = sanitize_field(&inbound_tag).into_owned();
@@ -189,9 +187,13 @@ mod tests {
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use veex_core::{
-        BoxFuture, BoxedAsyncStream, Destination, ErrorKind, ExecutionOutbound, Host, Logger,
-        Network, Outbound, OutboundMeta, OutboundRegistry, OutboundRegistryBuilder, ProxyError,
-        SessionContext, SessionMeta,
+        execution::{ExecutionOutbound, OutboundRegistry, OutboundRegistryBuilder},
+        io::BoxedAsyncStream,
+        logging::Logger,
+        portal::{BoxFuture, Outbound, OutboundMeta},
+        session::{SessionContext, SessionMeta},
+        types::{Destination, Host, Network},
+        ErrorKind, ProxyError,
     };
 
     use super::{close_outbounds, start_outbounds};

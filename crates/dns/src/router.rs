@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use veex_core::{ProxyError, ResolveContext};
+use veex_core::{dns::ResolveContext, ProxyError};
 
 use crate::{
     traits::DnsUpstream,
@@ -147,7 +147,7 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use veex_core::ResolveContext;
+    use veex_core::dns::{DnsRequest, DnsResponse, ResolveContext};
 
     use crate::{traits::DnsUpstream, types::DnsRouteReason};
 
@@ -157,10 +157,7 @@ mod tests {
 
     #[async_trait]
     impl DnsUpstream for TestUpstream {
-        async fn exchange(
-            &self,
-            _req: veex_core::DnsRequest,
-        ) -> veex_core::Result<veex_core::DnsResponse> {
+        async fn exchange(&self, _req: DnsRequest) -> veex_core::Result<DnsResponse> {
             Err(veex_core::ProxyError::protocol("unused"))
         }
     }

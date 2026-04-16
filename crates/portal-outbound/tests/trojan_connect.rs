@@ -14,8 +14,10 @@ use rustls::{
 use tokio::{io::AsyncReadExt, net::TcpListener};
 use tokio_rustls::TlsAcceptor;
 use veex_core::{
-    Destination, Dial, Host, Logger, Network, OutboundMeta, ProxyOutbound, SessionContext,
-    SessionMeta,
+    logging::Logger,
+    portal::{Dial, OutboundMeta, ProxyOutbound},
+    session::{SessionContext, SessionMeta},
+    types::{Destination, Host, Network},
 };
 use veex_portal_outbound::trojan::{
     build_dialer, build_trojan_request, system_host_resolver, TrojanOutbound,

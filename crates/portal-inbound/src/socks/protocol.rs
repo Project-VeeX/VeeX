@@ -4,7 +4,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
-use veex_core::Destination;
+use veex_core::types::Destination;
 
 use super::{
     codec::{
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(established.command, Command::Connect);
         assert_eq!(
             established.destination,
-            veex_core::Destination::from_domain("example.com", 443)
+            veex_core::types::Destination::from_domain("example.com", 443)
         );
     }
 }

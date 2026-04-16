@@ -1,5 +1,8 @@
 use sha2::{Digest, Sha224};
-use veex_core::{Destination, Host, ProxyError, Result};
+use veex_core::{
+    types::{Destination, Host},
+    ProxyError, Result,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TrojanCommand {
@@ -80,7 +83,7 @@ fn nibble_to_hex(value: u8) -> char {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-    use veex_core::Destination;
+    use veex_core::types::Destination;
 
     use super::{build_trojan_request, encode_key_hex};
 
