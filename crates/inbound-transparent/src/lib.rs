@@ -1,7 +1,8 @@
 //! Linux transparent inbound support built on top of `veex-infra-linux`.
 
+mod common;
+mod destination;
 pub mod redirect;
-mod shared;
 pub mod tproxy;
 
 pub use redirect::{

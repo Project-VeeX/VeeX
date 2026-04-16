@@ -1,32 +1,25 @@
-use std::{
-    net::SocketAddr,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-};
+use std::{net::SocketAddr, sync::Arc};
 
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
-    build_session_bootstrap, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound,
-    InboundMeta, Listener, ListenerAcceptHandler, Logger, ProxyError, Result, SessionBootstrap,
-    StreamDispatch, TransparentInbound,
+    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound, InboundMeta, Listener,
+    ListenerAcceptHandler, Logger, ProxyError, Result, SessionBootstrap, StreamDispatch,
+    TransparentInbound,
 };
 
-use crate::shared::resolver::{RedirectDestinationResolver, SocketRedirectDestinationResolver};
-
-struct RedirectInboundState {
-    next_session_id: AtomicU64,
-}
+use crate::{
+    common::{build_transparent_session, validate_transparent_inbound, TransparentInboundState},
+    destination::{RedirectDestinationProvider, SocketRedirectDestinationProvider},
+};
 
 pub struct RedirectInbound {
     meta: InboundMeta,
     logger: Logger,
     sink: Arc<dyn StreamDispatch>,
     listener: Listener,
-    resolver: Arc<dyn RedirectDestinationResolver>,
-    state: Arc<RedirectInboundState>,
+    destination_provider: Arc<dyn RedirectDestinationProvider>,
+    state: Arc<TransparentInboundState>,
 }
 
 impl RedirectInbound {
@@ -36,31 +29,29 @@ impl RedirectInbound {
         sink: Arc<dyn StreamDispatch>,
         listener: Listener,
     ) -> Result<Arc<Self>> {
-        Self::new_with_resolver(
+        Self::new_with_destination_provider(
             meta,
             logger,
             sink,
             listener,
-            Arc::new(SocketRedirectDestinationResolver),
+            Arc::new(SocketRedirectDestinationProvider),
         )
     }
 
-    fn new_with_resolver(
+    fn new_with_destination_provider(
         meta: InboundMeta,
         logger: Logger,
         sink: Arc<dyn StreamDispatch>,
         listener: Listener,
-        resolver: Arc<dyn RedirectDestinationResolver>,
+        destination_provider: Arc<dyn RedirectDestinationProvider>,
     ) -> Result<Arc<Self>> {
         let inbound = Arc::new(Self {
             meta,
             logger,
             sink,
             listener,
-            resolver,
-            state: Arc::new(RedirectInboundState {
-                next_session_id: AtomicU64::new(1),
-            }),
+            destination_provider,
+            state: Arc::new(TransparentInboundState::default()),
         });
         inbound.validate()?;
         inbound.bind_listener_handler()?;
@@ -68,25 +59,7 @@ impl RedirectInbound {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.meta.tag.trim().is_empty() {
-            return Err(ProxyError::config("redirect inbound tag must not be empty"));
-        }
-        if self.meta.r#type.trim().is_empty() {
-            return Err(ProxyError::config(
-                "redirect inbound type must not be empty",
-            ));
-        }
-        if self.listener.listen().listen().trim().is_empty() {
-            return Err(ProxyError::config(
-                "redirect inbound listen must not be empty",
-            ));
-        }
-        if self.listener.listen().listen_port() == 0 {
-            return Err(ProxyError::config(
-                "redirect inbound listen_port must be within 1..=65535",
-            ));
-        }
-        self.listener.bind_addr().map(|_| ())
+        validate_transparent_inbound(&self.meta, &self.listener, "redirect")
     }
 
     fn bind_listener_handler(self: &Arc<Self>) -> Result<()> {
@@ -102,17 +75,12 @@ impl RedirectInbound {
         self.listener.bind_handler(handler)
     }
 
-    fn next_session_id(&self) -> u64 {
-        self.state.next_session_id.fetch_add(1, Ordering::Relaxed)
-    }
-
     fn bootstrap_session(&self, peer: SocketAddr, destination: Destination) -> SessionBootstrap {
-        let session_id = self.next_session_id();
-        build_session_bootstrap(session_id, self.meta.tag.as_str(), peer, destination)
+        build_transparent_session(&self.state, self.meta.tag.as_str(), peer, destination)
     }
 
     async fn handle_stream(&self, stream: TcpStream, peer: SocketAddr) -> Result<()> {
-        let destination = match self.resolver.resolve_redirect(&stream) {
+        let destination = match self.destination_provider.destination_from_stream(&stream) {
             Ok(destination) => destination,
             Err(err) => {
                 warn!(
@@ -210,7 +178,7 @@ mod tests {
 
     use super::RedirectInbound;
     use crate::{
-        shared::resolver::{RedirectDestinationResolver, SocketRedirectDestinationResolver},
+        destination::{RedirectDestinationProvider, SocketRedirectDestinationProvider},
         RedirectError,
     };
 
@@ -244,7 +212,7 @@ mod tests {
             tx: Mutex::new(Some(tx)),
         });
         let resolved = expected.clone();
-        let inbound = RedirectInbound::new_with_resolver(
+        let inbound = RedirectInbound::new_with_destination_provider(
             InboundMeta::new("redirect-in", "redirect"),
             Logger::new("redirect-in", "redirect"),
             sink,
@@ -256,7 +224,7 @@ mod tests {
                     TcpListener::from_std(listener).map_err(Into::into)
                 }),
             ),
-            fixed_resolver(resolved),
+            fixed_destination_provider(resolved),
         )
         .expect("redirect inbound should build");
 
@@ -280,7 +248,7 @@ mod tests {
 
         let accept_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept should succeed");
-            SocketRedirectDestinationResolver.resolve_redirect(&stream)
+            SocketRedirectDestinationProvider.destination_from_stream(&stream)
         });
 
         let _client = TcpStream::connect(addr)
@@ -301,7 +269,7 @@ mod tests {
 
     #[test]
     fn redirect_inbound_accepts_unspecified_ipv6_listen_addr() {
-        let inbound = RedirectInbound::new_with_resolver(
+        let inbound = RedirectInbound::new_with_destination_provider(
             InboundMeta::new("redirect-in", "redirect"),
             Logger::new("redirect-in", "redirect"),
             Arc::new(RecordingSink {
@@ -315,7 +283,7 @@ mod tests {
                     TcpListener::from_std(listener).map_err(Into::into)
                 }),
             ),
-            fixed_resolver(Destination::from_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), 443)),
+            fixed_destination_provider(Destination::from_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), 443)),
         )
         .expect("redirect inbound should build");
         assert_eq!(
@@ -332,8 +300,8 @@ mod tests {
         destination: Destination,
     }
 
-    impl RedirectDestinationResolver for FixedResolver {
-        fn resolve_redirect(
+    impl RedirectDestinationProvider for FixedResolver {
+        fn destination_from_stream(
             &self,
             _stream: &TcpStream,
         ) -> std::result::Result<Destination, RedirectError> {
@@ -341,7 +309,9 @@ mod tests {
         }
     }
 
-    fn fixed_resolver(destination: Destination) -> Arc<dyn RedirectDestinationResolver> {
+    fn fixed_destination_provider(
+        destination: Destination,
+    ) -> Arc<dyn RedirectDestinationProvider> {
         Arc::new(FixedResolver { destination })
     }
 

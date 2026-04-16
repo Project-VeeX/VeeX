@@ -1,24 +1,17 @@
-use std::{
-    net::SocketAddr,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-};
+use std::{net::SocketAddr, sync::Arc};
 
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
-    build_session_bootstrap, sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound,
-    InboundMeta, Listener, ListenerAcceptHandler, Logger, Network, ProxyError, Result,
-    SessionBootstrap, StreamDispatch, TransparentInbound,
+    sanitize_field, BoxFuture, BoxedAsyncStream, Destination, Inbound, InboundMeta, Listener,
+    ListenerAcceptHandler, Logger, Network, ProxyError, Result, SessionBootstrap, StreamDispatch,
+    TransparentInbound,
 };
 
-use crate::shared::resolver::{SocketTProxyDestinationResolver, TProxyDestinationResolver};
-
-struct TProxyInboundState {
-    next_session_id: AtomicU64,
-}
+use crate::{
+    common::{build_transparent_session, validate_transparent_inbound, TransparentInboundState},
+    destination::{SocketTProxyDestinationProvider, TProxyDestinationProvider},
+};
 
 pub struct TProxyInbound {
     meta: InboundMeta,
@@ -26,8 +19,8 @@ pub struct TProxyInbound {
     sink: Arc<dyn StreamDispatch>,
     listener: Listener,
     network: Network,
-    resolver: Arc<dyn TProxyDestinationResolver>,
-    state: Arc<TProxyInboundState>,
+    destination_provider: Arc<dyn TProxyDestinationProvider>,
+    state: Arc<TransparentInboundState>,
 }
 
 impl TProxyInbound {
@@ -38,23 +31,23 @@ impl TProxyInbound {
         listener: Listener,
         network: Network,
     ) -> Result<Arc<Self>> {
-        Self::new_with_resolver(
+        Self::new_with_destination_provider(
             meta,
             logger,
             sink,
             listener,
             network,
-            Arc::new(SocketTProxyDestinationResolver),
+            Arc::new(SocketTProxyDestinationProvider),
         )
     }
 
-    fn new_with_resolver(
+    fn new_with_destination_provider(
         meta: InboundMeta,
         logger: Logger,
         sink: Arc<dyn StreamDispatch>,
         listener: Listener,
         network: Network,
-        resolver: Arc<dyn TProxyDestinationResolver>,
+        destination_provider: Arc<dyn TProxyDestinationProvider>,
     ) -> Result<Arc<Self>> {
         let inbound = Arc::new(Self {
             meta,
@@ -62,10 +55,8 @@ impl TProxyInbound {
             sink,
             listener,
             network,
-            resolver,
-            state: Arc::new(TProxyInboundState {
-                next_session_id: AtomicU64::new(1),
-            }),
+            destination_provider,
+            state: Arc::new(TransparentInboundState::default()),
         });
         inbound.validate()?;
         inbound.bind_listener_handler()?;
@@ -73,23 +64,7 @@ impl TProxyInbound {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.meta.tag.trim().is_empty() {
-            return Err(ProxyError::config("tproxy inbound tag must not be empty"));
-        }
-        if self.meta.r#type.trim().is_empty() {
-            return Err(ProxyError::config("tproxy inbound type must not be empty"));
-        }
-        if self.listener.listen().listen().trim().is_empty() {
-            return Err(ProxyError::config(
-                "tproxy inbound listen must not be empty",
-            ));
-        }
-        if self.listener.listen().listen_port() == 0 {
-            return Err(ProxyError::config(
-                "tproxy inbound listen_port must be within 1..=65535",
-            ));
-        }
-        self.listener.bind_addr().map(|_| ())
+        validate_transparent_inbound(&self.meta, &self.listener, "tproxy")
     }
 
     fn bind_listener_handler(self: &Arc<Self>) -> Result<()> {
@@ -105,13 +80,8 @@ impl TProxyInbound {
         self.listener.bind_handler(handler)
     }
 
-    fn next_session_id(&self) -> u64 {
-        self.state.next_session_id.fetch_add(1, Ordering::Relaxed)
-    }
-
     fn bootstrap_session(&self, peer: SocketAddr, destination: Destination) -> SessionBootstrap {
-        let session_id = self.next_session_id();
-        build_session_bootstrap(session_id, self.meta.tag.as_str(), peer, destination)
+        build_transparent_session(&self.state, self.meta.tag.as_str(), peer, destination)
     }
 
     async fn handle_stream(&self, stream: TcpStream, peer: SocketAddr) -> Result<()> {
@@ -120,7 +90,7 @@ impl TProxyInbound {
             .map(|addr| if addr.is_ipv4() { "ipv4" } else { "ipv6" })
             .unwrap_or("unknown");
         let listen_field = sanitize_field(self.listener.listen().listen()).into_owned();
-        let destination = match self.resolver.resolve_tproxy(&stream) {
+        let destination = match self.destination_provider.destination_from_stream(&stream) {
             Ok(destination) => destination,
             Err(err) => {
                 warn!(
@@ -226,7 +196,7 @@ mod tests {
     };
 
     use super::TProxyInbound;
-    use crate::{shared::resolver::TProxyDestinationResolver, TProxyError};
+    use crate::{destination::TProxyDestinationProvider, TProxyError};
 
     struct RecordingSink {
         tx: Mutex<Option<oneshot::Sender<Destination>>>,
@@ -253,12 +223,12 @@ mod tests {
     async fn tproxy_inbound_forwards_resolved_destination_to_executor() {
         let listen_addr = reserve_local_port().await;
         let expected = Destination::from_ip(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5)), 443);
-        let resolver = fixed_resolver(expected.clone());
+        let destination_provider = fixed_destination_provider(expected.clone());
         let (tx, rx) = oneshot::channel();
         let sink: Arc<dyn StreamDispatch> = Arc::new(RecordingSink {
             tx: Mutex::new(Some(tx)),
         });
-        let inbound = TProxyInbound::new_with_resolver(
+        let inbound = TProxyInbound::new_with_destination_provider(
             InboundMeta::new("tproxy-in", "tproxy"),
             Logger::new("tproxy-in", "tproxy"),
             sink,
@@ -271,7 +241,7 @@ mod tests {
                 }),
             ),
             Network::Tcp,
-            resolver,
+            destination_provider,
         )
         .expect("tproxy inbound should build");
 
@@ -287,7 +257,7 @@ mod tests {
 
     #[test]
     fn parses_unspecified_ipv6_listen_addr() {
-        let inbound = TProxyInbound::new_with_resolver(
+        let inbound = TProxyInbound::new_with_destination_provider(
             InboundMeta::new("tproxy-in", "tproxy"),
             Logger::new("tproxy-in", "tproxy"),
             Arc::new(RecordingSink {
@@ -302,7 +272,7 @@ mod tests {
                 }),
             ),
             Network::Tcp,
-            fixed_resolver(Destination::from_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), 443)),
+            fixed_destination_provider(Destination::from_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), 443)),
         )
         .expect("tproxy inbound should build");
         assert_eq!(
@@ -319,8 +289,8 @@ mod tests {
         destination: Destination,
     }
 
-    impl TProxyDestinationResolver for FixedResolver {
-        fn resolve_tproxy(
+    impl TProxyDestinationProvider for FixedResolver {
+        fn destination_from_stream(
             &self,
             _stream: &TcpStream,
         ) -> std::result::Result<Destination, TProxyError> {
@@ -328,7 +298,7 @@ mod tests {
         }
     }
 
-    fn fixed_resolver(destination: Destination) -> Arc<dyn TProxyDestinationResolver> {
+    fn fixed_destination_provider(destination: Destination) -> Arc<dyn TProxyDestinationProvider> {
         Arc::new(FixedResolver { destination })
     }
 
