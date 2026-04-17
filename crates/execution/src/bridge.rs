@@ -8,9 +8,9 @@ use std::{
 
 use veex_core::{
     io::{BoxedAsyncStream, PacketCarrier, PacketFrame, PacketWriter, StreamCarrier},
-    routing::Router,
     session::{SessionContext, SessionMeta},
 };
+use veex_router::Router;
 
 use super::{
     traits::{ExecutionFuture, PacketDispatch, StreamDispatch},

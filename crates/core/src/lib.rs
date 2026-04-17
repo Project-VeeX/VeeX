@@ -6,7 +6,6 @@ pub mod io;
 pub mod listen;
 pub mod logging;
 pub mod portal;
-pub mod routing;
 pub mod session;
 pub mod shutdown;
 pub mod types;

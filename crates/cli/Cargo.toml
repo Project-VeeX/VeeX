@@ -20,6 +20,7 @@ veex-execution = { path = "../execution" }
 veex-portal-inbound = { path = "../portal-inbound" }
 veex-observability = { path = "../observability" }
 veex-portal-outbound = { path = "../portal-outbound" }
+veex-router = { path = "../router" }
 veex-transport = { path = "../transport" }
 tokio.workspace = true
 

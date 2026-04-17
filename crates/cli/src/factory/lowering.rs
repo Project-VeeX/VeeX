@@ -7,13 +7,13 @@ use veex_config::{
 };
 use veex_core::{
     portal::{Dial, InboundMeta, OutboundMeta},
-    routing::{
-        RouteAction, RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, SniffAction,
-    },
     types::{Destination, Host, Listen, Network},
 };
 use veex_dns::{
     DnsHttpsOptions, DnsRule, DnsRuntimeConfig, DnsServer, DnsServerTransport, DEFAULT_DOH_PATH,
+};
+use veex_router::{
+    RouteAction, RouteFinalAction, RouteRule, RouteTarget, RouteUpgradeAction, SniffAction,
 };
 use veex_transport::TlsClientOptions;
 

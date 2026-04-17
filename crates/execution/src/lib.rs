@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! execution/
-//!   bridge.rs  — router + execution composition kept outside routing semantics
+//!   bridge.rs  — consume router RouteResult and hand off to execution dispatchers
 //!   registry.rs  — shared outbound registry / wiring
 //!   stream/  — TCP stream execution via StreamDispatcher
 //!   packet/  — UDP packet execution via PacketDispatcher

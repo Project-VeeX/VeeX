@@ -6,8 +6,8 @@ use veex_core::{
     dns::{DnsExecutorHandle, DnsRequest},
     io::{PacketFrame, PacketWriter},
     logging::sanitize_field,
-    routing::RouteReason,
 };
+use veex_router::RouteReason;
 
 pub(crate) async fn hijack_packet_dns(
     executor: &Arc<dyn DnsExecutorHandle>,

@@ -126,13 +126,13 @@ mod tests {
     use veex_core::{
         io::BoxedAsyncStream,
         portal::{BoxFuture, Outbound, OutboundMeta},
-        routing::Router,
         session::SessionContext,
     };
     use veex_execution::{
         ExecutionFuture, ExecutionOutbound, OutboundCatalog, PacketDispatcher,
         RoutedPacketDispatch, RoutedStreamDispatch, StreamDispatcher,
     };
+    use veex_router::Router;
     struct UnusedExecutionOutbound {
         meta: OutboundMeta,
         logger: Logger,

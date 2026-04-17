@@ -808,6 +808,7 @@ dependencies = [
  "veex-observability",
  "veex-portal-inbound",
  "veex-portal-outbound",
+ "veex-router",
  "veex-test-tracing",
  "veex-transport",
 ]
@@ -829,12 +830,12 @@ dependencies = [
 name = "veex-core"
 version = "0.6.6"
 dependencies = [
- "ipnet",
  "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "veex-observability",
+ "veex-router",
  "veex-test-tracing",
 ]
 
@@ -860,6 +861,7 @@ dependencies = [
  "tracing",
  "veex-core",
  "veex-observability",
+ "veex-router",
  "veex-test-tracing",
 ]
 
@@ -920,6 +922,18 @@ dependencies = [
  "sha2",
  "tokio",
  "veex-core",
+]
+
+[[package]]
+name = "veex-router"
+version = "0.6.6"
+dependencies = [
+ "ipnet",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "veex-core",
+ "veex-test-tracing",
 ]
 
 [[package]]

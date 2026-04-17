@@ -1,15 +1,15 @@
 [package]
-name = "veex-execution"
+name = "veex-router"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ipnet.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 veex-core = { path = "../core" }
-veex-observability = { path = "../observability" }
-veex-router = { path = "../router" }
 
 [dev-dependencies]
 veex-test-tracing = { path = "../test-tracing" }

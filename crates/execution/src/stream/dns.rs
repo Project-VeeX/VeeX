@@ -6,9 +6,9 @@ use veex_core::{
     dns::{read_dns_tcp_message, write_dns_tcp_message, DnsExecutorHandle, DnsRequest},
     io::BoxedAsyncStream,
     logging::sanitize_field,
-    routing::RouteReason,
     session::SessionContext,
 };
+use veex_router::RouteReason;
 
 pub(crate) async fn hijack_stream_dns(
     executor: &Arc<dyn DnsExecutorHandle>,

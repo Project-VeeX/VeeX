@@ -1,8 +1,8 @@
 use veex_core::{
-    routing::{RouteRule, Router},
     session::{SessionContext, SessionMeta},
     types::{Destination, Network},
 };
+use veex_router::{RouteInput, RouteRule, Router};
 
 #[test]
 fn router_can_route_exact_domain_to_direct() {
@@ -22,6 +22,10 @@ fn router_can_route_exact_domain_to_direct() {
         Vec::new(),
     );
 
-    let decision = router.select(&ctx);
+    let decision = router.select(RouteInput::new(
+        &ctx.meta.destination,
+        Some(ctx.meta.inbound_tag.as_str()),
+        ctx.meta.destination.host.as_domain(),
+    ));
     assert_eq!(decision.outbound_tag(), Some("direct"));
 }

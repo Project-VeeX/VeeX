@@ -7,11 +7,11 @@ use std::{
 use veex_core::{
     dns::DnsExecutorHandle,
     io::{PacketAssociationKey, PacketCarrier, PacketFrame, PacketMetadata, PacketWriter},
-    routing::{RouteFinalAction, RouteReason, RouteResult},
     session::SessionContext,
     types::Network,
     ProxyError,
 };
+use veex_router::{RouteFinalAction, RouteReason, RouteResult};
 
 use crate::{
     packet::{
@@ -99,7 +99,7 @@ impl PacketDispatcher {
         outbound_tag: String,
         route_reason: RouteReason,
     ) -> veex_core::Result<Arc<PacketAssociation>> {
-        ctx.set_route(outbound_tag.clone(), route_reason);
+        ctx.set_route(outbound_tag.clone());
         let outbound = self.outbounds.require(&outbound_tag)?;
         let session = outbound.open_packet(&ctx).await?;
         Ok(PacketAssociation::new(
@@ -150,7 +150,7 @@ impl PacketDispatcher {
         Ok(true)
     }
 
-    pub async fn dispatch_routed(
+    pub(crate) async fn dispatch_routed(
         &self,
         routed: RouteResult<PacketCarrier>,
     ) -> veex_core::Result<()> {
@@ -285,11 +285,11 @@ mod tests {
         },
         logging::Logger,
         portal::{BoxFuture, Outbound, OutboundMeta},
-        routing::{RouteDecision, RouteFinalAction, RouteReason, RouteResult},
         session::{SessionContext, SessionMeta},
         types::{Destination, Host, Network},
         ProxyError,
     };
+    use veex_router::{RouteDecision, RouteFinalAction, RouteReason, RouteResult};
 
     use crate::{ExecutionFuture, ExecutionOutbound, OutboundCatalog};
 

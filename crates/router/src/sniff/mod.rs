@@ -10,20 +10,20 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 const MAX_SNIFF_PREFIX_LEN: usize = 2048;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SniffOutcome<S> {
-    pub stream: PrefixedStream<S>,
-    pub domain: Option<String>,
-    pub protocol: Option<SniffedProtocol>,
+pub(crate) struct SniffOutcome<S> {
+    pub(crate) stream: PrefixedStream<S>,
+    pub(crate) domain: Option<String>,
+    pub(crate) protocol: Option<SniffedProtocol>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SniffedProtocol {
+pub(crate) enum SniffedProtocol {
     Tls,
     Http,
 }
 
 impl SniffedProtocol {
-    pub fn as_str(&self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::Tls => "tls",
             Self::Http => "http",
@@ -32,7 +32,7 @@ impl SniffedProtocol {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SniffResult {
+pub(crate) enum SniffResult {
     Matched {
         domain: String,
         protocol: SniffedProtocol,
@@ -50,14 +50,14 @@ pub(crate) struct SniffExecution<S> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PrefixedStream<S> {
+pub(crate) struct PrefixedStream<S> {
     prefix: Vec<u8>,
     cursor: usize,
     inner: S,
 }
 
 impl<S> PrefixedStream<S> {
-    pub fn new(prefix: Vec<u8>, inner: S) -> Self {
+    pub(crate) fn new(prefix: Vec<u8>, inner: S) -> Self {
         Self {
             prefix,
             cursor: 0,
@@ -445,14 +445,6 @@ fn normalize_domain(value: &str) -> Option<String> {
     }
 }
 
-fn advance(cursor: &mut usize, end: usize, len: usize) -> bool {
-    if *cursor + len > end {
-        return false;
-    }
-    *cursor += len;
-    true
-}
-
 fn read_u8(data: &[u8], cursor: &mut usize, end: usize) -> Option<u8> {
     if *cursor + 1 > end {
         return None;
@@ -469,6 +461,14 @@ fn read_u16(data: &[u8], cursor: &mut usize, end: usize) -> Option<u16> {
     let value = u16::from_be_bytes([data[*cursor], data[*cursor + 1]]);
     *cursor += 2;
     Some(value)
+}
+
+fn advance(cursor: &mut usize, end: usize, len: usize) -> bool {
+    if *cursor + len > end {
+        return false;
+    }
+    *cursor += len;
+    true
 }
 
 #[cfg(test)]

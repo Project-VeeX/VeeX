@@ -3,7 +3,6 @@ use std::{net::SocketAddr, sync::Arc, time::Instant};
 use crate::{
     dns::ResolveContext,
     logging::sanitize_field,
-    routing::RouteReason,
     types::{Destination, Network},
 };
 
@@ -22,14 +21,12 @@ pub struct SessionMeta {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionRoute {
     pub selected_outbound: Option<String>,
-    pub reason: Option<RouteReason>,
 }
 
 impl SessionRoute {
-    pub fn selected(selected_outbound: impl Into<String>, reason: RouteReason) -> Self {
+    pub fn selected(selected_outbound: impl Into<String>) -> Self {
         Self {
             selected_outbound: Some(selected_outbound.into()),
-            reason: Some(reason),
         }
     }
 }
@@ -61,8 +58,8 @@ impl SessionContext {
         }
     }
 
-    pub fn set_route(&mut self, selected_outbound: impl Into<String>, reason: RouteReason) {
-        self.route = SessionRoute::selected(selected_outbound, reason);
+    pub fn set_route(&mut self, selected_outbound: impl Into<String>) {
+        self.route = SessionRoute::selected(selected_outbound);
     }
 
     pub fn set_resolve_context(&mut self, context: Option<ResolveContext>) {
@@ -119,7 +116,7 @@ mod tests {
     use crate::types::{Destination, Host};
 
     use super::{SessionContext, SessionMeta};
-    use crate::{routing::RouteReason, types::Network};
+    use crate::types::Network;
 
     #[test]
     fn session_context_starts_with_empty_route_and_buffered_payload_state() {
@@ -136,7 +133,6 @@ mod tests {
         );
 
         assert_eq!(ctx.route.selected_outbound, None);
-        assert_eq!(ctx.route.reason, None);
         assert_eq!(ctx.state.buffered_payload, b"ping");
     }
 
@@ -154,9 +150,8 @@ mod tests {
             Vec::new(),
         );
 
-        ctx.set_route("proxy", RouteReason::Final);
+        ctx.set_route("proxy");
 
         assert_eq!(ctx.route.selected_outbound.as_deref(), Some("proxy"));
-        assert_eq!(ctx.route.reason, Some(RouteReason::Final));
     }
 }

@@ -12,9 +12,9 @@ use tracing::{debug, info, warn};
 use veex_core::{
     io::{PacketAssociationKey, PacketSessionHandle, PacketWriter},
     logging::sanitize_field,
-    routing::RouteReason,
     ProxyError,
 };
+use veex_router::RouteReason;
 
 /// Packet-side forwarding state, roughly parallel to stream relay state.
 ///

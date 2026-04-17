@@ -3,10 +3,10 @@ use std::{future::Future, pin::Pin, sync::Arc};
 use veex_core::{
     dns::DnsExecutorHandle,
     io::{BoxedAsyncStream, PacketFrame, PacketSessionHandle, PacketWriter},
-    routing::RouteReason,
     session::SessionContext,
     ProxyError,
 };
+use veex_router::RouteReason;
 
 pub type ExecutionFuture<'a, T> = Pin<Box<dyn Future<Output = veex_core::Result<T>> + Send + 'a>>;
 

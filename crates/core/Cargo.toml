@@ -5,7 +5,6 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-ipnet.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -13,4 +12,5 @@ veex-observability = { path = "../observability" }
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
+veex-router = { path = "../router" }
 veex-test-tracing = { path = "../test-tracing" }

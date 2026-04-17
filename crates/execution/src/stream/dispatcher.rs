@@ -7,9 +7,9 @@ use veex_core::{
     dns::DnsExecutorHandle,
     io::{BoxedAsyncStream, StreamCarrier},
     logging::sanitize_field,
-    routing::{RouteFinalAction, RouteReason, RouteResult},
     session::SessionContext,
 };
+use veex_router::{RouteFinalAction, RouteReason, RouteResult};
 
 use crate::{
     traits::{DnsHijack, ExecutionFuture},
@@ -51,7 +51,7 @@ impl StreamDispatcher {
         }
     }
 
-    pub async fn dispatch_routed(
+    pub(crate) async fn dispatch_routed(
         &self,
         routed: RouteResult<StreamCarrier>,
     ) -> veex_core::Result<()> {
@@ -64,7 +64,7 @@ impl StreamDispatcher {
         } = routed;
         let outbound_tag = match &decision.final_action {
             RouteFinalAction::Route(target) => {
-                ctx.set_route(target.outbound_tag.clone(), decision.reason);
+                ctx.set_route(target.outbound_tag.clone());
                 target.outbound_tag.clone()
             }
             RouteFinalAction::HijackDns => {
@@ -72,8 +72,7 @@ impl StreamDispatcher {
             }
         };
 
-        let route_reason = ctx.route.reason.unwrap_or(RouteReason::Final);
-        let trace = DispatchTraceContext::new(&ctx, outbound_tag.as_str(), route_reason);
+        let trace = DispatchTraceContext::new(&ctx, outbound_tag.as_str(), decision.reason);
 
         // Stream dispatcher owns session-scoped lifecycle events. Lower-level transport,
         // outbound, and relay details stay in their respective modules.
@@ -248,11 +247,11 @@ mod tests {
         io::{BoxedAsyncStream, StreamCarrier},
         logging::Logger,
         portal::{BoxFuture, Outbound, OutboundMeta, StreamOutbound},
-        routing::{RouteDecision, RouteFinalAction, RouteReason, RouteResult},
         session::{SessionContext, SessionMeta, SessionRoute, SessionState},
         types::{Destination, Network},
         ErrorKind,
     };
+    use veex_router::{RouteDecision, RouteFinalAction, RouteReason, RouteResult};
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     use crate::{ExecutionFuture, ExecutionOutbound, OutboundCatalog};
@@ -559,7 +558,6 @@ mod tests {
             .clone()
             .expect("outbound should receive session context");
         assert_eq!(captured.route.selected_outbound.as_deref(), Some("proxy"));
-        assert_eq!(captured.route.reason, Some(RouteReason::Final));
         assert_eq!(captured.state.buffered_payload, b"hello");
     }
 
