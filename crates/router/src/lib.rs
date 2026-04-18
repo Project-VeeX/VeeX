@@ -1,5 +1,6 @@
 mod context;
 mod error;
+mod evaluate;
 mod result;
 mod router;
 pub mod rule;

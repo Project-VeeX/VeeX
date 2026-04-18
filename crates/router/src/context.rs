@@ -1,4 +1,5 @@
 use veex_core::{
+    io::{PacketCarrier, StreamCarrier},
     session::SessionContext,
     types::{Destination, Host},
 };
@@ -65,4 +66,9 @@ impl RouteRuntimeContext {
             self.domain = Some(domain);
         }
     }
+}
+
+pub(crate) enum PipelineRequest {
+    Stream(StreamCarrier),
+    Packet(PacketCarrier),
 }
