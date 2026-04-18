@@ -4,7 +4,7 @@ mod defaults;
 mod error;
 mod input;
 mod parse;
-mod preflight;
+pub mod preflight;
 mod schema;
 mod validate;
 
@@ -18,7 +18,6 @@ pub use parse::{
     parse_config_unvalidated, parse_config_with_diagnostics, ParseDiagnostics, ParseIgnored,
     ParseWarning,
 };
-pub use preflight::JsonValue;
 pub use schema::{
     DirectInboundConfig, DirectOutboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig,
     DnsServerTypeConfig, DomainResolverConfig, InboundConfig, InboundType, LogConfig,

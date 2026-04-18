@@ -1,4 +1,4 @@
-//! Minimal JSON subset parser used by VeeX config preflight.
+//! Typed parse 之前的原始输入预检阶段。
 //!
 //! This module intentionally does not aim to be a complete general-purpose JSON implementation.
 //! It supports the subset currently required by VeeX configuration preflight:
