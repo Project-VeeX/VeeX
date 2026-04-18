@@ -218,13 +218,8 @@ mod tests {
 
     use super::{evaluate_current_state, evaluate_final_decision};
     use crate::{
-        context::RouteInput,
-        result::RouteStep,
-        router::Router,
-        RouteAction,
-        RouteFinalAction,
-        RouteReason,
-        RouteRule,
+        context::RouteInput, result::RouteStep, router::Router, RouteAction, RouteFinalAction,
+        RouteReason, RouteRule,
     };
 
     #[test]

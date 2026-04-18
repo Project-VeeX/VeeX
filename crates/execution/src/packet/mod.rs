@@ -4,7 +4,7 @@
 //! carrier consumption, and association runtime.
 
 mod association;
-pub mod dispatcher;
-pub mod dns;
+mod dispatcher;
+mod dns;
 
 pub use dispatcher::PacketDispatcher;

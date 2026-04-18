@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use crate::error::ConfigError;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum JsonValue {
+pub(crate) enum JsonValue {
     Null,
     Bool(bool),
     Number(i64),
@@ -25,7 +25,7 @@ pub enum JsonValue {
 ///
 /// The returned [`JsonValue`] is not the config model. Callers use this preflight only to keep
 /// duplicate-key rejection and the current JSON subset constraints ahead of serde deserialization.
-pub fn parse_json(input: &str) -> Result<JsonValue, ConfigError> {
+pub(crate) fn parse_json(input: &str) -> Result<JsonValue, ConfigError> {
     let mut parser = Parser::new(input);
     let value = parser.parse_value("$")?;
     parser.skip_whitespace();

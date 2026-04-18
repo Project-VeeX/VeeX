@@ -4,7 +4,7 @@ mod defaults;
 mod error;
 mod input;
 mod parse;
-pub mod preflight;
+mod preflight;
 mod schema;
 mod validate;
 

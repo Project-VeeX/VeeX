@@ -12,4 +12,4 @@ pub(crate) use inbound::{
 pub(crate) use outbound::{
     lower_outbound, LoweredDirectOutbound, LoweredOutbound, LoweredTrojanOutbound,
 };
-pub(crate) use route::{lower_route, LoweredRoute};
+pub(crate) use route::lower_route;
