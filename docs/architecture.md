@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-VeeX is a Rust proxy core for OpenWrt-class and Linux router environments. It accepts a minimal sing-box-compatible JSON configuration subset and implements a deliberately narrow proxy execution surface.
+VeeX is a rust-based proxy runtime core. It implements a deliberately scoped sing-box-compatible subset and a deliberately narrow proxy execution surface.
 
 The current deployment shape is:
 
@@ -61,22 +61,39 @@ At a high level:
 
 | Capability | Current owner |
 | --- | --- |
-| config parsing and validation | `config` |
+| core types, session metadata, and runtime contracts | `core` |
+| config preflight, parse, validate, and schema | `config` |
 | runtime assembly and lifecycle | `cli` |
-| route decision | `core::router` |
-| stream execution | `core::execution::stream` |
-| packet execution | `core::execution::packet` |
+| route decision | `router` |
+| stream execution | `execution` |
+| packet execution | `execution` |
 | transport connect and TLS | `transport` |
 | shared outbound protocol adapter surface | `protocol` |
 | inbound components | `portal-inbound` |
 | outbound components | `portal-outbound` |
 | DNS runtime | `dns` |
 
-The current workspace structure includes `core`, `transport`, `protocol`, `portal-inbound`, `portal-outbound`, `dns`, `infra-linux`, `observability`, `cli`, and `config`.
+The current semantic mainline is:
+
+```text
+config -> router -> execution
+```
+
+where `config` is the semantic entry, `router` is the policy plane, and `execution` is the data plane.
+
+`cli/factory` is the control-plane assembly path that performs:
+
+```text
+config -> lowering -> builder -> runtime wiring
+```
+
+The current workspace structure includes `config`, `router`, `execution`, `cli`, `core`, `transport`, `protocol`, `portal-inbound`, `portal-outbound`, `dns`, `infra-linux`, and `observability`.
 
 ## 4. Execution
 
-Execution is an explicit dual-plane model:
+Execution is an explicit dual-plane model and a pure data-plane runtime. It performs network execution from an already selected route result; it does not own route rules or make routing decisions.
+
+At the plane boundary, routed dispatch bridges obtain a `RouteResult` from the router and then hand that result to the execution runtime.
 
 - `StreamDispatch` for stream execution
 - `PacketDispatch` for packet execution
@@ -278,7 +295,7 @@ Dialers derive request-specific dialing context from `SessionContext`, including
 
 ## 12. Routing And Sniff
 
-VeeX uses one ordered route pipeline.
+Router is not a pure rule matcher. It is a policy runtime with one ordered route pipeline.
 
 ```text
 for rule in ordered rules:
@@ -294,12 +311,16 @@ for rule in ordered rules:
 return default final action
 ```
 
+This runtime supports both upgrade actions and final actions, and the router runtime yields a `RouteResult` that execution consumes.
+
 Current public consequences:
 
 - `action="sniff"` is an upgrade action
 - `action="hijack-dns"` is a final action
 - `route.final` remains the default final decision
 - private, loopback, and link-local handling belong in ordinary `route.rules`
+
+The route model should not be described as a legacy select-style API or as a pure `rule scan -> return outbound` matcher.
 
 Sniff is bounded context enrichment. It can enrich route-visible domain context, but it does not override the original destination and does not change transport policy by itself.
 
@@ -326,15 +347,19 @@ Current DNS upstream transports include:
 
 ## 14. CLI And Factory
 
-`cli` is the runtime assembly layer.
+`cli`, especially `cli/factory`, is the control-plane assembly layer.
 
 It is responsible for:
 
-- lowering validated config into runtime inputs
+- consuming config that has already passed `preflight -> parse -> validate`
+- lowering validated config into explicit runtime inputs
+- constructing type-specific builders from lowered config
+- constructing the route pipeline from lowered route config
 - constructing outbounds
 - constructing DNS services
-- constructing dispatchers
+- constructing routed stream and packet dispatchers
 - constructing inbounds
+- wiring lifecycle ownership and runtime references together
 - starting and closing runtime services
 
 It is not responsible for implementing listener behavior, transport behavior, or protocol logic.
@@ -360,7 +385,7 @@ The current component surface is still uneven across those paths: some component
 In one sentence:
 
 ```text
-VeeX is a proxy core with explicit stream and packet execution boundaries, optional protocol steps, and a deliberately narrow current packet and DNS surface.
+VeeX is a rust-based proxy runtime core with explicit stream and packet execution boundaries, optional protocol steps, and a deliberately narrow current packet and DNS surface.
 ```
 
 ## 17. Related Documents

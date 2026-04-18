@@ -11,7 +11,7 @@ These constraints come from actual phase task packs, closure notes, and complete
 ## Architecture Constraints
 
 - Linux transparent-socket details belong in `crates/infra-linux` or equivalent platform-facing layers, not back in `crates/core`.
-- `Router` stays pure computation: no I/O and no DNS during construction.
+- Router construction must stay free of hidden I/O and DNS during construction; do not collapse the ordered upgrade/final runtime back into a pure matcher abstraction.
 - `routing_mark` belongs only to direct outbound config and implementation; do not promote it into a `core` abstraction.
 - Conservative incremental changes remain safer than reopening already-closed runtime or dispatcher boundaries to fit a new feature.
 

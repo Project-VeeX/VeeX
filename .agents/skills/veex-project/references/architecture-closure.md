@@ -16,16 +16,16 @@ Do not expand a single session structure without checking whether it is mixing t
 
 ## Router Direction
 
-`Router` is intended to stay a static decision component.
+`Router` is intended to stay a policy runtime with a single ordered upgrade/final pipeline.
 
 Keep these rules:
 
-- no I/O in the router
+- no hidden I/O side channel outside the declared pipeline behavior
 - no DNS resolution during router construction
 - keep recursion-prevention direct-routing rules explicit and conservative
 - when host classification matters, do not blur domains and IPs into one vague conceptual bucket
 
-Current router decision pipeline: ordered `route.rules` actions → default final action.
+Current router runtime pipeline: ordered `route.rules` actions → default final action.
 
 `action="sniff"` is part of this runtime path, but only as bounded context enrichment. Do not turn it into destination override, DNS control, or transport policy.
 
@@ -46,12 +46,12 @@ In particular:
 
 - `Inbound` and `Outbound` may own only `meta` / `logger` / `start` / `close` style lifecycle surface
 - protocol execution behavior should stay in execution-model-specific traits such as `StreamInbound`, `TransparentInbound`, `StreamOutbound`, and `ProxyOutbound`, rather than a single mega trait
-- runtime should keep registry and start/close orchestration, but should not pull long-lived component state back out of component objects
+- runtime should keep outbound-holder and start/close orchestration, but should not pull long-lived component state back out of component objects
 - listener handlers should bind during component construction rather than via start-time callback injection
 - route and dispatcher views must reference the same outbound objects that runtime starts and closes
 - inbound components should hand sessions to `StreamDispatch` or `PacketDispatch` rather than reaching into dispatcher internals
 - dispatcher should execute selected outbounds through `ExecutionOutbound`, not through protocol-family matching or ad hoc runtime enums
-- `OutboundRegistry` is the sole outbound holder; do not recreate separate runtime, routing, or dispatcher copies
+- `RuntimeOutbounds` is the sole runtime outbound holder, with `OutboundCatalog` as its dispatch view; do not recreate separate runtime, routing, or dispatcher copies
 - transparent destination recovery should stay in component-specific destination providers rather than `Listener`
 - normalized trojan runtime state should prefer upstream address + key + TLS capability over raw config bags
 - shared `veex-protocol` currently means generic adapter types plus Trojan adapter logic; do not assume that every architectural protocol step must live in that crate

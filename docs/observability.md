@@ -160,7 +160,7 @@ Public documentation should not overstate closure beyond the evidence actually r
 
 ## 10. Summary
 
-VeeX observability is designed around stage visibility, stable error classification, and production-facing diagnostics for router-oriented stream and packet execution paths.
+VeeX observability is designed around stage visibility, stable error classification, and production-facing diagnostics for stream and packet execution paths.
 
 In one sentence:
 

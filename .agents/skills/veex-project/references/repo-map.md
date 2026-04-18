@@ -7,11 +7,13 @@
   - `crates/config`
   - `crates/core`
   - `crates/dns`
+  - `crates/execution`
   - `crates/infra-linux`
   - `crates/observability`
   - `crates/portal-inbound`
   - `crates/portal-outbound`
   - `crates/protocol`
+  - `crates/router`
   - `crates/transport`
 
 ## Crate Ownership
@@ -19,6 +21,7 @@
 - `crates/cli`
   - CLI contract
   - runtime / bootstrap / factory wiring
+  - `config -> lowering -> builder -> runtime wiring`
   - process startup, signal handling, and foreground lifecycle
 - `crates/config`
   - config schema, semantic validation, and compatibility boundary
@@ -26,14 +29,21 @@
     - `preflight.rs`: controlled minimal JSON-subset preflight for duplicate-key detection and subset validation before deserialization
     - `input.rs`: serde input layer
     - `parse.rs`: preflight + serde loading
+    - `compat.rs`: intentional compatibility quarantine for tolerated legacy fields and diagnostics
     - `schema.rs`: internal config model
     - `validate.rs`: semantic validation after deserialization
   - the `preflight` + serde split is intentional
 - `crates/core`
   - core types such as `Destination`, `Host`, `SessionContext`, and metadata models
   - error model and `ErrorKind`
-  - `Router`, `StreamDispatcher`, `PacketDispatcher`, `relay`, and shared portal primitives
   - platform-agnostic execution and component contracts
+- `crates/execution`
+  - pure data-plane execution runtime
+  - stream and packet execution dispatch
+  - routed dispatch bridges, relay, and outbound execution catalog
+- `crates/router`
+  - policy runtime for ordered route-rule execution
+  - route upgrade/final decision model, `RouteResult`, and bounded sniff enrichment
 - `crates/dns`
   - DNS executor, DNS router, request lowering, wire parsing, and upstream runtime assembly
   - client-query execution and dial-side domain resolution
@@ -64,7 +74,8 @@
 ## Dependency Constraints
 
 - `core` must stay platform-agnostic and must not absorb Linux transparent-socket details.
-- `Router` stays pure computation: no I/O and no DNS resolution during construction.
+- Router construction must stay free of hidden I/O and DNS resolution.
+- Router semantics stay in the ordered upgrade/final policy pipeline; do not collapse it back into a pure matcher abstraction.
 - `routing_mark` belongs to direct outbound config and implementation; it should not become a `core` trait or routing abstraction.
 - `protocol` remains independent from `portal-outbound`; Trojan protocol logic must not be folded back into component code.
 - `portal-inbound` and `portal-outbound` are crate-organization boundaries, not architecture layers.

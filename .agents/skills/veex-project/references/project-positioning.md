@@ -2,7 +2,7 @@
 
 ## One-Line Definition
 
-VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, intentionally focused on a narrow proxy execution surface rather than a full networking platform.
+VeeX is a rust-based proxy runtime core, intentionally focused on a narrow proxy execution surface rather than a full networking platform.
 
 ## Role
 
@@ -10,7 +10,7 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
   - `veex run -c <config>`
   - `veex check -c <config>`
   - `veex version`
-- The real target is to replace the proxy execution slice sing-box commonly provides in OpenWrt router topologies, while only taking on a minimal DNS hijack slice that still fits that role.
+- The real target is to replace the proxy execution slice sing-box commonly provides in router and transparent-proxy topologies, while only taking on a narrow DNS hijack slice that still fits that role.
 - The typical target path is:
   - `DIRECT / SOCKS / REDIRECT / TPROXY -> veex -> direct | trojan`
 - The current scope now includes an explicit packet execution foundation for `direct-in -> direct-out`, primarily as groundwork for DNS and detour work rather than as a broad UDP platform.
@@ -36,7 +36,7 @@ VeeX is a Rust proxy core for OpenWrt-class and Linux router environments, inten
   - `dns.rules` and `dns.final` server selection
   - UDP/TCP/TLS/HTTPS upstream via detour-aware outbound stream/packet capability
 - Config compatibility:
-  - a minimal sing-box-compatible JSON subset
+  - a deliberately scoped sing-box-compatible subset
   - `direct.routing_mark` is supported
 
 ## Explicit Non-Goals

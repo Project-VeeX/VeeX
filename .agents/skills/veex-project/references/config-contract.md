@@ -16,7 +16,7 @@ Current supported configuration surface:
   - IPv6 literals such as `::`
   - bracketed IPv6 literals such as `[::]`
 - `direct.network`:
-  - omitted: treated as TCP
+  - omitted: treated as TCP+UDP
   - `"tcp"`: accepted
   - `"udp"`: accepted
   - any other value: rejected
@@ -47,6 +47,19 @@ Current supported configuration surface:
   - `servers`
   - `rules`
 
+Current config processing model:
+
+- `preflight` validates the current JSON subset and rejects duplicate keys before serde
+- `parse` builds typed config input and compatibility diagnostics
+- `validate` performs semantic checks and supported-surface decisions
+- `schema` is the internal config model consumed by later stages
+
+Compatibility handling note:
+
+- the compatibility quarantine is intentional
+- tolerated legacy or sing-box-aligned fields are isolated so they do not leak back into the main typed parse / validate / factory path
+- tolerated fields are not implemented features
+
 Current UDP execution boundary:
 
 - only `direct` inbound accepts `network: "udp"`
@@ -69,6 +82,7 @@ Current UDP execution boundary:
 
 Current rule execution contract:
 
+- router is an ordered upgrade/final pipeline, not a pure matcher-only stage
 - `outbound` and `action="hijack-dns"` are the supported final actions
 - `action="sniff"` is the supported upgrade action
 - rules are evaluated in declaration order

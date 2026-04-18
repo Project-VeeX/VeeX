@@ -6,7 +6,7 @@
 
 ## 1. Current Position
 
-As of the current repository state (`0.6.5`), VeeX has established an explicit stream/packet execution baseline for router-oriented environments, plus a still-narrow packet component surface and a DNS runtime slice built on top of that packet foundation.
+As of the current repository state (`0.6.7`), VeeX has established an explicit stream/packet execution baseline, plus a still-narrow packet component surface and a DNS runtime slice built on top of that packet foundation.
 
 That baseline includes:
 
