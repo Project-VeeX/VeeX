@@ -3,15 +3,16 @@ mod inbound;
 mod lowering;
 mod outbound;
 mod router;
-mod services;
+mod runtime;
 
 pub use dns::build_dns_services;
 pub use inbound::build_inbounds;
 pub(crate) use lowering::{
-    lower_dns, lower_inbound, lower_outbound, lower_route, LoweredDirectNetwork, LoweredInbound,
-    LoweredOutbound,
+    lower_dns, lower_inbound, lower_outbound, lower_route, LoweredDirectInbound,
+    LoweredDirectNetwork, LoweredDirectOutbound, LoweredInbound, LoweredOutbound,
+    LoweredRedirectInbound, LoweredRoute, LoweredSocksInbound, LoweredTProxyInbound,
+    LoweredTrojanOutbound,
 };
 pub use outbound::build_outbounds;
-pub(crate) use outbound::RuntimeOutbounds;
 pub use router::build_router;
-pub(crate) use services::RuntimeServices;
+pub(crate) use runtime::{RuntimeOutbounds, RuntimeServices};

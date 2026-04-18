@@ -8,7 +8,7 @@ use veex_core::{
 use veex_dns::DnsExecutor;
 use veex_execution::OutboundCatalog;
 
-use crate::factory::lower_dns;
+use crate::factory::lowering::lower_dns;
 
 pub struct BuiltDnsServices {
     pub executor: Arc<dyn DnsExecutorHandle>,

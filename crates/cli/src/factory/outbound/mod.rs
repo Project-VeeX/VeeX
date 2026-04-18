@@ -1,161 +1,37 @@
-use std::{collections::HashMap, sync::Arc};
+mod direct;
+mod trojan;
 
-use veex_config::{ProxyConfig, DEFAULT_DIRECT_OUTBOUND_TAG};
-use veex_core::{
-    logging::Logger,
-    portal::{Dial, Outbound, OutboundMeta},
-    ProxyError,
+use std::sync::Arc;
+
+use veex_config::ProxyConfig;
+use veex_core::ProxyError;
+
+use crate::factory::{
+    lowering::{lower_outbound, LoweredOutbound},
+    runtime::{RuntimeOutbounds, RuntimeOutboundsBuilder, RuntimeServices},
 };
-use veex_execution::{ExecutionOutbound, OutboundCatalog};
-use veex_portal_outbound::direct::{
-    build_dialer as build_direct_dialer, build_packet_dialer as build_direct_packet_dialer,
-    DirectOutbound,
-};
-use veex_portal_outbound::trojan::{build_dialer as build_trojan_dialer, TrojanOutbound};
-
-use crate::factory::{lower_outbound, LoweredOutbound, RuntimeServices};
-
-const IMPLICIT_DIRECT_OUTBOUND_TAG: &str = "implicit-direct";
-
-type ExecutionHandle = Arc<dyn ExecutionOutbound>;
-type LifecycleHandle = Arc<dyn Outbound>;
-type ImplicitDirect = (ExecutionHandle, Option<LifecycleHandle>);
-
-pub(crate) struct RuntimeOutbounds {
-    catalog: Arc<OutboundCatalog>,
-    lifecycle: Vec<LifecycleHandle>,
-}
-
-impl RuntimeOutbounds {
-    pub(crate) fn new(catalog: Arc<OutboundCatalog>, lifecycle: Vec<LifecycleHandle>) -> Self {
-        Self { catalog, lifecycle }
-    }
-
-    pub(crate) fn catalog(&self) -> &Arc<OutboundCatalog> {
-        &self.catalog
-    }
-
-    pub(crate) fn contains(&self, tag: &str) -> bool {
-        self.catalog.contains(tag)
-    }
-
-    pub(crate) fn lifecycle(&self) -> impl Iterator<Item = &LifecycleHandle> + '_ {
-        self.lifecycle.iter()
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.lifecycle.len()
-    }
-}
 
 pub fn build_outbounds(
     config: &ProxyConfig,
     services: &RuntimeServices,
 ) -> Result<Arc<RuntimeOutbounds>, ProxyError> {
-    let mut catalog_entries: HashMap<String, ExecutionHandle> = HashMap::new();
-    let mut lifecycle: Vec<LifecycleHandle> = Vec::new();
-    let mut configured_default_direct: Option<ExecutionHandle> = None;
-
+    let mut built = RuntimeOutboundsBuilder::new();
     for outbound in config.outbounds.iter().map(lower_outbound) {
         match outbound {
             LoweredOutbound::Direct(direct) => {
-                let logger = Logger::new(direct.meta.tag.clone(), direct.meta.r#type.clone());
-                let dialer =
-                    build_direct_dialer(direct.dial.clone(), Arc::clone(&services.host_resolver))?;
-                let packet_dialer =
-                    build_direct_packet_dialer(direct.dial, Arc::clone(&services.host_resolver))?;
-                let instance = Arc::new(DirectOutbound::new(
-                    direct.meta,
-                    logger,
-                    dialer,
-                    packet_dialer,
-                )?);
-                let execution: ExecutionHandle = instance.clone();
-                let lifecycle_outbound: LifecycleHandle = instance;
-                if lifecycle_outbound.meta().tag == DEFAULT_DIRECT_OUTBOUND_TAG {
-                    configured_default_direct = Some(Arc::clone(&execution));
+                let (direct, is_default_direct) = direct::build_direct_outbound(direct, services)?;
+                if is_default_direct {
+                    built.set_default_direct(Arc::clone(&direct.execution));
                 }
-                register_outbound(
-                    &mut catalog_entries,
-                    &mut lifecycle,
-                    execution,
-                    lifecycle_outbound,
-                )?;
+                built.register(direct)?;
             }
             LoweredOutbound::Trojan(trojan) => {
-                let logger = Logger::new(trojan.meta.tag.clone(), trojan.meta.r#type.clone());
-                let dialer = build_trojan_dialer(trojan.dial, Arc::clone(&services.host_resolver));
-                let instance = Arc::new(TrojanOutbound::new(
-                    trojan.meta,
-                    logger,
-                    dialer,
-                    trojan.upstream_addr,
-                    trojan.key,
-                    trojan.tls,
-                )?);
-                let execution: ExecutionHandle = instance.clone();
-                let lifecycle_outbound: LifecycleHandle = instance;
-                register_outbound(
-                    &mut catalog_entries,
-                    &mut lifecycle,
-                    execution,
-                    lifecycle_outbound,
-                )?;
+                built.register(trojan::build_trojan_outbound(trojan, services)?)?
             }
         }
     }
 
-    let (default_outbound, default_lifecycle) = match configured_default_direct {
-        Some(outbound) => (outbound, None),
-        None => build_implicit_direct_outbound(services)?,
-    };
-
-    if let Some(default_lifecycle) = default_lifecycle {
-        lifecycle.push(default_lifecycle);
-    }
-
-    Ok(Arc::new(RuntimeOutbounds::new(
-        Arc::new(OutboundCatalog::new(catalog_entries, default_outbound)),
-        lifecycle,
-    )))
-}
-
-fn build_implicit_direct_outbound(
-    services: &RuntimeServices,
-) -> Result<ImplicitDirect, ProxyError> {
-    let dialer = build_direct_dialer(Dial::default(), Arc::clone(&services.host_resolver))?;
-    let packet_dialer =
-        build_direct_packet_dialer(Dial::default(), Arc::clone(&services.host_resolver))?;
-    let instance = Arc::new(DirectOutbound::new(
-        OutboundMeta::new(IMPLICIT_DIRECT_OUTBOUND_TAG, "direct"),
-        Logger::new(IMPLICIT_DIRECT_OUTBOUND_TAG, "direct"),
-        dialer,
-        packet_dialer,
-    )?);
-    Ok((
-        instance.clone() as ExecutionHandle,
-        Some(instance as LifecycleHandle),
-    ))
-}
-
-fn register_outbound(
-    catalog_entries: &mut HashMap<String, ExecutionHandle>,
-    lifecycle: &mut Vec<LifecycleHandle>,
-    outbound: ExecutionHandle,
-    lifecycle_outbound: LifecycleHandle,
-) -> Result<(), ProxyError> {
-    let tag = outbound.tag().to_string();
-    if catalog_entries
-        .insert(tag.clone(), Arc::clone(&outbound))
-        .is_some()
-    {
-        return Err(ProxyError::config(format!(
-            "duplicate outbound tag in registry: {tag}"
-        )));
-    }
-
-    lifecycle.push(lifecycle_outbound);
-    Ok(())
+    built.finalize(services)
 }
 
 #[cfg(test)]
@@ -176,8 +52,8 @@ mod tests {
         ErrorKind,
     };
 
-    use super::{build_outbounds, IMPLICIT_DIRECT_OUTBOUND_TAG};
-    use crate::factory::RuntimeServices;
+    use super::build_outbounds;
+    use crate::factory::{runtime::IMPLICIT_DIRECT_OUTBOUND_TAG, RuntimeServices};
 
     fn test_context(outbound_tag: &str) -> SessionContext {
         SessionContext::new(

@@ -1,7 +1,7 @@
 use veex_config::ProxyConfig;
 use veex_router::Router;
 
-use crate::factory::lower_route;
+use crate::factory::lowering::lower_route;
 
 pub fn build_router(config: &ProxyConfig) -> Router {
     let route = lower_route(&config.route);
