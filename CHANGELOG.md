@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.7
+
+- Extracted routing into the dedicated `veex-router` crate and finished closing the `config -> router -> execution` boundary around an ordered upgrade/final pipeline that returns a stable `RouteResult<...>` handoff.
+- Split config handling by domain and formalized the intended `preflight -> parse -> validate -> schema` flow, keeping compatibility handling isolated from the main typed config path.
+- Reorganized CLI factory assembly around explicit lowering, type-specific builders, and runtime wiring, while tightening crate/module surfaces and aligning docs with the current runtime positioning.
+
 ## 0.6.6
 
 - Reorganized `veex-core` around explicit `routing`, `session`, and `io` domain boundaries, and removed the remaining crate-root convenience exports so public paths now reflect the real subsystem layout directly.
