@@ -89,12 +89,6 @@ impl RouteTarget {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RouteUpgrade {
-    pub action: RouteUpgradeAction,
-    pub resume_at: usize,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RouteRule {
     pub domain: Vec<String>,
     pub domain_suffix: Vec<String>,

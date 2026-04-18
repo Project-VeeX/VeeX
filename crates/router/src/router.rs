@@ -1,10 +1,7 @@
 use crate::{
-    context::RouteInput,
     error::RouteError,
-    evaluate,
     result::RouteResult,
-    result::RouteStep,
-    rule::{CompiledRouteRule, RouteDecision, RouteFinalAction, RouteRule, RouteTarget},
+    rule::{CompiledRouteRule, RouteFinalAction, RouteRule, RouteTarget},
     runtime,
 };
 use veex_core::{
@@ -53,14 +50,6 @@ impl Router {
                 .map(|(offset, rule)| CompiledRouteRule::compile(rule, start_index + offset)),
         );
         self
-    }
-
-    pub fn select(&self, input: RouteInput<'_>) -> RouteDecision {
-        evaluate::evaluate_final_decision(self, input)
-    }
-
-    pub fn step_from<'a>(&'a self, input: RouteInput<'_>, start_index: usize) -> RouteStep<'a> {
-        evaluate::evaluate_current_state(self, input, start_index)
     }
 
     pub async fn route_stream(

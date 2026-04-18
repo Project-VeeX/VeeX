@@ -9,5 +9,5 @@ pub(crate) use matchers::{
 };
 pub use types::{
     RouteAction, RouteDecision, RouteFinalAction, RouteReason, RouteRule, RouteTarget,
-    RouteUpgrade, RouteUpgradeAction, SniffAction,
+    RouteUpgradeAction, SniffAction,
 };

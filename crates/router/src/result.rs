@@ -9,7 +9,7 @@ pub struct RouteResult<I> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RouteRuleMissReason {
+pub(crate) enum RouteRuleMissReason {
     DomainAbsent,
     DomainMismatch,
     DomainSuffixMismatch,
@@ -23,7 +23,7 @@ pub enum RouteRuleMissReason {
 }
 
 impl RouteRuleMissReason {
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::DomainAbsent => "domain_absent",
             Self::DomainMismatch => "domain_mismatch",
@@ -40,14 +40,14 @@ impl RouteRuleMissReason {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RouteRuleTrace<'a> {
+pub(crate) struct RouteRuleTrace<'a> {
     pub rule_index: usize,
     pub action_kind: &'static str,
     pub matcher_summary: &'a str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RouteStep<'a> {
+pub(crate) enum RouteStep<'a> {
     Miss {
         trace: RouteRuleTrace<'a>,
         reason: RouteRuleMissReason,

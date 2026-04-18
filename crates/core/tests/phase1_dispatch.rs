@@ -1,11 +1,12 @@
 use veex_core::{
+    io::StreamCarrier,
     session::{SessionContext, SessionMeta},
     types::{Destination, Network},
 };
-use veex_router::{RouteInput, RouteRule, Router};
+use veex_router::{RouteRule, Router};
 
-#[test]
-fn router_can_route_exact_domain_to_direct() {
+#[tokio::test]
+async fn router_can_route_exact_domain_to_direct() {
     let router = Router::with_default_outbound("proxy").with_rule(RouteRule {
         domain: vec!["trojan.example.com".into()],
         ..RouteRule::new("direct")
@@ -21,11 +22,11 @@ fn router_can_route_exact_domain_to_direct() {
         },
         Vec::new(),
     );
+    let (stream, _peer) = tokio::io::duplex(64);
 
-    let decision = router.select(RouteInput::new(
-        &ctx.meta.destination,
-        Some(ctx.meta.inbound_tag.as_str()),
-        ctx.meta.destination.host.as_domain(),
-    ));
-    assert_eq!(decision.outbound_tag(), Some("direct"));
+    let routed = router
+        .route_stream(StreamCarrier::new(Box::new(stream)), ctx)
+        .await
+        .expect("route_stream should succeed");
+    assert_eq!(routed.decision.outbound_tag(), Some("direct"));
 }

@@ -10,6 +10,7 @@ use crate::{
 };
 use veex_core::types::Host;
 
+#[cfg(test)]
 pub(crate) fn evaluate_final_decision(router: &Router, input: RouteInput<'_>) -> RouteDecision {
     let mut next_index = 0;
     loop {
@@ -218,12 +219,12 @@ mod tests {
     use super::{evaluate_current_state, evaluate_final_decision};
     use crate::{
         context::RouteInput,
+        result::RouteStep,
         router::Router,
         RouteAction,
         RouteFinalAction,
         RouteReason,
         RouteRule,
-        RouteStep,
     };
 
     #[test]

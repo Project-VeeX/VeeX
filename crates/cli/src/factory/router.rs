@@ -19,10 +19,11 @@ mod tests {
         DEFAULT_TLS_HANDSHAKE_TIMEOUT,
     };
     use veex_core::{
+        io::StreamCarrier,
         session::{SessionContext, SessionMeta},
         types::{Destination, Host, Network},
     };
-    use veex_router::{RouteFinalAction, RouteInput, RouteReason, RouteTarget};
+    use veex_router::{RouteFinalAction, RouteReason, RouteTarget};
 
     use super::build_router;
 
@@ -99,18 +100,18 @@ mod tests {
         )
     }
 
-    #[test]
-    fn build_router_includes_route_rules() {
+    #[tokio::test]
+    async fn build_router_includes_route_rules() {
         let router = build_router(&build_config());
         let ctx = build_ctx(Host::Domain("www.google.com".into()));
+        let (stream, _peer) = tokio::io::duplex(64);
 
-        let ruled = router.select(RouteInput::new(
-            &ctx.meta.destination,
-            Some(ctx.meta.inbound_tag.as_str()),
-            ctx.meta.destination.host.as_domain(),
-        ));
-        assert_eq!(ruled.outbound_tag(), Some("direct"));
-        assert_eq!(ruled.reason, RouteReason::Rule);
+        let routed = router
+            .route_stream(StreamCarrier::new(Box::new(stream)), ctx)
+            .await
+            .expect("route_stream should succeed");
+        assert_eq!(routed.decision.outbound_tag(), Some("direct"));
+        assert_eq!(routed.decision.reason, RouteReason::Rule);
     }
 
     #[test]
