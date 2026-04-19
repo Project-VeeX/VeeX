@@ -269,6 +269,13 @@ Phase ownership stays explicit:
 - protocol: protocol-specific stream setup after carrier setup
 - relay: bidirectional transfer after outbound preparation succeeds
 
+Relay keeps its own terminal lifecycle semantics:
+
+- relay starts only after the outbound stream is fully established
+- upstream and downstream are symmetric relay directions inside execution, not routing concepts
+- EOF on one direction triggers relay-local half-close and shutdown propagation toward the peer writer
+- relay finish, relay failure, and stats finalization are separate outcomes that must remain observable
+
 ### 10.1 No Protocol
 
 This shape applies to:

@@ -35,6 +35,8 @@ pub struct RelayErrorWithStats {
     pub error: ProxyError,
     /// The direction in which the error occurred.
     pub direction: &'static str,
+    /// The relay stage in which the error occurred.
+    pub failure_stage: &'static str,
     /// Whether the opposite direction was already half-closed when the error occurred.
     pub has_half_close: bool,
 }
@@ -61,38 +63,27 @@ impl Direction {
     }
 
     fn read_failure(self) -> &'static str {
-        match self {
-            Self::Upstream => "upstream_read",
-            Self::Downstream => "downstream_read",
-        }
+        "read"
     }
 
     fn write_failure(self) -> &'static str {
-        match self {
-            Self::Upstream => "upstream_write",
-            Self::Downstream => "downstream_write",
-        }
+        "write"
     }
 
     fn shutdown_failure(self) -> &'static str {
-        match self {
-            Self::Upstream => "upstream_shutdown",
-            Self::Downstream => "downstream_shutdown",
-        }
+        "shutdown"
     }
 
     fn join_failure(self) -> &'static str {
-        match self {
-            Self::Upstream => "upstream_task",
-            Self::Downstream => "downstream_task",
-        }
+        "task_join"
     }
 }
 
 #[derive(Debug)]
 struct OneWayRelayError {
     partial_bytes: u64,
-    direction: &'static str,
+    direction: Direction,
+    failure_stage: &'static str,
     error: ProxyError,
 }
 
@@ -140,6 +131,7 @@ pub(crate) async fn relay_bidirectional_with_trace(
         &upstream_progress,
         &downstream_progress,
         &half_close_seen,
+        trace,
     )
     .await
 }
@@ -158,55 +150,106 @@ where
 {
     let mut transferred = 0u64;
     let mut buffer = [0u8; 16 * 1024];
+    if let Some(trace) = trace {
+        log_relay_direction_start(trace, direction);
+    }
 
     loop {
-        let read = reader
-            .read(&mut buffer)
-            .await
-            .map_err(|err| OneWayRelayError {
-                partial_bytes: transferred,
-                direction: direction.read_failure(),
-                error: ProxyError::relay(format!(
-                    "{} relay read failed: {}",
-                    direction.as_str(),
-                    err
-                )),
-            })?;
+        let read = match reader.read(&mut buffer).await {
+            Ok(read) => read,
+            Err(err) => {
+                let error =
+                    ProxyError::relay(format!("{} relay read failed: {}", direction.as_str(), err));
+                if let Some(trace) = trace {
+                    log_relay_direction_failed(
+                        trace,
+                        direction,
+                        direction.read_failure(),
+                        transferred,
+                        &error,
+                    );
+                }
+                return Err(OneWayRelayError {
+                    partial_bytes: transferred,
+                    direction,
+                    failure_stage: direction.read_failure(),
+                    error,
+                });
+            }
+        };
 
         if read == 0 {
             half_close_seen.store(true, Ordering::Relaxed);
             if let Some(trace) = trace {
+                log_relay_direction_eof(trace, direction, transferred);
                 log_relay_half_close(trace, direction, transferred);
+                log_relay_shutdown_start(trace, direction, transferred);
             }
-            writer.shutdown().await.map_err(|err| OneWayRelayError {
-                partial_bytes: transferred,
-                direction: direction.shutdown_failure(),
-                error: ProxyError::relay(format!(
+            if let Err(err) = writer.shutdown().await {
+                let error = ProxyError::relay(format!(
                     "{} relay shutdown failed after eof: {}",
                     direction.as_str(),
                     err
-                )),
-            })?;
+                ));
+                if let Some(trace) = trace {
+                    log_relay_shutdown_failed(trace, direction, transferred, &error);
+                }
+                return Err(OneWayRelayError {
+                    partial_bytes: transferred,
+                    direction,
+                    failure_stage: direction.shutdown_failure(),
+                    error,
+                });
+            }
             progress.store(transferred, Ordering::Relaxed);
             return Ok(transferred);
         }
 
-        writer
-            .write_all(&buffer[..read])
-            .await
-            .map_err(|err| OneWayRelayError {
+        if let Err(err) = writer.write_all(&buffer[..read]).await {
+            let error = ProxyError::relay(format!(
+                "{} relay write failed: {}",
+                direction.as_str(),
+                err
+            ));
+            if let Some(trace) = trace {
+                log_relay_direction_failed(
+                    trace,
+                    direction,
+                    direction.write_failure(),
+                    transferred,
+                    &error,
+                );
+            }
+            return Err(OneWayRelayError {
                 partial_bytes: transferred,
-                direction: direction.write_failure(),
-                error: ProxyError::relay(format!(
-                    "{} relay write failed: {}",
-                    direction.as_str(),
-                    err
-                )),
-            })?;
+                direction,
+                failure_stage: direction.write_failure(),
+                error,
+            });
+        }
 
         transferred += read as u64;
         progress.store(transferred, Ordering::Relaxed);
     }
+}
+
+fn log_relay_direction_start(trace: RelayTraceContext, direction: Direction) {
+    debug!(
+        event = "relay_direction_start",
+        session_id = trace.session_id,
+        direction = direction.as_str(),
+        "relay direction start"
+    );
+}
+
+fn log_relay_direction_eof(trace: RelayTraceContext, direction: Direction, transferred: u64) {
+    debug!(
+        event = "relay_direction_eof",
+        session_id = trace.session_id,
+        direction = direction.as_str(),
+        bytes_transferred = transferred,
+        "relay direction eof"
+    );
 }
 
 fn log_relay_half_close(trace: RelayTraceContext, direction: Direction, transferred: u64) {
@@ -219,22 +262,75 @@ fn log_relay_half_close(trace: RelayTraceContext, direction: Direction, transfer
     );
 }
 
+fn log_relay_shutdown_start(trace: RelayTraceContext, direction: Direction, transferred: u64) {
+    debug!(
+        event = "relay_shutdown_start",
+        session_id = trace.session_id,
+        direction = direction.as_str(),
+        bytes_transferred = transferred,
+        "relay shutdown start"
+    );
+}
+
+fn log_relay_shutdown_failed(
+    trace: RelayTraceContext,
+    direction: Direction,
+    transferred: u64,
+    err: &ProxyError,
+) {
+    tracing::warn!(
+        event = "relay_shutdown_failed",
+        session_id = trace.session_id,
+        direction = direction.as_str(),
+        bytes_transferred = transferred,
+        error_kind = %err.kind(),
+        error = %err,
+        "relay shutdown failed"
+    );
+}
+
+fn log_relay_direction_failed(
+    trace: RelayTraceContext,
+    direction: Direction,
+    failure_stage: &str,
+    transferred: u64,
+    err: &ProxyError,
+) {
+    tracing::warn!(
+        event = "relay_direction_failed",
+        session_id = trace.session_id,
+        direction = direction.as_str(),
+        failure_stage = failure_stage,
+        bytes_transferred = transferred,
+        error_kind = %err.kind(),
+        error = %err,
+        "relay direction failed"
+    );
+}
+
 async fn wait_for_relay_tasks(
     mut upstream: tokio::task::JoinHandle<OneWayRelayResult>,
     mut downstream: tokio::task::JoinHandle<OneWayRelayResult>,
     upstream_progress: &AtomicU64,
     downstream_progress: &AtomicU64,
     half_close_seen: &AtomicBool,
+    trace: Option<RelayTraceContext>,
 ) -> RelayResult {
     tokio::select! {
         upstream_join = &mut upstream => {
-            let upstream_result = map_join_result(upstream_join, Direction::Upstream, upstream_progress);
+            let upstream_result = map_join_result(
+                upstream_join,
+                Direction::Upstream,
+                upstream_progress,
+                trace,
+            );
             match upstream_result {
                 Ok(_) => {
                     let downstream_result = map_join_result(
                         downstream.await,
                         Direction::Downstream,
                         downstream_progress,
+                        trace,
                     );
                     finish_after_both_completed(
                         upstream_result,
@@ -242,12 +338,13 @@ async fn wait_for_relay_tasks(
                         upstream_progress,
                         downstream_progress,
                         half_close_seen,
+                        trace,
                     )
                 }
                 Err(err) => {
                     downstream.abort();
                     let _ = downstream.await;
-                    Err(RelayErrorWithStats {
+                    let relay_err = RelayErrorWithStats {
                         stats: RelayStats {
                             bytes_up: err
                                 .partial_bytes
@@ -255,9 +352,12 @@ async fn wait_for_relay_tasks(
                             bytes_down: downstream_progress.load(Ordering::Relaxed),
                         },
                         error: err.error,
-                        direction: err.direction,
+                        direction: err.direction.as_str(),
+                        failure_stage: err.failure_stage,
                         has_half_close: half_close_seen.load(Ordering::Relaxed),
-                    })
+                    };
+                    log_relay_stats_finalized(trace, &relay_err.stats, false, relay_err.has_half_close);
+                    Err(relay_err)
                 }
             }
         }
@@ -266,6 +366,7 @@ async fn wait_for_relay_tasks(
                 downstream_join,
                 Direction::Downstream,
                 downstream_progress,
+                trace,
             );
             match downstream_result {
                 Ok(_) => {
@@ -273,6 +374,7 @@ async fn wait_for_relay_tasks(
                         upstream.await,
                         Direction::Upstream,
                         upstream_progress,
+                        trace,
                     );
                     finish_after_both_completed(
                         upstream_result,
@@ -280,12 +382,13 @@ async fn wait_for_relay_tasks(
                         upstream_progress,
                         downstream_progress,
                         half_close_seen,
+                        trace,
                     )
                 }
                 Err(err) => {
                     upstream.abort();
                     let _ = upstream.await;
-                    Err(RelayErrorWithStats {
+                    let relay_err = RelayErrorWithStats {
                         stats: RelayStats {
                             bytes_up: upstream_progress.load(Ordering::Relaxed),
                             bytes_down: err
@@ -293,9 +396,12 @@ async fn wait_for_relay_tasks(
                                 .max(downstream_progress.load(Ordering::Relaxed)),
                         },
                         error: err.error,
-                        direction: err.direction,
+                        direction: err.direction.as_str(),
+                        failure_stage: err.failure_stage,
                         has_half_close: half_close_seen.load(Ordering::Relaxed),
-                    })
+                    };
+                    log_relay_stats_finalized(trace, &relay_err.stats, false, relay_err.has_half_close);
+                    Err(relay_err)
                 }
             }
         }
@@ -306,17 +412,31 @@ fn map_join_result(
     result: std::result::Result<OneWayRelayResult, JoinError>,
     direction: Direction,
     progress: &AtomicU64,
+    trace: Option<RelayTraceContext>,
 ) -> OneWayRelayResult {
     match result {
         Ok(result) => result,
         Err(err) => Err(OneWayRelayError {
             partial_bytes: progress.load(Ordering::Relaxed),
-            direction: direction.join_failure(),
-            error: ProxyError::relay(format!(
-                "{} relay task join failed: {}",
-                direction.as_str(),
-                err
-            )),
+            direction,
+            failure_stage: direction.join_failure(),
+            error: {
+                let error = ProxyError::relay(format!(
+                    "{} relay task join failed: {}",
+                    direction.as_str(),
+                    err
+                ));
+                if let Some(trace) = trace {
+                    log_relay_direction_failed(
+                        trace,
+                        direction,
+                        direction.join_failure(),
+                        progress.load(Ordering::Relaxed),
+                        &error,
+                    );
+                }
+                error
+            },
         }),
     }
 }
@@ -327,6 +447,7 @@ fn finish_after_both_completed(
     upstream_progress: &AtomicU64,
     downstream_progress: &AtomicU64,
     half_close_seen: &AtomicBool,
+    trace: Option<RelayTraceContext>,
 ) -> RelayResult {
     let stats = stats_from_results(
         &upstream_result,
@@ -334,15 +455,44 @@ fn finish_after_both_completed(
         upstream_progress,
         downstream_progress,
     );
+    let has_half_close = half_close_seen.load(Ordering::Relaxed);
     match (upstream_result, downstream_result) {
-        (Ok(_), Ok(_)) => Ok(stats),
-        (Err(err), _) | (_, Err(err)) => Err(RelayErrorWithStats {
-            stats,
-            error: err.error,
-            direction: err.direction,
-            has_half_close: half_close_seen.load(Ordering::Relaxed),
-        }),
+        (Ok(_), Ok(_)) => {
+            log_relay_stats_finalized(trace, &stats, true, has_half_close);
+            Ok(stats)
+        }
+        (Err(err), _) | (_, Err(err)) => {
+            let relay_err = RelayErrorWithStats {
+                stats,
+                error: err.error,
+                direction: err.direction.as_str(),
+                failure_stage: err.failure_stage,
+                has_half_close,
+            };
+            log_relay_stats_finalized(trace, &relay_err.stats, false, relay_err.has_half_close);
+            Err(relay_err)
+        }
     }
+}
+
+fn log_relay_stats_finalized(
+    trace: Option<RelayTraceContext>,
+    stats: &RelayStats,
+    success: bool,
+    has_half_close: bool,
+) {
+    let Some(trace) = trace else {
+        return;
+    };
+    tracing::info!(
+        event = "relay_stats_finalized",
+        session_id = trace.session_id,
+        success,
+        has_half_close,
+        bytes_up = stats.bytes_up,
+        bytes_down = stats.bytes_down,
+        "relay stats finalized"
+    );
 }
 
 fn stats_from_results(
@@ -398,6 +548,7 @@ mod tests {
     struct ScriptedStream {
         read_steps: VecDeque<ReadStep>,
         written: Vec<u8>,
+        shutdown_error: Option<io::Error>,
     }
 
     impl ScriptedStream {
@@ -405,6 +556,18 @@ mod tests {
             Self {
                 read_steps: read_steps.into_iter().collect(),
                 written: Vec::new(),
+                shutdown_error: None,
+            }
+        }
+
+        fn with_shutdown_error(
+            read_steps: impl IntoIterator<Item = ReadStep>,
+            shutdown_error: io::Error,
+        ) -> Self {
+            Self {
+                read_steps: read_steps.into_iter().collect(),
+                written: Vec::new(),
+                shutdown_error: Some(shutdown_error),
             }
         }
     }
@@ -441,8 +604,11 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            Poll::Ready(Ok(()))
+        fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            match self.shutdown_error.take() {
+                Some(err) => Poll::Ready(Err(err)),
+                None => Poll::Ready(Ok(())),
+            }
         }
     }
 
@@ -495,6 +661,7 @@ mod tests {
 
     #[tokio::test]
     async fn upstream_failure_keeps_partial_stats() {
+        let (_guard, trace_buffer) = install_test_subscriber();
         let inbound: BoxedAsyncStream = Box::new(ScriptedStream::new([
             ReadStep::Data(b"ping"),
             ReadStep::Error(io::Error::other("boom")),
@@ -504,13 +671,45 @@ mod tests {
             ReadStep::Eof,
         ]));
 
-        let err = relay_bidirectional(inbound, outbound)
-            .await
-            .expect_err("relay should surface the upstream read error");
+        let err = relay_bidirectional_with_trace(
+            inbound,
+            outbound,
+            Some(RelayTraceContext { session_id: 18 }),
+        )
+        .await
+        .expect_err("relay should surface the upstream read error");
 
         assert_eq!(err.stats.bytes_up, 4);
         assert_eq!(err.stats.bytes_down, 4);
+        assert_eq!(err.direction, "upstream");
+        assert_eq!(err.failure_stage, "read");
         assert_eq!(err.error.kind(), veex_core::ErrorKind::Relay);
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "relay_direction_failed",
+            &[
+                ("session_id", "18"),
+                ("direction", "upstream"),
+                ("failure_stage", "read"),
+                ("bytes_transferred", "4"),
+                ("error_kind", "relay"),
+                ("level", "WARN"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "relay_stats_finalized",
+            &[
+                ("session_id", "18"),
+                ("success", "false"),
+                ("has_half_close", "true"),
+                ("bytes_up", "4"),
+                ("bytes_down", "4"),
+                ("level", "INFO"),
+            ],
+        );
     }
 
     #[tokio::test]
@@ -539,6 +738,64 @@ mod tests {
         let events = captured_events(&trace_buffer);
         assert_has_event(
             &events,
+            "relay_direction_start",
+            &[
+                ("session_id", "15"),
+                ("direction", "upstream"),
+                ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "relay_direction_start",
+            &[
+                ("session_id", "15"),
+                ("direction", "downstream"),
+                ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "relay_direction_eof",
+            &[
+                ("session_id", "15"),
+                ("direction", "upstream"),
+                ("bytes_transferred", "4"),
+                ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "relay_direction_eof",
+            &[
+                ("session_id", "15"),
+                ("direction", "downstream"),
+                ("bytes_transferred", "4"),
+                ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "relay_shutdown_start",
+            &[
+                ("session_id", "15"),
+                ("direction", "upstream"),
+                ("bytes_transferred", "4"),
+                ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "relay_shutdown_start",
+            &[
+                ("session_id", "15"),
+                ("direction", "downstream"),
+                ("bytes_transferred", "4"),
+                ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
             "relay_half_close",
             &[
                 ("session_id", "15"),
@@ -555,6 +812,18 @@ mod tests {
                 ("direction", "downstream"),
                 ("bytes_transferred", "4"),
                 ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "relay_stats_finalized",
+            &[
+                ("session_id", "15"),
+                ("success", "true"),
+                ("has_half_close", "true"),
+                ("bytes_up", "4"),
+                ("bytes_down", "4"),
+                ("level", "INFO"),
             ],
         );
     }
@@ -576,7 +845,62 @@ mod tests {
 
         assert_eq!(err.stats.bytes_up, 4);
         assert_eq!(err.stats.bytes_down, 4);
+        assert_eq!(err.direction, "downstream");
+        assert_eq!(err.failure_stage, "read");
         assert_eq!(err.error.kind(), veex_core::ErrorKind::Relay);
+    }
+
+    #[tokio::test]
+    async fn relay_shutdown_failure_is_reported_as_relay_stage_failure() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let inbound: BoxedAsyncStream = Box::new(ScriptedStream::new([
+            ReadStep::Data(b"ping"),
+            ReadStep::Eof,
+        ]));
+        let outbound: BoxedAsyncStream = Box::new(ScriptedStream::with_shutdown_error(
+            [ReadStep::Eof],
+            io::Error::other("shutdown boom"),
+        ));
+
+        let err = relay_bidirectional_with_trace(
+            inbound,
+            outbound,
+            Some(RelayTraceContext { session_id: 23 }),
+        )
+        .await
+        .expect_err("shutdown failure should surface as relay failure");
+
+        assert_eq!(err.stats.bytes_up, 4);
+        assert_eq!(err.stats.bytes_down, 0);
+        assert_eq!(err.direction, "upstream");
+        assert_eq!(err.failure_stage, "shutdown");
+        assert!(err.has_half_close);
+        assert_eq!(err.error.kind(), veex_core::ErrorKind::Relay);
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "relay_shutdown_failed",
+            &[
+                ("session_id", "23"),
+                ("direction", "upstream"),
+                ("bytes_transferred", "4"),
+                ("error_kind", "relay"),
+                ("level", "WARN"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "relay_stats_finalized",
+            &[
+                ("session_id", "23"),
+                ("success", "false"),
+                ("has_half_close", "true"),
+                ("bytes_up", "4"),
+                ("bytes_down", "0"),
+                ("level", "INFO"),
+            ],
+        );
     }
 
     #[tokio::test]
@@ -588,11 +912,12 @@ mod tests {
         });
         let progress = AtomicU64::new(0);
 
-        let err = map_join_result(task.await, Direction::Upstream, &progress)
+        let err = map_join_result(task.await, Direction::Upstream, &progress, None)
             .expect_err("join error should map to relay error");
 
         assert_eq!(err.partial_bytes, 0);
-        assert_eq!(err.direction, "upstream_task");
+        assert_eq!(err.direction, Direction::Upstream);
+        assert_eq!(err.failure_stage, "task_join");
         assert_eq!(err.error.kind(), veex_core::ErrorKind::Relay);
         assert!(
             err.error
@@ -620,7 +945,8 @@ mod tests {
 
         assert_eq!(err.stats.bytes_up, 0);
         assert_eq!(err.stats.bytes_down, 0);
-        assert_eq!(err.direction, "downstream_read");
+        assert_eq!(err.direction, "downstream");
+        assert_eq!(err.failure_stage, "read");
         assert!(!err.has_half_close);
         assert_eq!(err.error.kind(), veex_core::ErrorKind::Relay);
     }

@@ -39,6 +39,14 @@ resolve -> connect -> (tls) -> (protocol) -> relay
 
 `direct` uses the shared resolve/connect semantics and then enters relay immediately. `trojan` keeps the same resolve/connect base semantics, adds TLS when enabled, then performs Trojan protocol request setup before relay. `connect_timeout` belongs to the connect stage; `tls.handshake_timeout` belongs only to the TLS stage.
 
+Relay is the execution terminal stage on stream paths:
+
+```text
+stream established -> relay start -> bidirectional copy -> half-close/shutdown propagation -> finish or failure -> stats finalize
+```
+
+Relay does not own resolve, connect, TLS, protocol setup, or routing policy. It owns only the transfer stage after the stream path is already established.
+
 Transparent proxy support is treated as explicit ingress handling, not as a hidden policy system. VeeX does not auto-insert private, local, or upstream-exception direct rules; deployments that need those exceptions should define them explicitly in `route.rules`.
 
 This repository is not a full DNS platform, a generalized UDP proxy stack, a TUN implementation, or a general routing system. OpenWrt packaging, `procd`, and LuCI integration remain outside this repository.

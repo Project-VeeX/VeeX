@@ -626,6 +626,20 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
             ("level", "INFO"),
         ],
     );
+    assert_has_event(
+        &events,
+        "relay_finish",
+        &[
+            ("inbound", "socks-in"),
+            ("outbound", "proxy"),
+            ("level", "INFO"),
+        ],
+    );
+    assert_has_event(
+        &events,
+        "relay_stats_finalized",
+        &[("success", "true"), ("level", "INFO")],
+    );
 }
 
 #[tokio::test]
@@ -1221,6 +1235,20 @@ async fn runtime_emits_session_start_and_finish_events() {
         ],
     );
     assert_event_has_fields(&events, "relay_start", &["session_id", "destination"]);
+    assert_has_event(
+        &events,
+        "relay_finish",
+        &[
+            ("inbound", "socks-in"),
+            ("outbound", "direct"),
+            ("level", "INFO"),
+        ],
+    );
+    assert_has_event(
+        &events,
+        "relay_stats_finalized",
+        &[("success", "true"), ("level", "INFO")],
+    );
 }
 
 #[tokio::test]

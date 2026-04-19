@@ -86,6 +86,13 @@ Representative event names include:
 - `protocol_handshake_start`
 - `protocol_handshake_success`
 - `protocol_handshake_failed`
+- `relay_direction_start`
+- `relay_direction_eof`
+- `relay_direction_failed`
+- `relay_shutdown_start`
+- `relay_shutdown_failed`
+- `relay_finish`
+- `relay_stats_finalized`
 - `packet_session_start`
 - `packet_forward_send`
 - `packet_forward_failed`
@@ -126,6 +133,12 @@ Packet lifecycle events also preserve packet-path fields such as:
 - `close_reason`
 - `shutdown_reason`
 - `payload_len`
+
+Relay lifecycle events preserve relay-stage fields such as:
+
+- `direction`
+- `failure_stage`
+- `has_half_close`
 
 For route-rule explainability, debug-level routing events also preserve fields such as:
 

@@ -18,7 +18,7 @@ use crate::{
 
 use super::{
     dns::hijack_stream_dns,
-    relay::{RelayErrorWithStats, RelayTraceContext, relay_bidirectional_with_trace},
+    relay::{RelayErrorWithStats, RelayStats, RelayTraceContext, relay_bidirectional_with_trace},
 };
 
 pub struct StreamDispatcher {
@@ -92,16 +92,19 @@ impl StreamDispatcher {
                 .await
                 {
                     Ok(stats) => (
-                        SessionSummary::success(
-                            trace.session_id,
-                            trace.inbound_field.as_str(),
-                            trace.outbound_field.as_str(),
-                            trace.peer_field.as_str(),
-                            trace.destination_field.as_str(),
-                            stats.bytes_up,
-                            stats.bytes_down,
-                            ctx.meta.start.elapsed(),
-                        ),
+                        {
+                            log_relay_finish(&trace, &stats);
+                            SessionSummary::success(
+                                trace.session_id,
+                                trace.inbound_field.as_str(),
+                                trace.outbound_field.as_str(),
+                                trace.peer_field.as_str(),
+                                trace.destination_field.as_str(),
+                                stats.bytes_up,
+                                stats.bytes_down,
+                                ctx.meta.start.elapsed(),
+                            )
+                        },
                         Ok(()),
                     ),
                     Err(relay_err) => {
@@ -219,12 +222,26 @@ fn log_relay_failed(trace: &DispatchTraceContext, relay_err: &RelayErrorWithStat
         outbound = %trace.outbound_field,
         destination = %trace.destination_field,
         direction = relay_err.direction,
+        failure_stage = relay_err.failure_stage,
         has_half_close = relay_err.has_half_close,
         bytes_up = relay_err.stats.bytes_up,
         bytes_down = relay_err.stats.bytes_down,
         error_kind = %relay_err.error.kind(),
         error = %relay_err.error,
         "relay failed"
+    );
+}
+
+fn log_relay_finish(trace: &DispatchTraceContext, stats: &RelayStats) {
+    info!(
+        event = "relay_finish",
+        session_id = trace.session_id,
+        inbound = %trace.inbound_field,
+        outbound = %trace.outbound_field,
+        destination = %trace.destination_field,
+        bytes_up = stats.bytes_up,
+        bytes_down = stats.bytes_down,
+        "relay finished"
     );
 }
 
@@ -529,6 +546,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatcher_writes_route_and_passes_state_to_outbound() {
+        let (_guard, events) = install_test_subscriber();
         let (outbound, captured) = CaptureOutbound::new("proxy");
         let dispatcher = StreamDispatcher::new(finalized_catalog(Arc::new(outbound)));
         let ctx = SessionContext::new(
@@ -559,6 +577,30 @@ mod tests {
             .expect("outbound should receive session context");
         assert_eq!(captured.route.selected_outbound.as_deref(), Some("proxy"));
         assert_eq!(captured.state.buffered_payload, b"hello");
+
+        let events = captured_events(&events);
+        assert_has_event(
+            &events,
+            "relay_finish",
+            &[
+                ("session_id", "7"),
+                ("outbound", "proxy"),
+                ("bytes_up", "0"),
+                ("bytes_down", "0"),
+                ("level", "INFO"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "session_finish",
+            &[("success", "true"), ("bytes_up", "0"), ("bytes_down", "0")],
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.fields.get("event").map(String::as_str) == Some("relay_failed")),
+            "successful relay should not emit relay_failed: {events:?}"
+        );
     }
 
     #[tokio::test]
@@ -615,11 +657,24 @@ mod tests {
             &[
                 ("session_id", "9"),
                 ("outbound", "proxy"),
-                ("direction", "upstream_read"),
+                ("direction", "upstream"),
+                ("failure_stage", "read"),
                 ("has_half_close", "true"),
                 ("bytes_up", "4"),
                 ("bytes_down", "4"),
                 ("level", "WARN"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "relay_stats_finalized",
+            &[
+                ("session_id", "9"),
+                ("success", "false"),
+                ("has_half_close", "true"),
+                ("bytes_up", "4"),
+                ("bytes_down", "4"),
+                ("level", "INFO"),
             ],
         );
         assert_has_event(
