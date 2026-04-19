@@ -38,5 +38,5 @@ jobs:
       - name: Run clippy
         run: cargo clippy --locked --workspace --all-targets
 
-      - name: Verify release-test build
-        run: cargo build --locked --profile release-test -p veex-cli
+      - name: Verify release-dev build
+        run: cargo build --locked --profile release-dev -p veex-cli

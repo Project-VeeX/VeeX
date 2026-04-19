@@ -126,7 +126,7 @@
 
 - Linux redirect inbound support for transparent proxy validation.
 - Transparent proxy validation guides for OpenWrt-class systems.
-- Added a dedicated `release-test` Cargo profile for validation and distribution builds.
+- Added a dedicated `release-dev` Cargo profile for validation and distribution builds.
 - Improved redirect and original destination test stability across different Linux environments.
 
 ## 0.1.0
