@@ -5,6 +5,8 @@ use super::shared::{DomainResolverConfig, TrojanTlsConfig};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DnsConfig {
     pub final_server: String,
+    pub disable_cache: bool,
+    pub cache_capacity: Option<usize>,
     pub servers: Vec<DnsServerConfig>,
     pub rules: Vec<DnsRuleConfig>,
 }
@@ -36,6 +38,7 @@ pub enum DnsServerTypeConfig {
 pub struct DnsRuleConfig {
     pub domain: Vec<String>,
     pub server: String,
+    pub disable_cache: bool,
 }
 
 impl DnsRuleConfig {

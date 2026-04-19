@@ -1,17 +1,11 @@
-use std::sync::Arc;
-
 use veex_core::{ProxyError, dns::ResolveContext};
 
-use crate::{
-    traits::DnsUpstream,
-    types::{DnsRouteReason, DnsRule, DnsSelection},
-};
+use crate::types::{DnsRouteReason, DnsRule, DnsSelection};
 
 #[derive(Clone)]
 pub(crate) struct DnsServerRoute<'a> {
     pub tag: &'a str,
     pub detour: Option<&'a str>,
-    pub upstream: Arc<dyn DnsUpstream>,
 }
 
 #[derive(Clone, Debug)]
@@ -40,6 +34,7 @@ impl DnsRouter {
                 return self.selection_for_tag(
                     rule.server_tag.clone(),
                     DnsRouteReason::Rule,
+                    rule.disable_cache,
                     servers,
                 );
             }
@@ -48,6 +43,7 @@ impl DnsRouter {
         self.selection_for_tag(
             self.final_server_tag.clone(),
             DnsRouteReason::Final,
+            false,
             servers,
         )
     }
@@ -58,44 +54,62 @@ impl DnsRouter {
         servers: &[DnsServerRoute<'a>],
     ) -> veex_core::Result<Option<DnsSelection>> {
         if let Some(server_tag) = &context.explicit_server_tag {
-            let upstream = self
-                .find_server(servers, server_tag)
-                .map(|server| Arc::clone(&server.upstream))
-                .ok_or_else(|| {
-                    ProxyError::config(format!(
-                        "explicit domain_resolver points to missing dns server tag: {server_tag}"
-                    ))
-                })?;
+            self.find_server(servers, server_tag).ok_or_else(|| {
+                ProxyError::config(format!(
+                    "explicit domain_resolver points to missing dns server tag: {server_tag}"
+                ))
+            })?;
             return Ok(Some(DnsSelection {
                 server_tag: server_tag.clone(),
+                candidate_server_tags: vec![server_tag.clone()],
                 reason: DnsRouteReason::ExplicitResolver,
-                upstream,
+                disable_cache: context.disable_cache,
             }));
         }
 
-        if let Some(selection) = self
-            .find_server(servers, self.final_server_tag.as_str())
-            .filter(|server| is_safe_for_context(server, context))
-            .map(|server| {
-                self.selection_for_tag(server.tag.to_string(), DnsRouteReason::Final, servers)
-            })
-        {
-            return selection.map(Some);
+        let mut safe_direct = Vec::new();
+        let mut safe_other = Vec::new();
+        for server in servers {
+            if !is_safe_for_context(server, context) {
+                continue;
+            }
+            if server.tag == self.final_server_tag {
+                continue;
+            }
+            if server.detour == Some("direct") {
+                safe_direct.push(server.tag.to_string());
+            } else {
+                safe_other.push(server.tag.to_string());
+            }
         }
 
-        let selection = servers
-            .iter()
-            .find(|server| server.detour == Some("direct") && is_safe_for_context(server, context))
-            .or_else(|| {
-                servers
-                    .iter()
-                    .find(|server| is_safe_for_context(server, context))
-            })
-            .map(|server| {
-                self.selection_for_tag(server.tag.to_string(), DnsRouteReason::SafeDefault, servers)
-            });
+        if self
+            .find_server(servers, self.final_server_tag.as_str())
+            .is_some_and(|server| is_safe_for_context(server, context))
+        {
+            let mut candidates = vec![self.final_server_tag.clone()];
+            candidates.extend(safe_direct);
+            candidates.extend(safe_other);
+            return Ok(Some(DnsSelection {
+                server_tag: self.final_server_tag.clone(),
+                candidate_server_tags: candidates,
+                reason: DnsRouteReason::Final,
+                disable_cache: context.disable_cache,
+            }));
+        }
 
-        selection.transpose()
+        let mut candidates = safe_direct;
+        candidates.extend(safe_other);
+        let Some(server_tag) = candidates.first().cloned() else {
+            return Ok(None);
+        };
+
+        Ok(Some(DnsSelection {
+            server_tag,
+            candidate_server_tags: candidates,
+            reason: DnsRouteReason::SafeDefault,
+            disable_cache: context.disable_cache,
+        }))
     }
 
     fn find_server<'a>(
@@ -110,16 +124,16 @@ impl DnsRouter {
         &self,
         server_tag: String,
         reason: DnsRouteReason,
+        disable_cache: bool,
         servers: &[DnsServerRoute<'a>],
     ) -> veex_core::Result<DnsSelection> {
-        let upstream = self
-            .find_server(servers, &server_tag)
-            .map(|server| Arc::clone(&server.upstream))
+        self.find_server(servers, &server_tag)
             .ok_or_else(|| ProxyError::config(format!("missing dns server tag: {server_tag}")))?;
         Ok(DnsSelection {
+            candidate_server_tags: vec![server_tag.clone()],
             server_tag,
             reason,
-            upstream,
+            disable_cache,
         })
     }
 }
@@ -150,23 +164,11 @@ fn normalize_domain(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use veex_core::dns::{ResolveContext, ResolvePurpose};
 
-    use async_trait::async_trait;
-    use veex_core::dns::{DnsRequest, DnsResponse, ResolveContext};
-
-    use crate::{traits::DnsUpstream, types::DnsRouteReason};
+    use crate::types::DnsRouteReason;
 
     use super::{DnsRouter, DnsRule, DnsServerRoute};
-
-    struct TestUpstream;
-
-    #[async_trait]
-    impl DnsUpstream for TestUpstream {
-        async fn exchange(&self, _req: DnsRequest) -> veex_core::Result<DnsResponse> {
-            Err(veex_core::ProxyError::protocol("unused"))
-        }
-    }
 
     #[test]
     fn dns_router_prefers_matching_rule_before_final() {
@@ -175,6 +177,7 @@ mod tests {
             vec![DnsRule {
                 domain: vec!["trojan.example.com".into()],
                 server_tag: "direct".into(),
+                disable_cache: true,
             }],
         );
 
@@ -182,12 +185,10 @@ mod tests {
             DnsServerRoute {
                 tag: "direct",
                 detour: Some("direct"),
-                upstream: Arc::new(TestUpstream),
             },
             DnsServerRoute {
                 tag: "remote",
                 detour: Some("proxy"),
-                upstream: Arc::new(TestUpstream),
             },
         ];
 
@@ -200,8 +201,10 @@ mod tests {
 
         assert_eq!(matched.server_tag, "direct");
         assert_eq!(matched.reason, DnsRouteReason::Rule);
+        assert!(matched.disable_cache);
         assert_eq!(fallback.server_tag, "remote");
         assert_eq!(fallback.reason, DnsRouteReason::Final);
+        assert_eq!(fallback.candidate_server_tags, vec!["remote".to_string()]);
     }
 
     #[test]
@@ -210,7 +213,6 @@ mod tests {
         let servers = [DnsServerRoute {
             tag: "bootstrap",
             detour: Some("direct"),
-            upstream: Arc::new(TestUpstream),
         }];
 
         let selection = router
@@ -223,6 +225,10 @@ mod tests {
 
         assert_eq!(selection.server_tag, "bootstrap");
         assert_eq!(selection.reason, DnsRouteReason::ExplicitResolver);
+        assert_eq!(
+            selection.candidate_server_tags,
+            vec!["bootstrap".to_string()]
+        );
     }
 
     #[test]
@@ -232,12 +238,10 @@ mod tests {
             DnsServerRoute {
                 tag: "remote",
                 detour: Some("proxy"),
-                upstream: Arc::new(TestUpstream),
             },
             DnsServerRoute {
                 tag: "bootstrap",
                 detour: Some("direct"),
-                upstream: Arc::new(TestUpstream),
             },
         ];
 
@@ -248,6 +252,10 @@ mod tests {
 
         assert_eq!(selection.server_tag, "bootstrap");
         assert_eq!(selection.reason, DnsRouteReason::SafeDefault);
+        assert_eq!(
+            selection.candidate_server_tags,
+            vec!["bootstrap".to_string()]
+        );
     }
 
     #[test]
@@ -257,12 +265,10 @@ mod tests {
             DnsServerRoute {
                 tag: "remote",
                 detour: Some("dns-egress"),
-                upstream: Arc::new(TestUpstream),
             },
             DnsServerRoute {
                 tag: "bootstrap",
                 detour: Some("direct"),
-                upstream: Arc::new(TestUpstream),
             },
         ];
 
@@ -273,6 +279,10 @@ mod tests {
 
         assert_eq!(selection.server_tag, "remote");
         assert_eq!(selection.reason, DnsRouteReason::Final);
+        assert_eq!(
+            selection.candidate_server_tags,
+            vec!["remote".to_string(), "bootstrap".to_string()]
+        );
     }
 
     #[test]
@@ -282,19 +292,18 @@ mod tests {
             DnsServerRoute {
                 tag: "remote",
                 detour: Some("proxy"),
-                upstream: Arc::new(TestUpstream),
             },
             DnsServerRoute {
                 tag: "bootstrap",
                 detour: Some("direct"),
-                upstream: Arc::new(TestUpstream),
             },
         ];
         let context = ResolveContext {
-            purpose: veex_core::dns::ResolvePurpose::DnsUpstreamDial,
+            purpose: ResolvePurpose::DnsUpstreamDial,
             caller_outbound_tag: Some("proxy".into()),
             caller_dns_server_tag: Some("remote".into()),
             explicit_server_tag: None,
+            disable_cache: false,
             recursion_depth: 1,
         };
 
@@ -313,7 +322,6 @@ mod tests {
         let servers = [DnsServerRoute {
             tag: "remote",
             detour: Some("proxy"),
-            upstream: Arc::new(TestUpstream),
         }];
 
         let selection = router

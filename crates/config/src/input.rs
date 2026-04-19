@@ -217,6 +217,10 @@ pub struct InputRouteRule {
 pub struct InputDnsConfig {
     #[serde(rename = "final", default)]
     pub final_server: Option<Option<String>>,
+    #[serde(default)]
+    pub disable_cache: bool,
+    #[serde(default)]
+    pub cache_capacity: Option<usize>,
     pub servers: Vec<InputDnsServer>,
     #[serde(default)]
     pub rules: Option<Vec<InputDnsRule>>,
@@ -257,7 +261,23 @@ pub struct InputDnsRule {
     #[serde(default)]
     pub server: Option<Option<String>>,
     #[serde(default)]
-    pub action: Option<Option<String>>,
+    pub action: Option<InputDnsRuleActionValue>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum InputDnsRuleActionValue {
+    Kind(String),
+    Structured(InputDnsRuleActionObject),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InputDnsRuleActionObject {
+    #[serde(default)]
+    pub disable_cache: bool,
+    #[allow(dead_code)]
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

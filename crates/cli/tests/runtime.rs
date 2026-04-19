@@ -332,6 +332,8 @@ async fn runtime_uses_explicit_domain_resolver_for_trojan_server_dial() {
         },
         dns: Some(DnsConfig {
             final_server: "remote-dns".into(),
+            disable_cache: false,
+            cache_capacity: None,
             servers: vec![
                 DnsServerConfig {
                     tag: "direct-dns".into(),
@@ -359,6 +361,7 @@ async fn runtime_uses_explicit_domain_resolver_for_trojan_server_dial() {
             rules: vec![DnsRuleConfig {
                 domain: vec!["trojan-bootstrap.test".into()],
                 server: "remote-dns".into(),
+                disable_cache: false,
             }],
         }),
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
@@ -1600,6 +1603,8 @@ async fn assert_dns_hijack_round_trip(
         },
         dns: Some(DnsConfig {
             final_server: "direct-dns".into(),
+            disable_cache: false,
+            cache_capacity: None,
             servers: vec![DnsServerConfig {
                 tag: "direct-dns".into(),
                 kind: upstream.as_kind(),
@@ -1614,6 +1619,7 @@ async fn assert_dns_hijack_round_trip(
             rules: vec![DnsRuleConfig {
                 domain: vec!["trojan.example.com".into()],
                 server: "direct-dns".into(),
+                disable_cache: false,
             }],
         }),
         inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
@@ -1808,6 +1814,8 @@ async fn assert_dns_upstream_self_resolution_round_trip(upstream: DnsUpstreamTra
         },
         dns: Some(DnsConfig {
             final_server: "direct-dns".into(),
+            disable_cache: false,
+            cache_capacity: None,
             servers: vec![
                 DnsServerConfig {
                     tag: "direct-dns".into(),
@@ -1837,6 +1845,7 @@ async fn assert_dns_upstream_self_resolution_round_trip(upstream: DnsUpstreamTra
             rules: vec![DnsRuleConfig {
                 domain: vec!["trojan.example.com".into()],
                 server: "direct-dns".into(),
+                disable_cache: false,
             }],
         }),
         inbounds: vec![InboundConfig::Direct(DirectInboundConfig {

@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
 use veex_core::{
     portal::Dial,
@@ -6,11 +6,14 @@ use veex_core::{
 };
 use veex_transport::TlsClientOptions;
 
-use crate::traits::DnsUpstream;
+pub const DEFAULT_DNS_CACHE_CAPACITY: usize = 4096;
+pub const MIN_DNS_CACHE_CAPACITY: usize = 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DnsRuntimeConfig {
     pub final_server_tag: String,
+    pub disable_cache: bool,
+    pub cache_capacity: usize,
     pub servers: Vec<DnsServer>,
     pub rules: Vec<DnsRule>,
 }
@@ -89,13 +92,15 @@ impl DnsRouteReason {
 pub struct DnsRule {
     pub domain: Vec<String>,
     pub server_tag: String,
+    pub disable_cache: bool,
 }
 
 #[derive(Clone)]
 pub struct DnsSelection {
     pub server_tag: String,
+    pub candidate_server_tags: Vec<String>,
     pub reason: DnsRouteReason,
-    pub upstream: Arc<dyn DnsUpstream>,
+    pub disable_cache: bool,
 }
 
 pub(crate) fn upstream_network(transport: &DnsServerTransport) -> Network {

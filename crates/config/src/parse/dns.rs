@@ -1,6 +1,6 @@
 use crate::{
     error::ConfigError,
-    input::{InputDnsConfig, InputDnsRule, InputDnsServer},
+    input::{InputDnsConfig, InputDnsRule, InputDnsRuleActionValue, InputDnsServer},
     schema::{DnsConfig, DnsRuleConfig, DnsServerConfig, DnsServerTypeConfig},
 };
 
@@ -25,6 +25,8 @@ pub(crate) fn input_dns_into_config(
 
     Ok(DnsConfig {
         final_server: parse_dns_final_server(input_config.final_server, &servers)?,
+        disable_cache: input_config.disable_cache,
+        cache_capacity: input_config.cache_capacity,
         servers,
         rules: input_config
             .rules
@@ -96,23 +98,19 @@ pub(crate) fn input_dns_rule_into_config(
     input_rule: InputDnsRule,
     index: usize,
 ) -> Result<DnsRuleConfig, ConfigError> {
-    if let Some(action) = &input_rule.action {
-        match action.as_deref() {
-            Some("route") => {}
-            Some(other) => {
+    let disable_cache = match &input_rule.action {
+        Some(InputDnsRuleActionValue::Kind(action)) => match action.trim() {
+            "route" => false,
+            other => {
                 return Err(ConfigError::semantic(
                     format!("$.dns.rules[{index}].action"),
                     format!("unsupported dns rule action '{other}'"),
                 ));
             }
-            None => {
-                return Err(ConfigError::validation(
-                    format!("$.dns.rules[{index}].action"),
-                    "expected string",
-                ));
-            }
-        }
-    }
+        },
+        Some(InputDnsRuleActionValue::Structured(action)) => action.disable_cache,
+        None => false,
+    };
 
     Ok(DnsRuleConfig {
         domain: normalize_domain_matchers(
@@ -121,6 +119,7 @@ pub(crate) fn input_dns_rule_into_config(
             DomainMatcherKind::Exact,
         )?,
         server: required_nested_string(input_rule.server, format!("$.dns.rules[{index}].server"))?,
+        disable_cache,
     })
 }
 

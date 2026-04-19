@@ -180,6 +180,8 @@ mod tests {
         let mut config = valid_config();
         config.dns = Some(DnsConfig {
             final_server: "local".into(),
+            disable_cache: false,
+            cache_capacity: None,
             servers: vec![DnsServerConfig {
                 tag: "local".into(),
                 kind: DnsServerTypeConfig::Udp,
@@ -210,6 +212,8 @@ mod tests {
         let mut config = valid_config();
         config.dns = Some(DnsConfig {
             final_server: "local".into(),
+            disable_cache: false,
+            cache_capacity: None,
             servers: vec![DnsServerConfig {
                 tag: "local".into(),
                 kind: DnsServerTypeConfig::Tcp,
@@ -240,6 +244,8 @@ mod tests {
         let mut config = valid_config();
         config.dns = Some(DnsConfig {
             final_server: "dot".into(),
+            disable_cache: false,
+            cache_capacity: None,
             servers: vec![DnsServerConfig {
                 tag: "dot".into(),
                 kind: DnsServerTypeConfig::Tls,
@@ -270,6 +276,8 @@ mod tests {
         let mut config = valid_config();
         config.dns = Some(DnsConfig {
             final_server: "doh".into(),
+            disable_cache: false,
+            cache_capacity: None,
             servers: vec![DnsServerConfig {
                 tag: "doh".into(),
                 kind: DnsServerTypeConfig::Https,
@@ -303,6 +311,8 @@ mod tests {
         let mut config = valid_config();
         config.dns = Some(DnsConfig {
             final_server: "local".into(),
+            disable_cache: false,
+            cache_capacity: None,
             servers: vec![DnsServerConfig {
                 tag: "local".into(),
                 kind: DnsServerTypeConfig::Local,
@@ -338,6 +348,8 @@ mod tests {
         let mut config = valid_config();
         config.dns = Some(DnsConfig {
             final_server: "remote".into(),
+            disable_cache: false,
+            cache_capacity: None,
             servers: vec![DnsServerConfig {
                 tag: "remote".into(),
                 kind: DnsServerTypeConfig::Udp,
@@ -393,6 +405,8 @@ mod tests {
         let mut config = valid_config();
         config.dns = Some(DnsConfig {
             final_server: String::new(),
+            disable_cache: false,
+            cache_capacity: None,
             servers: vec![DnsServerConfig {
                 tag: "local".into(),
                 kind: DnsServerTypeConfig::Local,
@@ -468,6 +482,8 @@ mod tests {
         let mut config = valid_config();
         config.dns = Some(DnsConfig {
             final_server: "dot".into(),
+            disable_cache: false,
+            cache_capacity: None,
             servers: vec![DnsServerConfig {
                 tag: "dot".into(),
                 kind: DnsServerTypeConfig::Tls,

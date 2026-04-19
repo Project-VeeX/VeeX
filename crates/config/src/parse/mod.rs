@@ -732,6 +732,66 @@ mod tests {
     }
 
     #[test]
+    fn parses_dns_cache_fields_and_rule_action_disable_cache_without_diagnostics() {
+        let input = r#"
+        {
+          "dns": {
+            "final": "remote-dns",
+            "disable_cache": true,
+            "cache_capacity": 2048,
+            "servers": [
+              {
+                "tag": "remote-dns",
+                "type": "udp",
+                "server": "223.5.5.5",
+                "detour": "direct"
+              }
+            ],
+            "rules": [
+              {
+                "domain": ["cache-bypass.example.com"],
+                "server": "remote-dns",
+                "action": { "disable_cache": true }
+              }
+            ]
+          },
+          "inbounds": [
+            { "type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": 15353, "network": "udp" }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" }
+          ],
+          "route": {
+            "final": "direct"
+          }
+        }
+        "#;
+
+        let (config, diagnostics) =
+            parse_config_with_diagnostics(input).expect("dns cache config should parse");
+        let dns = config.dns.expect("dns config should exist");
+        let warning_paths: Vec<&str> = diagnostics
+            .warnings
+            .iter()
+            .map(|warning| warning.path.as_str())
+            .collect();
+        let ignored_paths: Vec<&str> = diagnostics
+            .ignored
+            .iter()
+            .map(|ignored| ignored.path.as_str())
+            .collect();
+
+        assert!(dns.disable_cache);
+        assert_eq!(dns.cache_capacity, Some(2048));
+        assert!(dns.rules[0].disable_cache);
+        assert!(!warning_paths.contains(&"$.dns.disable_cache"));
+        assert!(!warning_paths.contains(&"$.dns.cache_capacity"));
+        assert!(!ignored_paths.contains(&"$.dns.disable_cache"));
+        assert!(!ignored_paths.contains(&"$.dns.cache_capacity"));
+        assert!(!ignored_paths.contains(&"$.dns.rules[0].action.disable_cache"));
+    }
+
+    #[test]
     fn parses_sniff_route_rule_and_defaults_timeout() {
         let input = r#"
         {

@@ -23,6 +23,7 @@ pub struct DnsRequest {
     /// This field MUST NOT be propagated to outbound payload.
     /// It is only used internally by DNS resolution logic.
     pub resolution_domain: Option<String>,
+    pub disable_cache: bool,
     pub buffered_payload: Vec<u8>,
 }
 
@@ -43,6 +44,7 @@ impl DnsRequest {
             session_id: None,
             resolve_context: None,
             resolution_domain: None,
+            disable_cache: false,
             buffered_payload: Vec::new(),
         }
     }
@@ -74,6 +76,11 @@ impl DnsRequest {
 
     pub fn with_buffered_payload(mut self, buffered_payload: Vec<u8>) -> Self {
         self.buffered_payload = buffered_payload;
+        self
+    }
+
+    pub fn with_disable_cache(mut self, disable_cache: bool) -> Self {
+        self.disable_cache = disable_cache;
         self
     }
 }
@@ -121,6 +128,7 @@ pub struct ResolveContext {
     pub caller_outbound_tag: Option<String>,
     pub caller_dns_server_tag: Option<String>,
     pub explicit_server_tag: Option<String>,
+    pub disable_cache: bool,
     pub recursion_depth: u8,
 }
 
@@ -131,6 +139,7 @@ impl ResolveContext {
             caller_outbound_tag: None,
             caller_dns_server_tag: None,
             explicit_server_tag: None,
+            disable_cache: false,
             recursion_depth: 0,
         }
     }
@@ -144,12 +153,18 @@ impl ResolveContext {
             caller_outbound_tag: Some(caller_outbound_tag.into()),
             caller_dns_server_tag: None,
             explicit_server_tag,
+            disable_cache: false,
             recursion_depth: 0,
         }
     }
 
     pub fn with_depth(mut self, recursion_depth: u8) -> Self {
         self.recursion_depth = recursion_depth;
+        self
+    }
+
+    pub fn with_disable_cache(mut self, disable_cache: bool) -> Self {
+        self.disable_cache = disable_cache;
         self
     }
 
@@ -186,6 +201,7 @@ impl ResolveContext {
             caller_outbound_tag: Some(caller_outbound_tag.into()),
             caller_dns_server_tag: Some(caller_dns_server_tag.into()),
             explicit_server_tag,
+            disable_cache: self.disable_cache,
             recursion_depth: self.recursion_depth.saturating_add(1),
         }
     }

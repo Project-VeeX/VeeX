@@ -189,12 +189,10 @@ fn classify_dns_ignored(field: &str) -> Option<IgnoredDisposition> {
     }
 
     Some(match first_segment(field) {
-        "disable_cache" | "reverse_mapping" | "disable_expire" | "independent_cache" => {
-            IgnoredDisposition::Ignore(
-                "field is accepted for compatibility but ignored by the current dns subsystem",
-            )
-        }
-        "strategy" | "client_subnet" | "cache_capacity" => IgnoredDisposition::Warn(
+        "reverse_mapping" | "disable_expire" | "independent_cache" => IgnoredDisposition::Ignore(
+            "field is accepted for compatibility but ignored by the current dns subsystem",
+        ),
+        "strategy" | "client_subnet" => IgnoredDisposition::Warn(
             "field is accepted for compatibility but does not affect the current dns subsystem",
         ),
         _ => return None,
