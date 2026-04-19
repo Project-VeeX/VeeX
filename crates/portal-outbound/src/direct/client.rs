@@ -4,17 +4,17 @@
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
 use veex_core::{
+    ProxyError, Result,
     io::{BoxedAsyncStream, PacketSessionHandle},
     logging::Logger,
     portal::{BoxFuture, Dialer, Outbound, OutboundMeta, PacketDialer, StreamOutbound},
     session::SessionContext,
-    ProxyError, Result,
 };
 use veex_execution::{ExecutionFuture, ExecutionOutbound};
 
@@ -179,7 +179,7 @@ mod tests {
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     use super::super::dialer::{
-        build_dialer_with_connector, system_host_resolver, MarkedConnectorFuture,
+        MarkedConnectorFuture, build_dialer_with_connector, system_host_resolver,
     };
 
     use super::DirectOutbound;

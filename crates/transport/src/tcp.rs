@@ -9,11 +9,11 @@ use std::{
 };
 
 use tokio::{
-    net::{lookup_host, TcpStream},
+    net::{TcpStream, lookup_host},
     time::timeout,
 };
 use tracing::{debug, info, warn};
-use veex_core::{dns::ResolveContext, logging::sanitize_field, types::Host, ProxyError, Result};
+use veex_core::{ProxyError, Result, dns::ResolveContext, logging::sanitize_field, types::Host};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConnectTraceContext {
@@ -457,12 +457,12 @@ mod tests {
     };
 
     use super::{
-        connect_host, connect_resolved_addresses, ConnectTraceContext, TcpAttemptConnector,
-        TcpConnectOptions,
+        ConnectTraceContext, TcpAttemptConnector, TcpConnectOptions, connect_host,
+        connect_resolved_addresses,
     };
     use veex_core::types::Host;
     use veex_test_tracing::{
-        assert_has_event, captured_events, install_test_subscriber, CapturedEvent,
+        CapturedEvent, assert_has_event, captured_events, install_test_subscriber,
     };
 
     fn event_count(events: &[CapturedEvent], event_name: &str) -> usize {
@@ -678,9 +678,10 @@ mod tests {
         .expect_err("all addresses should fail");
 
         assert_eq!(err.kind(), veex_core::ErrorKind::Dial);
-        assert!(err
-            .to_string()
-            .contains("all 2 tcp connect attempts failed for fallback.example"));
+        assert!(
+            err.to_string()
+                .contains("all 2 tcp connect attempts failed for fallback.example")
+        );
         assert!(err.to_string().contains(&second_addr.to_string()));
 
         let events = captured_events(&trace_buffer);

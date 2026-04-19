@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use veex_config::ProxyConfig;
 use veex_core::{
-    dns::{DnsExecutorHandle, DomainResolverHandle},
     ProxyError,
+    dns::{DnsExecutorHandle, DomainResolverHandle},
 };
 use veex_dns::DnsExecutor;
 use veex_execution::OutboundCatalog;

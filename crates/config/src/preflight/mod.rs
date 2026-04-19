@@ -336,7 +336,7 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_json, JsonValue};
+    use super::{JsonValue, parse_json};
 
     #[test]
     fn parses_basic_json() {

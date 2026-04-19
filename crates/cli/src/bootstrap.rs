@@ -2,15 +2,15 @@ use std::sync::Arc;
 
 use thiserror::Error;
 use veex_config::ProxyConfig;
-use veex_core::{portal::Inbound, ProxyError};
+use veex_core::{ProxyError, portal::Inbound};
 use veex_execution::{
     PacketDispatch, PacketDispatcher, RoutedPacketDispatch, RoutedStreamDispatch, StreamDispatch,
     StreamDispatcher,
 };
 
 use crate::factory::{
-    build_dns_services, build_inbounds, build_outbounds, build_router, RuntimeOutbounds,
-    RuntimeServices,
+    RuntimeOutbounds, RuntimeServices, build_dns_services, build_inbounds, build_outbounds,
+    build_router,
 };
 
 pub struct RuntimeState {

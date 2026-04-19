@@ -111,13 +111,13 @@ mod tests {
     };
 
     use veex_core::{
+        ProxyError,
         dns::DnsRequest,
         io::BoxedAsyncStream,
         logging::Logger,
         portal::{BoxFuture, Dial, Outbound, OutboundMeta},
         session::SessionContext,
         types::{Destination, Host, Network},
-        ProxyError,
     };
     use veex_execution::{ExecutionFuture, ExecutionOutbound, OutboundCatalog};
 

@@ -6,10 +6,10 @@ use std::{
 };
 
 use tracing::{
-    field::{Field, Visit},
     Event, Subscriber,
+    field::{Field, Visit},
 };
-use tracing_subscriber::{layer::Context as LayerContext, prelude::*, registry::LookupSpan, Layer};
+use tracing_subscriber::{Layer, layer::Context as LayerContext, prelude::*, registry::LookupSpan};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CapturedEvent {

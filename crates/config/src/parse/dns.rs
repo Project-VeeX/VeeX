@@ -5,12 +5,12 @@ use crate::{
 };
 
 use super::{
-    shared::{
-        input_trojan_tls_into_config, input_trojan_tls_or_default, nested_port_or_default,
-        normalize_domain_matchers, optional_domain_resolver, optional_nested_string,
-        optional_string_map, parse_dns_server_type, required_nested_string, DomainMatcherKind,
-    },
     DEFAULT_DNS_SERVER_PORT, DEFAULT_DOH_PATH, DEFAULT_DOH_SERVER_PORT, DEFAULT_DOT_SERVER_PORT,
+    shared::{
+        DomainMatcherKind, input_trojan_tls_into_config, input_trojan_tls_or_default,
+        nested_port_or_default, normalize_domain_matchers, optional_domain_resolver,
+        optional_nested_string, optional_string_map, parse_dns_server_type, required_nested_string,
+    },
 };
 
 pub(crate) fn input_dns_into_config(

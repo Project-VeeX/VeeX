@@ -7,16 +7,16 @@ use tokio::{
 };
 use tracing::{debug, info, warn};
 use veex_core::{
+    ProxyError, Result,
     dns::ResolveContext,
     io::{PacketSession, PacketSessionHandle},
     logging::sanitize_field,
     portal::{BoxFuture, Dial, DialContext, Dialer, PacketDialer},
     types::Host,
-    ProxyError, Result,
 };
 use veex_transport::{
-    connect_host_with_resolver, resolve_host, ConnectTraceContext, HostResolveRequest,
-    HostResolver, TcpAttemptConnector, TcpConnectOptions,
+    ConnectTraceContext, HostResolveRequest, HostResolver, TcpAttemptConnector, TcpConnectOptions,
+    connect_host_with_resolver, resolve_host,
 };
 
 use super::error::{

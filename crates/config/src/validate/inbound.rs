@@ -27,15 +27,14 @@ pub(crate) fn validate_inbounds(config: &ProxyConfig) -> Result<BTreeSet<String>
             validate_direct_inbound(direct, index)?;
         }
 
-        if let InboundConfig::TProxy(tproxy) = inbound {
-            if let Some(network) = tproxy.network.as_deref() {
-                if network != "tcp" {
-                    return Err(ConfigError::semantic(
-                        format!("$.inbounds[{index}].network"),
-                        "tproxy inbound only supports network='tcp'",
-                    ));
-                }
-            }
+        if let InboundConfig::TProxy(tproxy) = inbound
+            && let Some(network) = tproxy.network.as_deref()
+            && network != "tcp"
+        {
+            return Err(ConfigError::semantic(
+                format!("$.inbounds[{index}].network"),
+                "tproxy inbound only supports network='tcp'",
+            ));
         }
     }
 
@@ -43,22 +42,23 @@ pub(crate) fn validate_inbounds(config: &ProxyConfig) -> Result<BTreeSet<String>
 }
 
 fn validate_direct_inbound(direct: &DirectInboundConfig, index: usize) -> Result<(), ConfigError> {
-    if let Some(network) = direct.network.as_deref() {
-        if network != "tcp" && network != "udp" {
-            return Err(ConfigError::semantic(
-                format!("$.inbounds[{index}].network"),
-                "direct inbound only supports network='tcp' or network='udp'",
-            ));
-        }
+    if let Some(network) = direct.network.as_deref()
+        && network != "tcp"
+        && network != "udp"
+    {
+        return Err(ConfigError::semantic(
+            format!("$.inbounds[{index}].network"),
+            "direct inbound only supports network='tcp' or network='udp'",
+        ));
     }
 
-    if let Some(address) = direct.override_address.as_deref() {
-        if address.trim().is_empty() {
-            return Err(ConfigError::semantic(
-                format!("$.inbounds[{index}].override_address"),
-                "override_address must not be empty",
-            ));
-        }
+    if let Some(address) = direct.override_address.as_deref()
+        && address.trim().is_empty()
+    {
+        return Err(ConfigError::semantic(
+            format!("$.inbounds[{index}].override_address"),
+            "override_address must not be empty",
+        ));
     }
 
     if matches!(direct.override_port, Some(0)) {

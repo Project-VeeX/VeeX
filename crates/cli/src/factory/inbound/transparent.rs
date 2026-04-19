@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use veex_core::{logging::Logger, portal::Inbound, ProxyError};
+use veex_core::{ProxyError, logging::Logger, portal::Inbound};
 use veex_execution::StreamDispatch;
 use veex_portal_inbound::transparent::{
     create_redirect_stream_listener, create_tproxy_stream_listener,

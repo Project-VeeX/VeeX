@@ -9,13 +9,13 @@ use veex_core::{
 };
 
 use crate::{
+    Router,
     context::{PipelineRequest, RouteRuntimeContext},
     error::RouteError,
     evaluate::evaluate_current_state,
     result::{RouteResult, RouteRuleMissReason, RouteRuleTrace, RouteStep},
     rule::{RouteDecision, RouteFinalAction, RouteUpgradeAction},
-    sniff::{sniff_stream_internal, SniffExecution, SniffResult},
-    Router,
+    sniff::{SniffExecution, SniffResult, sniff_stream_internal},
 };
 
 pub(crate) async fn route_stream(
@@ -806,8 +806,7 @@ mod tests {
         let extension_len = 2 + server_name_list_len;
         let extensions_len = 4 + extension_len;
         let cipher_suites_len = 2;
-        let handshake_body_len =
-            2 + 32 + 1 + 0 + 2 + cipher_suites_len + 1 + 1 + 2 + extensions_len;
+        let handshake_body_len = 2 + 32 + 1 + 2 + cipher_suites_len + 1 + 1 + 2 + extensions_len;
         let handshake_len = 4 + handshake_body_len;
         let record_len = handshake_len;
 

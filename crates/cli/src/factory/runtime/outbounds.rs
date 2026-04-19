@@ -2,14 +2,14 @@ use std::{collections::HashMap, sync::Arc};
 
 use veex_config::DEFAULT_DIRECT_OUTBOUND_TAG;
 use veex_core::{
+    ProxyError,
     logging::Logger,
     portal::{Dial, Outbound, OutboundMeta},
-    ProxyError,
 };
 use veex_execution::{ExecutionOutbound, OutboundCatalog};
 use veex_portal_outbound::direct::{
-    build_dialer as build_direct_dialer, build_packet_dialer as build_direct_packet_dialer,
-    DirectOutbound,
+    DirectOutbound, build_dialer as build_direct_dialer,
+    build_packet_dialer as build_direct_packet_dialer,
 };
 
 use crate::factory::runtime::RuntimeServices;

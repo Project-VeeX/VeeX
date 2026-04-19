@@ -1,4 +1,4 @@
-use veex_core::{types::Destination, ProxyError, Result};
+use veex_core::{ProxyError, Result, types::Destination};
 use veex_transport::TlsClientOptions;
 
 pub(crate) fn validate_trojan_client(

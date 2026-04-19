@@ -1,10 +1,10 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use veex_core::{
+    ProxyError,
     dns::DnsExecutorHandle,
     io::{BoxedAsyncStream, PacketFrame, PacketSessionHandle, PacketWriter},
     session::SessionContext,
-    ProxyError,
 };
 use veex_router::RouteReason;
 

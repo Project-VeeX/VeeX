@@ -3,19 +3,19 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
+    ProxyError, Result,
     io::BoxedAsyncStream,
-    logging::{sanitize_field, Logger},
+    logging::{Logger, sanitize_field},
     portal::{
         BoxFuture, Inbound, InboundMeta, Listener, ListenerAcceptHandler, TransparentInbound,
     },
     session::SessionBootstrap,
     types::Destination,
-    ProxyError, Result,
 };
 use veex_execution::StreamDispatch;
 
 use super::super::{
-    common::{build_transparent_session, validate_transparent_inbound, TransparentInboundState},
+    common::{TransparentInboundState, build_transparent_session, validate_transparent_inbound},
     destination::{RedirectDestinationProvider, SocketRedirectDestinationProvider},
 };
 

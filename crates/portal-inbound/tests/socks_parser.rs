@@ -1,6 +1,6 @@
 use veex_core::types::Host;
 use veex_portal_inbound::socks::{
-    decode_greeting, decode_request, encode_method_selection, AddressType, ReplyCode, SocksError,
+    AddressType, ReplyCode, SocksError, decode_greeting, decode_request, encode_method_selection,
 };
 
 #[test]

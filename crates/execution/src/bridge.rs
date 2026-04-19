@@ -1,7 +1,7 @@
 use std::{
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -13,8 +13,8 @@ use veex_core::{
 use veex_router::Router;
 
 use super::{
-    traits::{ExecutionFuture, PacketDispatch, StreamDispatch},
     PacketDispatcher, StreamDispatcher,
+    traits::{ExecutionFuture, PacketDispatch, StreamDispatch},
 };
 
 pub struct RoutedStreamDispatch {

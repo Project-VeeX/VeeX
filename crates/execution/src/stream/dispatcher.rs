@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tracing::{info, warn};
-use veex_observability::{emit_session_finish, SessionSummary};
+use veex_observability::{SessionSummary, emit_session_finish};
 
 use veex_core::{
     dns::DnsExecutorHandle,
@@ -12,13 +12,13 @@ use veex_core::{
 use veex_router::{RouteFinalAction, RouteReason, RouteResult};
 
 use crate::{
-    traits::{DnsHijack, ExecutionFuture},
     OutboundCatalog,
+    traits::{DnsHijack, ExecutionFuture},
 };
 
 use super::{
     dns::hijack_stream_dns,
-    relay::{relay_bidirectional_with_trace, RelayErrorWithStats, RelayTraceContext},
+    relay::{RelayErrorWithStats, RelayTraceContext, relay_bidirectional_with_trace},
 };
 
 pub struct StreamDispatcher {
@@ -243,13 +243,13 @@ mod tests {
 
     use super::StreamDispatcher;
     use veex_core::{
+        ErrorKind,
         dns::{DnsExecutorHandle, DnsRequest, DnsResponse},
         io::{BoxedAsyncStream, StreamCarrier},
         logging::Logger,
         portal::{BoxFuture, Outbound, OutboundMeta, StreamOutbound},
         session::{SessionContext, SessionMeta, SessionRoute, SessionState},
         types::{Destination, Network},
-        ErrorKind,
     };
     use veex_router::{RouteDecision, RouteFinalAction, RouteReason, RouteResult};
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};

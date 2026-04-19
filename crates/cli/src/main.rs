@@ -2,11 +2,11 @@ use std::{env, process::ExitCode};
 
 use tracing::info;
 use veex_cli::{
-    command::{parse_args, Command},
+    command::{Command, parse_args},
     logging::init_tracing,
     runtime::run_with_shutdown,
 };
-use veex_config::{load_from_path_with_diagnostics, ConfigError, ParseDiagnostics};
+use veex_config::{ConfigError, ParseDiagnostics, load_from_path_with_diagnostics};
 use veex_core::logging::sanitize_field;
 use veex_observability::{LogLevel, LoggingOptions};
 
@@ -153,7 +153,7 @@ fn parse_log_level(value: &str) -> Result<LogLevel, String> {
 async fn wait_for_shutdown_signal() -> Result<(), String> {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
 
         let mut terminate = signal(SignalKind::terminate())
             .map_err(|err| format!("failed to install SIGTERM handler: {err}"))?;

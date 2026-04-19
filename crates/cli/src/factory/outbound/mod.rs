@@ -7,7 +7,7 @@ use veex_config::ProxyConfig;
 use veex_core::ProxyError;
 
 use crate::factory::{
-    lowering::{lower_outbound, LoweredOutbound},
+    lowering::{LoweredOutbound, lower_outbound},
     runtime::{RuntimeOutbounds, RuntimeOutboundsBuilder, RuntimeServices},
 };
 
@@ -42,18 +42,18 @@ mod tests {
     };
 
     use veex_config::{
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_DIRECT_OUTBOUND_TAG, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
         DirectOutboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
-        TrojanOutboundConfig, TrojanTlsConfig, DEFAULT_CONNECT_TIMEOUT,
-        DEFAULT_DIRECT_OUTBOUND_TAG, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+        TrojanOutboundConfig, TrojanTlsConfig,
     };
     use veex_core::{
+        ErrorKind,
         session::{SessionContext, SessionMeta},
         types::{Destination, Host, Network},
-        ErrorKind,
     };
 
     use super::build_outbounds;
-    use crate::factory::{runtime::IMPLICIT_DIRECT_OUTBOUND_TAG, RuntimeServices};
+    use crate::factory::{RuntimeServices, runtime::IMPLICIT_DIRECT_OUTBOUND_TAG};
 
     fn test_context(outbound_tag: &str) -> SessionContext {
         SessionContext::new(

@@ -8,4 +8,4 @@ mod dns;
 mod relay;
 
 pub use dispatcher::StreamDispatcher;
-pub use relay::{relay_bidirectional, RelayErrorWithStats, RelayStats};
+pub use relay::{RelayErrorWithStats, RelayStats, relay_bidirectional};

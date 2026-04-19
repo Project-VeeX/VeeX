@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use veex_core::{logging::Logger, ProxyError};
-use veex_portal_outbound::trojan::{build_dialer as build_trojan_dialer, TrojanOutbound};
+use veex_core::{ProxyError, logging::Logger};
+use veex_portal_outbound::trojan::{TrojanOutbound, build_dialer as build_trojan_dialer};
 
 use crate::factory::{
     lowering::LoweredTrojanOutbound,

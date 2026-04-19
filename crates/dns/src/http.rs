@@ -161,7 +161,7 @@ fn is_reserved_header(name: &str) -> bool {
 mod tests {
     use std::collections::BTreeMap;
 
-    use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
     use super::{read_doh_http1_response, write_doh_http1_request};
 

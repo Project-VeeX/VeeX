@@ -13,10 +13,10 @@ mod tests {
     use std::{net::SocketAddr, time::Instant};
 
     use veex_config::{
-        DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig,
-        RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig,
-        SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig, DEFAULT_CONNECT_TIMEOUT,
-        DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT, DirectOutboundConfig,
+        InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteActionConfig, RouteConfig,
+        RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig, SocksInboundConfig,
+        TrojanOutboundConfig, TrojanTlsConfig,
     };
     use veex_core::{
         io::StreamCarrier,

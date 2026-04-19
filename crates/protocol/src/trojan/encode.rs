@@ -1,7 +1,7 @@
 use sha2::{Digest, Sha224};
 use veex_core::{
-    types::{Destination, Host},
     ProxyError, Result,
+    types::{Destination, Host},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,9 +91,10 @@ mod tests {
     fn encoded_key_has_expected_length() {
         let hash = encode_key_hex("secret");
         assert_eq!(hash.len(), 56);
-        assert!(hash
-            .chars()
-            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()));
+        assert!(
+            hash.chars()
+                .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+        );
     }
 
     #[test]

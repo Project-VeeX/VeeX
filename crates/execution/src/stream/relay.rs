@@ -1,13 +1,13 @@
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::task::JoinError;
 use tracing::debug;
 
-use veex_core::{io::BoxedAsyncStream, ProxyError};
+use veex_core::{ProxyError, io::BoxedAsyncStream};
 
 /// Byte transfer statistics for a relay session.
 ///
@@ -383,8 +383,8 @@ mod tests {
     };
 
     use super::{
-        map_join_result, relay_bidirectional, relay_bidirectional_with_trace, Direction,
-        OneWayRelayError, RelayTraceContext,
+        Direction, OneWayRelayError, RelayTraceContext, map_join_result, relay_bidirectional,
+        relay_bidirectional_with_trace,
     };
     use veex_core::io::BoxedAsyncStream;
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};

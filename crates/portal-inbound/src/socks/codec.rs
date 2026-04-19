@@ -162,8 +162,8 @@ mod tests {
     use veex_core::types::Host;
 
     use super::{
-        decode_greeting, decode_request, encode_reply, AddressType, Command, ReplyCode,
-        SOCKS_VERSION,
+        AddressType, Command, ReplyCode, SOCKS_VERSION, decode_greeting, decode_request,
+        encode_reply,
     };
 
     #[test]

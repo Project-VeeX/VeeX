@@ -17,5 +17,5 @@ mod traits;
 pub use bridge::{RoutedPacketDispatch, RoutedStreamDispatch};
 pub use catalog::OutboundCatalog;
 pub use packet::PacketDispatcher;
-pub use stream::{relay_bidirectional, RelayErrorWithStats, RelayStats, StreamDispatcher};
+pub use stream::{RelayErrorWithStats, RelayStats, StreamDispatcher, relay_bidirectional};
 pub use traits::{ExecutionFuture, ExecutionOutbound, PacketDispatch, StreamDispatch};

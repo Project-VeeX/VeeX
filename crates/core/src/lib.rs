@@ -11,4 +11,4 @@ pub mod shutdown;
 pub mod types;
 
 pub use error::{ErrorKind, ProxyError, Result};
-pub use shutdown::{shutdown_channel, ShutdownSignal, ShutdownTrigger};
+pub use shutdown::{ShutdownSignal, ShutdownTrigger, shutdown_channel};

@@ -43,7 +43,7 @@ impl OutboundCatalog {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use veex_core::{io::BoxedAsyncStream, session::SessionContext, ProxyError};
+    use veex_core::{ProxyError, io::BoxedAsyncStream, session::SessionContext};
 
     use crate::{ExecutionFuture, ExecutionOutbound};
 

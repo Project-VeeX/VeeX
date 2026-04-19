@@ -1,25 +1,25 @@
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
 use veex_core::{
+    ProxyError, Result,
     io::BoxedAsyncStream,
     logging::Logger,
     portal::{BoxFuture, Dialer, Outbound, OutboundMeta, ProxyOutbound},
     session::SessionContext,
     types::Destination,
-    ProxyError, Result,
 };
 use veex_execution::{ExecutionFuture, ExecutionOutbound};
 use veex_protocol::{
     adapter::{StreamAdapter, StreamParams},
-    trojan::{validate_trojan_key, TrojanStreamAdapter},
+    trojan::{TrojanStreamAdapter, validate_trojan_key},
 };
-use veex_transport::{connect_tls, ConnectTraceContext, TlsClientOptions};
+use veex_transport::{ConnectTraceContext, TlsClientOptions, connect_tls};
 
 use super::error::validate_trojan_client;
 
@@ -176,8 +176,8 @@ mod tests {
 
     use rcgen::generate_simple_self_signed;
     use rustls::{
-        pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
         ServerConfig,
+        pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     };
     use tokio::{io::AsyncReadExt, net::TcpListener};
     use tokio_rustls::TlsAcceptor;
@@ -188,7 +188,7 @@ mod tests {
         types::{Destination, Host, Network},
     };
     use veex_test_tracing::{
-        assert_has_event, captured_events, install_test_subscriber, CapturedEvent,
+        CapturedEvent, assert_has_event, captured_events, install_test_subscriber,
     };
     use veex_transport::{HostResolveRequest, TlsClientOptions};
 
@@ -358,9 +358,10 @@ mod tests {
         };
 
         assert_eq!(err.kind(), veex_core::ErrorKind::Dial);
-        assert!(err
-            .to_string()
-            .contains("all 2 tcp connect attempts failed for fallback.test:18443"));
+        assert!(
+            err.to_string()
+                .contains("all 2 tcp connect attempts failed for fallback.test:18443")
+        );
         assert!(err.to_string().contains(&second.to_string()));
 
         let events = captured_events(&trace_buffer);

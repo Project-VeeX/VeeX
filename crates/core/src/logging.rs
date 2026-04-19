@@ -53,7 +53,7 @@ pub fn sanitize_field(value: &str) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_field, Logger};
+    use super::{Logger, sanitize_field};
 
     #[test]
     fn leaves_plain_fields_untouched() {

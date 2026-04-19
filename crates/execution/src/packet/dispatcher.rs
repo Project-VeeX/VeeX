@@ -5,24 +5,24 @@ use std::{
 };
 
 use veex_core::{
+    ProxyError,
     dns::DnsExecutorHandle,
     io::{PacketAssociationKey, PacketCarrier, PacketFrame, PacketMetadata, PacketWriter},
     session::SessionContext,
     types::Network,
-    ProxyError,
 };
 use veex_router::{RouteFinalAction, RouteReason, RouteResult};
 
 use crate::{
+    ExecutionFuture, OutboundCatalog,
     packet::{
         association::{
-            log_packet_association_close, log_packet_association_close_error,
-            log_packet_association_hit, PacketAssociation,
+            PacketAssociation, log_packet_association_close, log_packet_association_close_error,
+            log_packet_association_hit,
         },
         dns::hijack_packet_dns,
     },
     traits::DnsHijack,
-    ExecutionFuture, OutboundCatalog,
 };
 
 const DEFAULT_PACKET_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -268,16 +268,17 @@ mod tests {
         collections::HashMap,
         net::{IpAddr, Ipv4Addr, SocketAddr},
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
         },
         time::Duration,
     };
 
-    use tokio::sync::{mpsc, Mutex as AsyncMutex};
+    use tokio::sync::{Mutex as AsyncMutex, mpsc};
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     use veex_core::{
+        ProxyError,
         dns::{DnsExecutorHandle, DnsRequest, DnsResponse},
         io::{
             BoxedAsyncStream, PacketCarrier, PacketFrame, PacketMetadata, PacketSession,
@@ -287,7 +288,6 @@ mod tests {
         portal::{BoxFuture, Outbound, OutboundMeta},
         session::{SessionContext, SessionMeta},
         types::{Destination, Host, Network},
-        ProxyError,
     };
     use veex_router::{RouteDecision, RouteFinalAction, RouteReason, RouteResult};
 

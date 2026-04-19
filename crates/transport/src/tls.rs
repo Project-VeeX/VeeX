@@ -16,11 +16,11 @@ use tokio::{
 };
 use tokio_rustls::TlsConnector;
 use tracing::{info, warn};
-use veex_core::{io::BoxedAsyncStream, logging::sanitize_field, types::Host, ProxyError, Result};
+use veex_core::{ProxyError, Result, io::BoxedAsyncStream, logging::sanitize_field, types::Host};
 
 use crate::tcp::ConnectTraceContext;
 use crate::verifier::{
-    build_client_config, validate_certificate_paths, CertificateVerifierOptions, VerifierError,
+    CertificateVerifierOptions, VerifierError, build_client_config, validate_certificate_paths,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -458,8 +458,8 @@ mod tests {
 
     use rcgen::generate_simple_self_signed;
     use rustls::{
-        pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
         ServerConfig,
+        pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -470,7 +470,7 @@ mod tests {
     use veex_core::types::Host;
 
     use super::{
-        connect_tls, is_ignorable_tls_close_notify_error, server_name_for_tls, TlsClientOptions,
+        TlsClientOptions, connect_tls, is_ignorable_tls_close_notify_error, server_name_for_tls,
     };
     use crate::tcp::ConnectTraceContext;
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};

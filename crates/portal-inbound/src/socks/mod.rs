@@ -7,8 +7,8 @@ mod protocol;
 mod server;
 
 pub use codec::{
-    decode_greeting, decode_request, encode_method_selection, encode_reply, AddressType, Command,
-    Greeting, ReplyCode, Request,
+    AddressType, Command, Greeting, ReplyCode, Request, decode_greeting, decode_request,
+    encode_method_selection, encode_reply,
 };
 pub use error::SocksError;
 pub use listener::create_socks_listener;

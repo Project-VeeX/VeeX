@@ -1,9 +1,9 @@
 use std::{future::Future, pin::Pin};
 
 use veex_core::{
+    Result,
     io::{BoxedAsyncStream, PacketSessionHandle},
     types::Destination,
-    Result,
 };
 
 pub type StreamAdapterFuture<'a> =

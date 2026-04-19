@@ -3,10 +3,10 @@ use std::net::SocketAddr;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{
+    ProxyError, Result,
     io::PacketFrame,
     portal::traits::BoxFuture,
     types::{Destination, Host, Network},
-    ProxyError, Result,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -245,7 +245,7 @@ mod tests {
 
     use tokio::{io::duplex, time::timeout};
 
-    use super::{read_dns_tcp_message, write_dns_tcp_message, ResolveContext};
+    use super::{ResolveContext, read_dns_tcp_message, write_dns_tcp_message};
 
     #[tokio::test]
     async fn tcp_dns_frame_round_trip_preserves_payload() {

@@ -2,14 +2,14 @@ use std::{net::SocketAddr, sync::Arc};
 
 use tracing::{debug, info, warn};
 use veex_core::{
+    ProxyError, Result,
     io::{PacketFrame, PacketMetadata, PacketWriter},
-    logging::{sanitize_field, Logger},
+    logging::{Logger, sanitize_field},
     portal::{
         BoxFuture, Inbound, InboundMeta, PacketListener, PacketListenerReceive,
         PacketListenerReceiveHandler,
     },
     types::{Destination, Host, Network},
-    ProxyError, Result,
 };
 use veex_execution::PacketDispatch;
 

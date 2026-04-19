@@ -4,10 +4,10 @@ use std::{
 };
 
 use veex_core::{
-    portal::{InboundMeta, Listener},
-    session::{build_session_bootstrap, SessionBootstrap},
-    types::Destination,
     ProxyError, Result,
+    portal::{InboundMeta, Listener},
+    session::{SessionBootstrap, build_session_bootstrap},
+    types::Destination,
 };
 
 #[derive(Debug, Default)]

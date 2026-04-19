@@ -6,10 +6,10 @@ mod shared;
 
 pub(crate) use dns::lower_dns;
 pub(crate) use inbound::{
-    lower_inbound, LoweredDirectInbound, LoweredDirectNetwork, LoweredInbound,
-    LoweredRedirectInbound, LoweredSocksInbound, LoweredTProxyInbound,
+    LoweredDirectInbound, LoweredDirectNetwork, LoweredInbound, LoweredRedirectInbound,
+    LoweredSocksInbound, LoweredTProxyInbound, lower_inbound,
 };
 pub(crate) use outbound::{
-    lower_outbound, LoweredDirectOutbound, LoweredOutbound, LoweredTrojanOutbound,
+    LoweredDirectOutbound, LoweredOutbound, LoweredTrojanOutbound, lower_outbound,
 };
 pub(crate) use route::lower_route;

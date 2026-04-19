@@ -33,11 +33,11 @@ pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        DirectInboundConfig, DirectOutboundConfig, DnsConfig, DnsServerConfig, DnsServerTypeConfig,
-        InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteActionConfig, RouteConfig,
-        RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig, RouteUpgradeActionConfig,
-        SniffActionConfig, SocksInboundConfig, TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT,
-        DEFAULT_SNIFF_TIMEOUT,
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT, DirectInboundConfig, DirectOutboundConfig,
+        DnsConfig, DnsServerConfig, DnsServerTypeConfig, InboundConfig, LogConfig, OutboundConfig,
+        ProxyConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig,
+        RouteTargetConfig, RouteUpgradeActionConfig, SniffActionConfig, SocksInboundConfig,
+        TProxyInboundConfig,
     };
 
     use super::validate_config;
@@ -117,9 +117,10 @@ mod tests {
 
         let err = validate_config(&config).expect_err("unsupported direct network should fail");
         assert!(err.to_string().contains("$.inbounds[0].network"));
-        assert!(err
-            .to_string()
-            .contains("only supports network='tcp' or network='udp'"));
+        assert!(
+            err.to_string()
+                .contains("only supports network='tcp' or network='udp'")
+        );
     }
 
     #[test]
@@ -416,9 +417,10 @@ mod tests {
 
         let err = validate_config(&config).expect_err("explicit empty dns.final should fail");
         assert!(err.to_string().contains("$.dns.final"));
-        assert!(err
-            .to_string()
-            .contains("dns.final points to missing dns server"));
+        assert!(
+            err.to_string()
+                .contains("dns.final points to missing dns server")
+        );
     }
 
     #[test]
@@ -454,9 +456,10 @@ mod tests {
         config.route.final_outbound = "proxy".into();
 
         let err = validate_config(&config).expect_err("domain_resolver without dns should fail");
-        assert!(err
-            .to_string()
-            .contains("$.outbounds[1].domain_resolver.server"));
+        assert!(
+            err.to_string()
+                .contains("$.outbounds[1].domain_resolver.server")
+        );
         assert!(err.to_string().contains("requires a dns section"));
     }
 
@@ -491,9 +494,10 @@ mod tests {
 
         let err =
             validate_config(&config).expect_err("dns server self resolver reference should fail");
-        assert!(err
-            .to_string()
-            .contains("$.dns.servers[0].domain_resolver.server"));
+        assert!(
+            err.to_string()
+                .contains("$.dns.servers[0].domain_resolver.server")
+        );
         assert!(err.to_string().contains("must not point to itself"));
     }
 

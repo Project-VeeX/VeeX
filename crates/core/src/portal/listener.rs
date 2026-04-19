@@ -8,7 +8,7 @@ use std::{
 
 use tokio::{
     net::{TcpListener, TcpStream, UdpSocket},
-    sync::{oneshot, Mutex},
+    sync::{Mutex, oneshot},
     task::{JoinHandle, JoinSet},
 };
 

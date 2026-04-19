@@ -299,8 +299,8 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
     use super::{
-        is_v4_mapped, original_dst_socket_options, parse_sockaddr_in, parse_sockaddr_in6,
-        IP6T_SO_ORIGINAL_DST, SO_ORIGINAL_DST,
+        IP6T_SO_ORIGINAL_DST, SO_ORIGINAL_DST, is_v4_mapped, original_dst_socket_options,
+        parse_sockaddr_in, parse_sockaddr_in6,
     };
 
     #[test]

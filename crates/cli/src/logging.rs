@@ -1,6 +1,6 @@
 use std::{io, sync::OnceLock};
 
-use time::{macros::format_description, UtcOffset};
+use time::{UtcOffset, macros::format_description};
 use tracing_subscriber::{filter::LevelFilter, fmt::time::OffsetTime};
 use veex_observability::{LogLevel, LoggingOptions};
 

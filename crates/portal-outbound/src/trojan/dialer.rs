@@ -6,8 +6,8 @@ use veex_core::{
     portal::{Dial, DialContext, Dialer},
 };
 use veex_transport::{
-    connect_host_with_resolver, resolve_host, ConnectTraceContext, HostResolver,
-    TcpAttemptConnector, TcpConnectOptions,
+    ConnectTraceContext, HostResolver, TcpAttemptConnector, TcpConnectOptions,
+    connect_host_with_resolver, resolve_host,
 };
 
 #[cfg_attr(not(test), allow(dead_code))]

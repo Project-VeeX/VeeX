@@ -3,9 +3,9 @@ use crate::{
     result::{RouteRuleMissReason, RouteRuleTrace, RouteStep},
     router::Router,
     rule::{
+        CompiledRouteRule, RouteAction, RouteDecision, RouteFinalAction, RouteReason,
         is_link_local, is_loopback, is_private_or_unique_local, matches_domain_suffix,
-        normalize_domain_str, CompiledRouteRule, RouteAction, RouteDecision, RouteFinalAction,
-        RouteReason,
+        normalize_domain_str,
     },
 };
 use veex_core::types::Host;
@@ -218,8 +218,8 @@ mod tests {
 
     use super::{evaluate_current_state, evaluate_final_decision};
     use crate::{
-        context::RouteInput, result::RouteStep, router::Router, RouteAction, RouteFinalAction,
-        RouteReason, RouteRule,
+        RouteAction, RouteFinalAction, RouteReason, RouteRule, context::RouteInput,
+        result::RouteStep, router::Router,
     };
 
     #[test]

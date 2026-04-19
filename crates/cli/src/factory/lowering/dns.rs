@@ -4,7 +4,7 @@ use veex_core::{
     types::{Destination, Host},
 };
 use veex_dns::{
-    DnsHttpsOptions, DnsRule, DnsRuntimeConfig, DnsServer, DnsServerTransport, DEFAULT_DOH_PATH,
+    DEFAULT_DOH_PATH, DnsHttpsOptions, DnsRule, DnsRuntimeConfig, DnsServer, DnsServerTransport,
 };
 
 use crate::factory::lowering::shared::{lower_tls_options, parse_host};

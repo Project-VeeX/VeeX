@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use veex_core::{logging::Logger, portal::Inbound, ProxyError};
+use veex_core::{ProxyError, logging::Logger, portal::Inbound};
 use veex_execution::StreamDispatch;
-use veex_portal_inbound::{socks::create_socks_listener, SocksInbound};
+use veex_portal_inbound::{SocksInbound, socks::create_socks_listener};
 
 use crate::factory::lowering::LoweredSocksInbound;
 

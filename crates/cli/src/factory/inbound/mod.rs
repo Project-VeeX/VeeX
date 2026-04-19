@@ -5,10 +5,10 @@ mod transparent;
 use std::sync::Arc;
 
 use veex_config::ProxyConfig;
-use veex_core::{portal::Inbound, ProxyError};
+use veex_core::{ProxyError, portal::Inbound};
 use veex_execution::{PacketDispatch, StreamDispatch};
 
-use crate::factory::lowering::{lower_inbound, LoweredInbound};
+use crate::factory::lowering::{LoweredInbound, lower_inbound};
 
 pub fn build_inbounds(
     config: &ProxyConfig,
@@ -46,8 +46,8 @@ mod tests {
 
     use super::*;
     use veex_config::{
-        DirectInboundConfig, DirectOutboundConfig, InboundConfig, LogConfig, OutboundConfig,
-        ProxyConfig, RouteConfig, TProxyInboundConfig, DEFAULT_CONNECT_TIMEOUT,
+        DEFAULT_CONNECT_TIMEOUT, DirectInboundConfig, DirectOutboundConfig, InboundConfig,
+        LogConfig, OutboundConfig, ProxyConfig, RouteConfig, TProxyInboundConfig,
     };
     use veex_core::{
         io::BoxedAsyncStream,
@@ -188,9 +188,11 @@ mod tests {
         let inbounds = build_inbounds(&config, sink, packet_sink).expect("inbounds should build");
 
         assert_eq!(inbounds.len(), 2);
-        assert!(inbounds
-            .iter()
-            .all(|inbound| inbound.meta().tag == "dns-in"));
+        assert!(
+            inbounds
+                .iter()
+                .all(|inbound| inbound.meta().tag == "dns-in")
+        );
     }
 
     #[test]

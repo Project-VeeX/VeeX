@@ -1,20 +1,20 @@
 use std::{
     net::SocketAddr,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use veex_core::{
-    io::BoxedAsyncStream,
-    logging::{sanitize_field, Logger},
-    portal::{BoxFuture, Inbound, InboundMeta, Listener, ListenerAcceptHandler, StreamInbound},
-    session::{build_session_bootstrap, SessionBootstrap},
-    types::{Destination, Host},
     ProxyError, Result,
+    io::BoxedAsyncStream,
+    logging::{Logger, sanitize_field},
+    portal::{BoxFuture, Inbound, InboundMeta, Listener, ListenerAcceptHandler, StreamInbound},
+    session::{SessionBootstrap, build_session_bootstrap},
+    types::{Destination, Host},
 };
 use veex_execution::StreamDispatch;
 

@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use veex_core::dns::{DnsRequest, ResolveContext};
 
-use crate::{types::upstream_network, DnsServer};
+use crate::{DnsServer, types::upstream_network};
 
 pub(crate) fn bind_client_upstream_request(
     request: &DnsRequest,

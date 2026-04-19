@@ -96,7 +96,7 @@ fn usage() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_args, Command};
+    use super::{Command, parse_args};
 
     #[test]
     fn parses_run_command() {

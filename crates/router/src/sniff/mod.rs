@@ -378,13 +378,13 @@ fn probe_http_host(prefix: &[u8]) -> ProbeState {
         let Some((name, value)) = line.split_once(':') else {
             continue;
         };
-        if name.trim().eq_ignore_ascii_case("host") {
-            if let Some(domain) = normalize_http_host(value) {
-                return ProbeState::Matched {
-                    domain,
-                    protocol: SniffedProtocol::Http,
-                };
-            }
+        if name.trim().eq_ignore_ascii_case("host")
+            && let Some(domain) = normalize_http_host(value)
+        {
+            return ProbeState::Matched {
+                domain,
+                protocol: SniffedProtocol::Http,
+            };
         }
     }
 
@@ -478,8 +478,8 @@ mod tests {
         io,
         pin::Pin,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
         task::{Context, Poll},
         time::Duration,
@@ -488,7 +488,7 @@ mod tests {
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
     use super::{
-        sniff_stream, sniff_stream_internal, PrefixedStream, SniffResult, SniffedProtocol,
+        PrefixedStream, SniffResult, SniffedProtocol, sniff_stream, sniff_stream_internal,
     };
 
     enum ReadStep {
@@ -798,11 +798,13 @@ mod tests {
         .await;
 
         assert_eq!(execution.result, SniffResult::Unsupported);
-        assert!(execution
-            .error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("boom"));
+        assert!(
+            execution
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("boom")
+        );
 
         let mut stream = execution.outcome.stream;
         let mut replayed = Vec::new();

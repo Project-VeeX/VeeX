@@ -8,7 +8,7 @@ mod shared;
 use std::{fs, path::Path};
 
 use crate::{
-    error::{display_path, ConfigError},
+    error::{ConfigError, display_path},
     input::InputConfig,
     preflight::parse_json,
     schema::ProxyConfig,
@@ -170,16 +170,16 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
         DirectInboundConfig, DirectOutboundConfig, DnsServerTypeConfig, InboundConfig,
         OutboundConfig, RouteActionConfig, RouteFinalActionConfig, RouteUpgradeActionConfig,
-        SniffActionConfig, TProxyInboundConfig, TrojanOutboundConfig, DEFAULT_CONNECT_TIMEOUT,
-        DEFAULT_SNIFF_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+        SniffActionConfig, TProxyInboundConfig, TrojanOutboundConfig,
     };
 
     use super::{
-        parse_config, parse_config_report_unvalidated, parse_config_with_diagnostics,
         DEFAULT_DNS_SERVER_PORT, DEFAULT_DOH_PATH, DEFAULT_DOH_SERVER_PORT,
-        DEFAULT_DOT_SERVER_PORT,
+        DEFAULT_DOT_SERVER_PORT, parse_config, parse_config_report_unvalidated,
+        parse_config_with_diagnostics,
     };
 
     #[test]
@@ -902,31 +902,41 @@ mod tests {
             }) if resolver.server == "local"
         ));
         assert!(report.config.route.rules.is_empty());
-        assert!(report
-            .diagnostics
-            .ignored
-            .iter()
-            .all(|ignored| ignored.path != "$.experimental"));
-        assert!(report
-            .diagnostics
-            .ignored
-            .iter()
-            .any(|ignored| ignored.path == "$.inbounds[0].tcp_fast_open"));
-        assert!(report
-            .diagnostics
-            .ignored
-            .iter()
-            .any(|ignored| ignored.path == "$.outbounds[0].tcp_fast_open"));
-        assert!(report
-            .diagnostics
-            .ignored
-            .iter()
-            .any(|ignored| ignored.path == "$.log.output"));
-        assert!(report
-            .diagnostics
-            .ignored
-            .iter()
-            .all(|ignored| ignored.path != "$.log.noise"));
+        assert!(
+            report
+                .diagnostics
+                .ignored
+                .iter()
+                .all(|ignored| ignored.path != "$.experimental")
+        );
+        assert!(
+            report
+                .diagnostics
+                .ignored
+                .iter()
+                .any(|ignored| ignored.path == "$.inbounds[0].tcp_fast_open")
+        );
+        assert!(
+            report
+                .diagnostics
+                .ignored
+                .iter()
+                .any(|ignored| ignored.path == "$.outbounds[0].tcp_fast_open")
+        );
+        assert!(
+            report
+                .diagnostics
+                .ignored
+                .iter()
+                .any(|ignored| ignored.path == "$.log.output")
+        );
+        assert!(
+            report
+                .diagnostics
+                .ignored
+                .iter()
+                .all(|ignored| ignored.path != "$.log.noise")
+        );
     }
 
     #[test]
@@ -964,11 +974,13 @@ mod tests {
                 ..
             }) if resolver.server == "bootstrap"
         ));
-        assert!(report
-            .diagnostics
-            .warnings
-            .iter()
-            .any(|warning| warning.path == "$.outbounds[0].domain_resolver.strategy"));
+        assert!(
+            report
+                .diagnostics
+                .warnings
+                .iter()
+                .any(|warning| warning.path == "$.outbounds[0].domain_resolver.strategy")
+        );
     }
 
     #[test]
@@ -1068,10 +1080,12 @@ mod tests {
             parse_config_with_diagnostics(input).expect("timestamp field should parse");
 
         assert!(config.log.timestamp);
-        assert!(!diagnostics
-            .warnings
-            .iter()
-            .any(|warning| warning.path == "$.log.timestamp"));
+        assert!(
+            !diagnostics
+                .warnings
+                .iter()
+                .any(|warning| warning.path == "$.log.timestamp")
+        );
     }
 
     #[test]
@@ -1376,9 +1390,10 @@ mod tests {
 
         let err = parse_config(input).expect_err("invalid connect_timeout should fail");
         assert!(err.to_string().contains("$.outbounds[0].connect_timeout"));
-        assert!(err
-            .to_string()
-            .contains("invalid duration, expected formats like 300ms, 5s, 2m"));
+        assert!(
+            err.to_string()
+                .contains("invalid duration, expected formats like 300ms, 5s, 2m")
+        );
     }
 
     #[test]
@@ -1407,12 +1422,14 @@ mod tests {
         "#;
 
         let err = parse_config(input).expect_err("invalid handshake_timeout should fail");
-        assert!(err
-            .to_string()
-            .contains("$.outbounds[1].tls.handshake_timeout"));
-        assert!(err
-            .to_string()
-            .contains("invalid duration, expected formats like 300ms, 5s, 2m"));
+        assert!(
+            err.to_string()
+                .contains("$.outbounds[1].tls.handshake_timeout")
+        );
+        assert!(
+            err.to_string()
+                .contains("invalid duration, expected formats like 300ms, 5s, 2m")
+        );
     }
 
     #[test]
@@ -1493,9 +1510,10 @@ mod tests {
 
         let err = parse_config(input).expect_err("non-object tls should fail");
         assert!(err.to_string().contains("$.outbounds[1].tls"));
-        assert!(err
-            .to_string()
-            .contains("expected struct InputTrojanTlsConfig"));
+        assert!(
+            err.to_string()
+                .contains("expected struct InputTrojanTlsConfig")
+        );
     }
 
     #[test]
@@ -1545,9 +1563,10 @@ mod tests {
 
         let err = parse_config(input).expect_err("unsupported direct inbound network should fail");
         assert!(err.to_string().contains("$.inbounds[0].network"));
-        assert!(err
-            .to_string()
-            .contains("only supports network='tcp' or network='udp'"));
+        assert!(
+            err.to_string()
+                .contains("only supports network='tcp' or network='udp'")
+        );
     }
 
     #[test]
@@ -1727,9 +1746,10 @@ mod tests {
 
         let err = parse_config(input).expect_err("timeout without sniff action should fail");
         assert!(err.to_string().contains("$.route.rules[0].timeout"));
-        assert!(err
-            .to_string()
-            .contains("only supported for action='sniff'"));
+        assert!(
+            err.to_string()
+                .contains("only supported for action='sniff'")
+        );
     }
 
     #[test]
@@ -1977,13 +1997,17 @@ mod tests {
         let (_config, diagnostics) =
             parse_config_with_diagnostics(input).expect("unknown tls field should not block");
 
-        assert!(diagnostics
-            .ignored
-            .iter()
-            .all(|ignored| ignored.path != "$.outbounds[1].tls.unknown_field"));
-        assert!(diagnostics
-            .warnings
-            .iter()
-            .all(|warning| warning.path != "$.outbounds[1].tls.unknown_field"));
+        assert!(
+            diagnostics
+                .ignored
+                .iter()
+                .all(|ignored| ignored.path != "$.outbounds[1].tls.unknown_field")
+        );
+        assert!(
+            diagnostics
+                .warnings
+                .iter()
+                .all(|warning| warning.path != "$.outbounds[1].tls.unknown_field")
+        );
     }
 }

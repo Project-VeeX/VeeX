@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use veex_core::{dns::ResolveContext, ProxyError};
+use veex_core::{ProxyError, dns::ResolveContext};
 
 use crate::{
     traits::DnsUpstream,

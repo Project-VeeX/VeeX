@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::logging::{log_line, LogLevel};
+use crate::logging::{LogLevel, log_line};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum ErrorKind {
@@ -217,7 +217,7 @@ pub fn format_session_summary(summary: &SessionSummary) -> String {
 mod tests {
     use std::time::Duration;
 
-    use super::{format_session_summary, ErrorKind, SessionSummary};
+    use super::{ErrorKind, SessionSummary, format_session_summary};
 
     #[test]
     fn formats_session_summary_as_flat_kv_line() {

@@ -8,8 +8,8 @@ use veex_core::types::Destination;
 
 use super::{
     codec::{
-        decode_greeting, decode_request, encode_method_selection, encode_reply, Command, ReplyCode,
-        NO_ACCEPTABLE_METHODS, NO_AUTHENTICATION,
+        Command, NO_ACCEPTABLE_METHODS, NO_AUTHENTICATION, ReplyCode, decode_greeting,
+        decode_request, encode_method_selection, encode_reply,
     },
     error::SocksError,
 };

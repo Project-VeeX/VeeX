@@ -1,7 +1,7 @@
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -10,9 +10,9 @@ use tokio::sync::Notify;
 use tracing::{debug, info, warn};
 
 use veex_core::{
+    ProxyError,
     io::{PacketAssociationKey, PacketSessionHandle, PacketWriter},
     logging::sanitize_field,
-    ProxyError,
 };
 use veex_router::RouteReason;
 

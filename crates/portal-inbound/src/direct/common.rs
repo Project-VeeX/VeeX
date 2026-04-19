@@ -2,9 +2,9 @@ use std::net::SocketAddr;
 
 use tokio::net::TcpStream;
 use veex_core::{
+    ProxyError, Result,
     portal::{InboundMeta, Listener, PacketListener},
     types::{Destination, Host},
-    ProxyError, Result,
 };
 
 use super::error::DirectError;

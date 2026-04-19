@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use veex_core::{
-    dns::{read_dns_tcp_message, write_dns_tcp_message, DnsExecutorHandle, DnsRequest},
+    dns::{DnsExecutorHandle, DnsRequest, read_dns_tcp_message, write_dns_tcp_message},
     io::BoxedAsyncStream,
     logging::sanitize_field,
     session::SessionContext,

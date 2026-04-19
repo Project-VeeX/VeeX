@@ -14,9 +14,9 @@ pub use defaults::{
 };
 pub use error::{ConfigError, ExitCodeHint};
 pub use parse::{
-    load_from_path, load_from_path_unvalidated, load_from_path_with_diagnostics, parse_config,
-    parse_config_unvalidated, parse_config_with_diagnostics, ParseDiagnostics, ParseIgnored,
-    ParseWarning,
+    ParseDiagnostics, ParseIgnored, ParseWarning, load_from_path, load_from_path_unvalidated,
+    load_from_path_with_diagnostics, parse_config, parse_config_unvalidated,
+    parse_config_with_diagnostics,
 };
 pub use schema::{
     DirectInboundConfig, DirectOutboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig,

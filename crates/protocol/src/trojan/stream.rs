@@ -1,7 +1,7 @@
 use std::{fmt, io};
 
 use tokio::io::AsyncWriteExt;
-use veex_core::{io::BoxedAsyncStream, ProxyError, Result};
+use veex_core::{ProxyError, Result, io::BoxedAsyncStream};
 
 use crate::adapter::{StreamAdapter, StreamAdapterFuture, StreamParams};
 

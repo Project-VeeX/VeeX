@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock};
 
-use veex_core::{dns::DomainResolverHandle, ProxyError};
-use veex_transport::{resolve_host, HostResolveRequest, HostResolver};
+use veex_core::{ProxyError, dns::DomainResolverHandle};
+use veex_transport::{HostResolveRequest, HostResolver, resolve_host};
 
 #[derive(Clone)]
 pub(crate) struct RuntimeServices {

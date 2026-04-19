@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use veex_core::{logging::Logger, ProxyError};
+use veex_core::{ProxyError, logging::Logger};
 use veex_portal_outbound::direct::{
-    build_dialer as build_direct_dialer, build_packet_dialer as build_direct_packet_dialer,
-    DirectOutbound,
+    DirectOutbound, build_dialer as build_direct_dialer,
+    build_packet_dialer as build_direct_packet_dialer,
 };
 
 use crate::factory::{
     lowering::LoweredDirectOutbound,
-    runtime::{is_default_direct_tag, BuiltRuntimeOutbound, RuntimeServices},
+    runtime::{BuiltRuntimeOutbound, RuntimeServices, is_default_direct_tag},
 };
 
 pub(super) fn build_direct_outbound(

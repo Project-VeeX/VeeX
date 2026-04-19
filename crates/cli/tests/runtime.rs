@@ -10,8 +10,8 @@ use std::{
 
 use rcgen::generate_simple_self_signed;
 use rustls::{
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     ServerConfig,
+    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -19,18 +19,18 @@ use tokio::{
     sync::oneshot,
 };
 use tokio_rustls::TlsAcceptor;
-use veex_cli::runtime::{run_with_shutdown, RuntimeError};
+use veex_cli::runtime::{RuntimeError, run_with_shutdown};
 use veex_config::{
-    DirectInboundConfig, DirectOutboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig,
-    DnsServerTypeConfig, DomainResolverConfig, InboundConfig, LogConfig, OutboundConfig,
-    ProxyConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig,
-    RouteTargetConfig, SocksInboundConfig, TrojanOutboundConfig, TrojanTlsConfig,
-    DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+    DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT, DirectInboundConfig,
+    DirectOutboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig, DnsServerTypeConfig,
+    DomainResolverConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteActionConfig,
+    RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig, SocksInboundConfig,
+    TrojanOutboundConfig, TrojanTlsConfig,
 };
 use veex_core::{
+    ErrorKind,
     dns::{read_dns_tcp_message, write_dns_tcp_message},
     types::{Destination, Host},
-    ErrorKind,
 };
 use veex_dns::parse_query_domain;
 use veex_portal_outbound::trojan::build_trojan_request;

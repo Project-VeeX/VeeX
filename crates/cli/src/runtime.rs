@@ -3,10 +3,10 @@ use std::future::Future;
 use thiserror::Error;
 use tracing::{error, info, warn};
 use veex_config::ProxyConfig;
-use veex_core::{logging::sanitize_field, portal::Inbound, ProxyError};
+use veex_core::{ProxyError, logging::sanitize_field, portal::Inbound};
 
 use crate::{
-    bootstrap::{build_runtime_state, BootstrapError, RuntimeState},
+    bootstrap::{BootstrapError, RuntimeState, build_runtime_state},
     factory::RuntimeOutbounds,
 };
 
@@ -181,20 +181,20 @@ mod tests {
     use std::{
         collections::HashMap,
         pin::Pin,
-        sync::atomic::{AtomicBool, Ordering},
         sync::Arc,
+        sync::atomic::{AtomicBool, Ordering},
         task::{Context, Poll},
         time::Instant,
     };
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use veex_core::{
+        ErrorKind, ProxyError,
         io::BoxedAsyncStream,
         logging::Logger,
         portal::{BoxFuture, Outbound, OutboundMeta},
         session::{SessionContext, SessionMeta},
         types::{Destination, Host, Network},
-        ErrorKind, ProxyError,
     };
     use veex_execution::{ExecutionFuture, ExecutionOutbound, OutboundCatalog};
 

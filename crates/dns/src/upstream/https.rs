@@ -4,10 +4,10 @@ use async_trait::async_trait;
 use tokio::time::timeout;
 use tracing::info;
 use veex_core::{
+    ProxyError,
     dns::{DnsRequest, DnsResponse},
     logging::sanitize_field,
     types::{Destination, Network},
-    ProxyError,
 };
 
 use crate::{dialer::DnsDialer, http, traits::DnsUpstream, types::DnsHttpsOptions};

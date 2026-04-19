@@ -8,8 +8,8 @@ use std::{
 
 use rcgen::generate_simple_self_signed;
 use rustls::{
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     ServerConfig,
+    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
 };
 use tokio::{io::AsyncReadExt, net::TcpListener};
 use tokio_rustls::TlsAcceptor;
@@ -20,7 +20,7 @@ use veex_core::{
     types::{Destination, Host, Network},
 };
 use veex_portal_outbound::trojan::{
-    build_dialer, build_trojan_request, system_host_resolver, TrojanOutbound,
+    TrojanOutbound, build_dialer, build_trojan_request, system_host_resolver,
 };
 use veex_transport::TlsClientOptions;
 

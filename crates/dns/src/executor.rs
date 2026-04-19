@@ -2,19 +2,19 @@ use std::{
     collections::HashMap,
     net::SocketAddr,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use tracing::{info, warn};
 use veex_core::{
+    ProxyError,
     dns::{DnsExecutorHandle, DnsRequest, DnsResponse, DomainResolverHandle, ResolveContext},
     logging::sanitize_field,
     portal::BoxFuture,
     types::Host,
-    ProxyError,
 };
 use veex_execution::OutboundCatalog;
 
@@ -432,20 +432,20 @@ mod tests {
         collections::HashMap,
         net::{IpAddr, Ipv4Addr, SocketAddr},
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
     };
 
-    use tokio::sync::{mpsc, Mutex};
+    use tokio::sync::{Mutex, mpsc};
     use veex_core::{
+        ProxyError,
         dns::{DnsExecutorHandle, DnsRequest, DomainResolverHandle, ResolveContext},
         io::{BoxedAsyncStream, PacketSession, PacketSessionHandle},
         logging::Logger,
         portal::{BoxFuture, Dial, Outbound, OutboundMeta},
         session::SessionContext,
         types::{Destination, Host, Network},
-        ProxyError,
     };
     use veex_execution::{ExecutionFuture, ExecutionOutbound, OutboundCatalog};
 

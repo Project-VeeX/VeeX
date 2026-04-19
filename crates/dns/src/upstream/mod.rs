@@ -4,13 +4,13 @@ use async_trait::async_trait;
 use tokio::time::timeout;
 use tracing::warn;
 use veex_core::{
-    dns::{read_dns_tcp_message, write_dns_tcp_message, DnsRequest, DnsResponse},
+    ProxyError,
+    dns::{DnsRequest, DnsResponse, read_dns_tcp_message, write_dns_tcp_message},
     io::{AsyncStream, BoxedAsyncStream, PacketSessionHandle},
     types::{Destination, Host, Network},
-    ProxyError,
 };
 use veex_infra_linux::load_system_dns_servers;
-use veex_transport::{connect_tls_stream, ConnectTraceContext, TlsClientOptions};
+use veex_transport::{ConnectTraceContext, TlsClientOptions, connect_tls_stream};
 
 use crate::{
     dialer::DnsDialer,

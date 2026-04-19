@@ -9,8 +9,8 @@ use crate::{
 };
 
 use super::shared::{
-    normalize_domain_matchers, parse_ip_cidr_matchers, parse_port_matchers, parse_string_matchers,
-    required_nested_string, DomainMatcherKind,
+    DomainMatcherKind, normalize_domain_matchers, parse_ip_cidr_matchers, parse_port_matchers,
+    parse_string_matchers, required_nested_string,
 };
 
 pub(crate) fn input_route_into_config(
