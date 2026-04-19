@@ -4,6 +4,18 @@
     "disabled": false,
     "timestamp": false
   },
+  "dns": {
+    "final": "local",
+    "servers": [
+      {
+        "tag": "local",
+        "type": "udp",
+        "server": "223.5.5.5",
+        "server_port": 53,
+        "detour": "direct"
+      }
+    ]
+  },
   "inbounds": [
     {
       "type": "direct",
@@ -26,6 +38,7 @@
       "server": "trojan.example.com",
       "server_port": 443,
       "password": "change-me",
+      "domain_resolver": "local",
       "tls": {
         "enabled": true,
         "server_name": "trojan.example.com",

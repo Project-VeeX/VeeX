@@ -162,7 +162,7 @@ impl DnsExecutor {
             .select_resolution_upstream(&context, &self.server_routes())?
             .ok_or_else(|| {
                 ProxyError::resolve(format!(
-                    "no safe dns server is available for dial-side resolution of {domain}"
+                    "no safe dns server available for dial-side resolution of {domain}"
                 ))
             })?;
         let server = self.lookup_server(&selection.server_tag)?;
@@ -773,6 +773,314 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn domain_resolver_uses_safe_final_server_when_allowed() {
+        let response = build_dns_answer_response("safe-final.example.com", [203, 0, 113, 10]);
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(response).expect("response should enqueue");
+        let connected_destinations = Arc::new(Mutex::new(Vec::new()));
+        let session: PacketSessionHandle = Arc::new(TestPacketSession {
+            recv: Mutex::new(rx),
+            sent_count: AtomicUsize::new(0),
+            sent_payloads: Arc::new(Mutex::new(Vec::new())),
+        });
+        let mut registry = Vec::new();
+        let default_outbound = register_default_test_outbound(
+            &mut registry,
+            "direct",
+            empty_test_session(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        register_test_outbound(
+            &mut registry,
+            "dns-egress",
+            session,
+            Arc::clone(&connected_destinations),
+        );
+        let executor = DnsExecutor::new(
+            DnsRuntimeConfig {
+                final_server_tag: "remote".into(),
+                servers: vec![
+                    DnsServer {
+                        tag: "remote".into(),
+                        transport: DnsServerTransport::Udp,
+                        destination: Destination::new(
+                            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                            54,
+                        ),
+                        dial: Dial {
+                            detour: Some("dns-egress".into()),
+                            connect_timeout: None,
+                            routing_mark: None,
+                            domain_resolver: None,
+                        },
+                    },
+                    DnsServer {
+                        tag: "bootstrap".into(),
+                        transport: DnsServerTransport::Udp,
+                        destination: Destination::new(
+                            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                            53,
+                        ),
+                        dial: Dial {
+                            detour: Some("direct".into()),
+                            connect_timeout: None,
+                            routing_mark: None,
+                            domain_resolver: None,
+                        },
+                    },
+                ],
+                rules: Vec::new(),
+            },
+            finalize_catalog(registry, default_outbound),
+        )
+        .expect("dns executor should build");
+
+        let addresses = executor
+            .resolve_host(
+                Host::Domain("safe-final.example.com".into()),
+                443,
+                ResolveContext::outbound_dial("proxy", None),
+            )
+            .await
+            .expect("domain resolver should use safe final server");
+
+        assert_eq!(addresses, vec![SocketAddr::from(([203, 0, 113, 10], 443))]);
+        assert_eq!(
+            connected_destinations.lock().await.as_slice(),
+            &[Destination::new(
+                Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                54
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn domain_resolver_skips_caller_dns_server_and_uses_safe_fallback() {
+        let response = build_dns_answer_response("fallback.example.com", [203, 0, 113, 11]);
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(response).expect("response should enqueue");
+        let connected_destinations = Arc::new(Mutex::new(Vec::new()));
+        let session: PacketSessionHandle = Arc::new(TestPacketSession {
+            recv: Mutex::new(rx),
+            sent_count: AtomicUsize::new(0),
+            sent_payloads: Arc::new(Mutex::new(Vec::new())),
+        });
+        let mut registry = Vec::new();
+        let default_outbound = register_default_test_outbound(
+            &mut registry,
+            "direct",
+            session,
+            Arc::clone(&connected_destinations),
+        );
+        register_test_outbound(
+            &mut registry,
+            "proxy",
+            empty_test_session(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let executor = DnsExecutor::new(
+            DnsRuntimeConfig {
+                final_server_tag: "remote".into(),
+                servers: vec![
+                    DnsServer {
+                        tag: "remote".into(),
+                        transport: DnsServerTransport::Udp,
+                        destination: Destination::new(
+                            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                            54,
+                        ),
+                        dial: Dial {
+                            detour: Some("proxy".into()),
+                            connect_timeout: None,
+                            routing_mark: None,
+                            domain_resolver: None,
+                        },
+                    },
+                    DnsServer {
+                        tag: "bootstrap".into(),
+                        transport: DnsServerTransport::Udp,
+                        destination: Destination::new(
+                            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                            53,
+                        ),
+                        dial: Dial {
+                            detour: Some("direct".into()),
+                            connect_timeout: None,
+                            routing_mark: None,
+                            domain_resolver: None,
+                        },
+                    },
+                ],
+                rules: Vec::new(),
+            },
+            finalize_catalog(registry, default_outbound),
+        )
+        .expect("dns executor should build");
+
+        let addresses = executor
+            .resolve_host(
+                Host::Domain("fallback.example.com".into()),
+                443,
+                ResolveContext {
+                    purpose: veex_core::dns::ResolvePurpose::DnsUpstreamDial,
+                    caller_outbound_tag: Some("proxy".into()),
+                    caller_dns_server_tag: Some("remote".into()),
+                    explicit_server_tag: None,
+                    recursion_depth: 1,
+                },
+            )
+            .await
+            .expect("domain resolver should skip caller dns server");
+
+        assert_eq!(addresses, vec![SocketAddr::from(([203, 0, 113, 11], 443))]);
+        assert_eq!(
+            connected_destinations.lock().await.as_slice(),
+            &[Destination::new(
+                Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                53
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn domain_resolver_rejects_missing_explicit_server() {
+        let mut registry = Vec::new();
+        let default_outbound = register_default_test_outbound(
+            &mut registry,
+            "direct",
+            empty_test_session(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let executor = DnsExecutor::new(
+            DnsRuntimeConfig {
+                final_server_tag: "direct".into(),
+                servers: vec![DnsServer {
+                    tag: "direct".into(),
+                    transport: DnsServerTransport::Udp,
+                    destination: Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
+                    dial: Dial {
+                        detour: Some("direct".into()),
+                        connect_timeout: None,
+                        routing_mark: None,
+                        domain_resolver: None,
+                    },
+                }],
+                rules: Vec::new(),
+            },
+            finalize_catalog(registry, default_outbound),
+        )
+        .expect("dns executor should build");
+
+        let err = executor
+            .resolve_host(
+                Host::Domain("missing.example.com".into()),
+                443,
+                ResolveContext::outbound_dial("proxy", Some("missing".into())),
+            )
+            .await
+            .expect_err("missing explicit resolver should fail");
+
+        assert!(
+            err.to_string()
+                .contains("explicit domain_resolver points to missing dns server tag: missing")
+        );
+    }
+
+    #[tokio::test]
+    async fn domain_resolver_rejects_empty_answer_response() {
+        let response = build_dns_empty_response("empty.example.com");
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(response).expect("response should enqueue");
+        let connected_destinations = Arc::new(Mutex::new(Vec::new()));
+        let session: PacketSessionHandle = Arc::new(TestPacketSession {
+            recv: Mutex::new(rx),
+            sent_count: AtomicUsize::new(0),
+            sent_payloads: Arc::new(Mutex::new(Vec::new())),
+        });
+        let mut registry = Vec::new();
+        let default_outbound = register_default_test_outbound(
+            &mut registry,
+            "direct",
+            session,
+            connected_destinations,
+        );
+        let executor = DnsExecutor::new(
+            DnsRuntimeConfig {
+                final_server_tag: "direct".into(),
+                servers: vec![DnsServer {
+                    tag: "direct".into(),
+                    transport: DnsServerTransport::Udp,
+                    destination: Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
+                    dial: Dial {
+                        detour: Some("direct".into()),
+                        connect_timeout: None,
+                        routing_mark: None,
+                        domain_resolver: None,
+                    },
+                }],
+                rules: Vec::new(),
+            },
+            finalize_catalog(registry, default_outbound),
+        )
+        .expect("dns executor should build");
+
+        let err = executor
+            .resolve_host(
+                Host::Domain("empty.example.com".into()),
+                443,
+                ResolveContext::outbound_dial("proxy", None),
+            )
+            .await
+            .expect_err("empty response should fail resolution");
+
+        assert!(
+            err.to_string()
+                .contains("dns response did not contain usable A/AAAA answers")
+        );
+    }
+
+    #[tokio::test]
+    async fn domain_resolver_propagates_upstream_exchange_failure() {
+        let mut registry = Vec::new();
+        let default_outbound = register_default_test_outbound(
+            &mut registry,
+            "direct",
+            empty_test_session(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let executor = DnsExecutor::new(
+            DnsRuntimeConfig {
+                final_server_tag: "direct".into(),
+                servers: vec![DnsServer {
+                    tag: "direct".into(),
+                    transport: DnsServerTransport::Udp,
+                    destination: Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
+                    dial: Dial {
+                        detour: Some("direct".into()),
+                        connect_timeout: None,
+                        routing_mark: None,
+                        domain_resolver: None,
+                    },
+                }],
+                rules: Vec::new(),
+            },
+            finalize_catalog(registry, default_outbound),
+        )
+        .expect("dns executor should build");
+
+        let err = executor
+            .resolve_host(
+                Host::Domain("failure.example.com".into()),
+                443,
+                ResolveContext::outbound_dial("proxy", None),
+            )
+            .await
+            .expect_err("upstream exchange failure should surface");
+
+        assert!(err.to_string().contains("test packet session closed"));
+    }
+
+    #[tokio::test]
     async fn domain_resolver_rejects_excessive_recursion_depth() {
         let mut registry = Vec::new();
         let default_outbound = register_default_test_outbound(
@@ -854,6 +1162,19 @@ mod tests {
         response.extend_from_slice(&60u32.to_be_bytes());
         response.extend_from_slice(&4u16.to_be_bytes());
         response.extend_from_slice(&ip);
+        response
+    }
+
+    fn build_dns_empty_response(domain: &str) -> Vec<u8> {
+        let query = build_a_query(domain, 0x1234).expect("query should build");
+        let mut response = Vec::new();
+        response.extend_from_slice(&query[..2]);
+        response.extend_from_slice(&[0x81, 0x80]);
+        response.extend_from_slice(&1u16.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response.extend_from_slice(&query[12..]);
         response
     }
 }

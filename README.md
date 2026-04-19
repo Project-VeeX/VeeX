@@ -12,12 +12,16 @@
 - Routing: 
   - ordered `route.rules` and fallback `route.final`
   - route actions: `sniff`, `hijack-dns`
-- DNS: internal DNS executor with `local`, `UDP`, `TCP`, `TLS`, and `HTTPS` upstream support
+- DNS:
+  - internal DNS executor with `local`, `UDP`, `TCP`, `TLS`, and `HTTPS` upstream support
+  - owns both hijacked client query handling and dial-side domain resolution
 - CLI: `veex run`, `veex check`, `veex version`
 
 ## Scope
 
 VeeX has explicit stream and packet execution paths. Stream support is broader today, while packet support remains intentionally narrow around direct packet ingress/egress and the DNS paths built on top of that foundation.
+
+When outbound or DNS upstream dialing needs domain resolution, VeeX uses the DNS subsystem's controlled resolver path. `domain_resolver` selects an explicit DNS server when configured; otherwise dial-side resolution falls back through safe DNS server selection rather than hidden transport-side policy.
 
 Transparent proxy support is treated as explicit ingress handling, not as a hidden policy system. VeeX does not auto-insert private, local, or upstream-exception direct rules; deployments that need those exceptions should define them explicitly in `route.rules`.
 

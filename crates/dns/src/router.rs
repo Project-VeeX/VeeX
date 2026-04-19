@@ -58,13 +58,19 @@ impl DnsRouter {
         servers: &[DnsServerRoute<'a>],
     ) -> veex_core::Result<Option<DnsSelection>> {
         if let Some(server_tag) = &context.explicit_server_tag {
-            return self
-                .selection_for_tag(
-                    server_tag.clone(),
-                    DnsRouteReason::ExplicitResolver,
-                    servers,
-                )
-                .map(Some);
+            let upstream = self
+                .find_server(servers, server_tag)
+                .map(|server| Arc::clone(&server.upstream))
+                .ok_or_else(|| {
+                    ProxyError::config(format!(
+                        "explicit domain_resolver points to missing dns server tag: {server_tag}"
+                    ))
+                })?;
+            return Ok(Some(DnsSelection {
+                server_tag: server_tag.clone(),
+                reason: DnsRouteReason::ExplicitResolver,
+                upstream,
+            }));
         }
 
         if let Some(selection) = self
@@ -242,5 +248,96 @@ mod tests {
 
         assert_eq!(selection.server_tag, "bootstrap");
         assert_eq!(selection.reason, DnsRouteReason::SafeDefault);
+    }
+
+    #[test]
+    fn resolution_selection_prefers_safe_final_server_before_safe_default() {
+        let router = DnsRouter::new("remote", Vec::new());
+        let servers = [
+            DnsServerRoute {
+                tag: "remote",
+                detour: Some("dns-egress"),
+                upstream: Arc::new(TestUpstream),
+            },
+            DnsServerRoute {
+                tag: "bootstrap",
+                detour: Some("direct"),
+                upstream: Arc::new(TestUpstream),
+            },
+        ];
+
+        let selection = router
+            .select_resolution_upstream(&ResolveContext::outbound_dial("proxy", None), &servers)
+            .expect("router should resolve safe final upstream")
+            .expect("safe final should select a server");
+
+        assert_eq!(selection.server_tag, "remote");
+        assert_eq!(selection.reason, DnsRouteReason::Final);
+    }
+
+    #[test]
+    fn resolution_selection_skips_final_server_when_caller_dns_server_matches() {
+        let router = DnsRouter::new("remote", Vec::new());
+        let servers = [
+            DnsServerRoute {
+                tag: "remote",
+                detour: Some("proxy"),
+                upstream: Arc::new(TestUpstream),
+            },
+            DnsServerRoute {
+                tag: "bootstrap",
+                detour: Some("direct"),
+                upstream: Arc::new(TestUpstream),
+            },
+        ];
+        let context = ResolveContext {
+            purpose: veex_core::dns::ResolvePurpose::DnsUpstreamDial,
+            caller_outbound_tag: Some("proxy".into()),
+            caller_dns_server_tag: Some("remote".into()),
+            explicit_server_tag: None,
+            recursion_depth: 1,
+        };
+
+        let selection = router
+            .select_resolution_upstream(&context, &servers)
+            .expect("router should resolve safe fallback upstream")
+            .expect("safe fallback should select a server");
+
+        assert_eq!(selection.server_tag, "bootstrap");
+        assert_eq!(selection.reason, DnsRouteReason::SafeDefault);
+    }
+
+    #[test]
+    fn resolution_selection_returns_none_when_no_safe_server_exists() {
+        let router = DnsRouter::new("remote", Vec::new());
+        let servers = [DnsServerRoute {
+            tag: "remote",
+            detour: Some("proxy"),
+            upstream: Arc::new(TestUpstream),
+        }];
+
+        let selection = router
+            .select_resolution_upstream(&ResolveContext::outbound_dial("proxy", None), &servers)
+            .expect("unsafe-only resolver set should not error");
+
+        assert!(selection.is_none());
+    }
+
+    #[test]
+    fn explicit_resolver_missing_server_returns_config_error() {
+        let router = DnsRouter::new("remote", Vec::new());
+
+        let err = match router.select_resolution_upstream(
+            &ResolveContext::outbound_dial("proxy", Some("missing".into())),
+            &[],
+        ) {
+            Ok(_) => panic!("missing explicit resolver should fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("explicit domain_resolver points to missing dns server tag: missing")
+        );
     }
 }

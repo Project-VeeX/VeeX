@@ -335,6 +335,27 @@ Its current roles are:
 - select DNS upstreams through a DNS-specific router
 - reach upstream servers through outbound detour capability
 
+For dial-side resolution, the current upstream selection order is:
+
+1. explicit `domain_resolver.server`
+2. safe `dns.final`
+3. safe default fallback, preferring `detour="direct"`
+4. fail when no safe DNS server is available
+
+The current safety guard is explicit and narrow:
+
+- do not reuse the caller outbound as the DNS server detour
+- do not recurse back into the caller DNS server tag
+- keep recursion bounded by resolver-depth checks
+
+Current dial-side resolution failures stay inside the existing runtime error model, including:
+
+- recursion depth exceeded
+- no safe DNS server available
+- explicit `domain_resolver` points to a missing server
+- upstream exchange failure
+- upstream response without usable `A`/`AAAA` answers
+
 Current DNS upstream transports include:
 
 - `local`
