@@ -3,6 +3,7 @@ name = "veex-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "veex"
@@ -29,3 +30,6 @@ rcgen = "0.13"
 rustls.workspace = true
 tokio-rustls.workspace = true
 veex-test-tracing = { path = "../test-tracing" }
+
+[build-dependencies]
+built = "0.8"

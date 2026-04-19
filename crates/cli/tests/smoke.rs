@@ -380,9 +380,7 @@ fn assert_event_line_has_timestamp(output: &str, event_name: &str) {
         .expect("timestamp should contain millisecond precision");
 
     assert!(
-        prefix.contains('T')
-            && fractional.len() == 3
-            && prefix.matches(':').count() == 2,
+        prefix.contains('T') && fractional.len() == 3 && prefix.matches(':').count() == 2,
         "expected local millisecond timestamp prefix without offset for `{event_name}`, got line:\n{line}"
     );
     assert!(

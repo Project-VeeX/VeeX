@@ -291,13 +291,13 @@ impl<'a> Parser<'a> {
                             String::from_utf8_lossy(expected),
                             actual as char
                         ),
-                    ))
+                    ));
                 }
                 None => {
                     return Err(ConfigError::json(
                         path,
                         format!("expected keyword '{}'", String::from_utf8_lossy(expected)),
-                    ))
+                    ));
                 }
             }
         }

@@ -10,6 +10,10 @@ use veex_config::{load_from_path_with_diagnostics, ConfigError, ParseDiagnostics
 use veex_core::logging::sanitize_field;
 use veex_observability::{LogLevel, LoggingOptions};
 
+mod built_info {
+    include!(concat!(env!("OUT_DIR"), "/built.rs"));
+}
+
 const EXIT_OK: u8 = 0;
 const EXIT_CONFIG_ERROR: u8 = 2;
 const EXIT_STARTUP_ERROR: u8 = 3;
@@ -50,12 +54,20 @@ fn try_main() -> Result<u8, (u8, String)> {
             verbose,
         } => run_command(&config_path, verbose),
         Command::Version => {
+            let rust_version_vec = built_info::RUSTC_VERSION
+                .split_whitespace()
+                .collect::<Vec<&str>>();
+
             println!(
-                "veex {}\nbuild_time={}\ngit_commit={}",
-                env!("CARGO_PKG_VERSION"),
-                option_env!("VEEX_BUILD_TIME").unwrap_or("unknown"),
-                option_env!("VEEX_GIT_COMMIT").unwrap_or("unknown")
+                "veex version {}\n\nRust: {}, Build: {}\nEnv: {}, {}/{}",
+                built_info::PKG_VERSION,
+                rust_version_vec.get(1).unwrap_or(&"unknown"),
+                built_info::PROFILE,
+                built_info::CFG_ENV,
+                built_info::CFG_OS,
+                built_info::CFG_TARGET_ARCH,
             );
+
             Ok(EXIT_OK)
         }
     }
