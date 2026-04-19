@@ -246,6 +246,20 @@ Transparent destination recovery is still component-specific and remains outside
 
 Outbound currently has two stable shapes.
 
+The current shared outbound stream chain is:
+
+```text
+resolve -> connect -> (tls) -> (protocol) -> relay
+```
+
+Phase ownership stays explicit:
+
+- resolve: domain resolution to concrete socket targets
+- connect: TCP dialing over resolved targets, including connect-timeout handling
+- tls: optional TLS handshake, including TLS handshake timeout
+- protocol: protocol-specific stream setup after carrier setup
+- relay: bidirectional transfer after outbound preparation succeeds
+
 ### 10.1 No Protocol
 
 This shape applies to:
@@ -259,6 +273,7 @@ portal -> transport -> execution
 ```
 
 Direct outbound uses `Dialer` for streams and `PacketDialer` for packet sessions. These are peer carrier paths inside the direct outbound model. Direct outbound does not enter the protocol layer.
+On the stream path, direct outbound uses the shared resolve/connect chain and then enters relay directly.
 
 ### 10.2 Protocol Present
 
@@ -273,6 +288,7 @@ portal -> protocol -> transport -> execution
 ```
 
 Trojan protocol logic remains outside the component crate in `veex-protocol`. The outbound component does not hold a protocol field. Instead, protocol is invoked inside the connect pipeline after TCP and TLS setup.
+On the stream path, trojan outbound keeps the same resolve/connect base semantics as direct outbound, then adds optional TLS and Trojan request setup before relay.
 
 ## 11. Dialer
 
@@ -292,6 +308,13 @@ session -> selected outbound -> dialer or packet_dialer
 ```
 
 Dialers derive request-specific dialing context from `SessionContext`, including resolver context propagation.
+
+Timeout boundaries stay phase-specific:
+
+- `connect_timeout` applies only to the connect stage
+- `tls.handshake_timeout` applies only to the TLS stage
+- protocol setup failures stay in the protocol stage
+- relay failures stay in the relay stage and do not back-propagate as connect or TLS failures
 
 ## 12. Routing And Sniff
 

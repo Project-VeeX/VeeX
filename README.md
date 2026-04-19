@@ -23,6 +23,14 @@ VeeX has explicit stream and packet execution paths. Stream support is broader t
 
 When outbound or DNS upstream dialing needs domain resolution, VeeX uses the DNS subsystem's controlled resolver path. `domain_resolver` selects an explicit DNS server when configured; otherwise dial-side resolution falls back through safe DNS server selection rather than hidden transport-side policy.
 
+Outbound stream execution follows one shared chain:
+
+```text
+resolve -> connect -> (tls) -> (protocol) -> relay
+```
+
+`direct` uses the shared resolve/connect semantics and then enters relay immediately. `trojan` keeps the same resolve/connect base semantics, adds TLS when enabled, then performs Trojan protocol request setup before relay. `connect_timeout` belongs to the connect stage; `tls.handshake_timeout` belongs only to the TLS stage.
+
 Transparent proxy support is treated as explicit ingress handling, not as a hidden policy system. VeeX does not auto-insert private, local, or upstream-exception direct rules; deployments that need those exceptions should define them explicitly in `route.rules`.
 
 This repository is not a full DNS platform, a generalized UDP proxy stack, a TUN implementation, or a general routing system. OpenWrt packaging, `procd`, and LuCI integration remain outside this repository.

@@ -43,7 +43,7 @@ impl Default for TlsClientOptions {
             insecure: false,
             certificate_path: None,
             ca_path: None,
-            handshake_timeout: Duration::from_secs(5),
+            handshake_timeout: Duration::from_secs(15),
         }
     }
 }
@@ -645,7 +645,7 @@ mod tests {
                 ("port", &server.addr.port().to_string()),
                 ("resolved_addr", &server.addr.to_string()),
                 ("server_name", "localhost"),
-                ("handshake_timeout_ms", "5000"),
+                ("handshake_timeout_ms", "15000"),
                 ("level", "INFO"),
             ],
         );
@@ -718,7 +718,7 @@ mod tests {
                 ("port", &addr.port().to_string()),
                 ("resolved_addr", &addr.to_string()),
                 ("server_name", "localhost"),
-                ("handshake_timeout_ms", "5000"),
+                ("handshake_timeout_ms", "15000"),
                 ("level", "INFO"),
             ],
         );

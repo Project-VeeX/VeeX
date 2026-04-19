@@ -36,6 +36,7 @@ The execution model is observable as a sequence of stages. Some stages are strea
 | sniff | whether routing context was enriched, timed out, or produced no match |
 | connect | which resolved address was attempted and whether it succeeded |
 | TLS | whether handshake setup succeeded or failed on stream paths that use TLS |
+| protocol | whether outbound protocol setup succeeded or failed on protocol-bearing stream paths |
 | relay or packet forwarding | whether stream transfer or packet forwarding completed normally or failed |
 | session finish | whether the session succeeded and how much traffic was observed |
 
@@ -61,6 +62,7 @@ The public baseline centers on these event families:
 - session lifecycle events
 - route-selection events
 - connect and TLS events
+- protocol-setup events
 - sniff diagnostic events
 - relay completion and relay failure events
 - transparent-socket diagnostic events
@@ -80,6 +82,9 @@ Representative event names include:
 - `tcp_connect_failed`
 - `tls_handshake_start`
 - `tls_handshake_failed`
+- `protocol_handshake_start`
+- `protocol_handshake_success`
+- `protocol_handshake_failed`
 - `sniff_start`
 - `sniff_success`
 - `sniff_timeout`
