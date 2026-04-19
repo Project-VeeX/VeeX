@@ -60,6 +60,7 @@ where
     let RuntimeState {
         inbounds,
         outbounds,
+        packet_executor,
     } = state;
 
     info!(
@@ -84,6 +85,7 @@ where
     );
 
     close_inbounds(&inbounds).await?;
+    packet_executor.shutdown().await;
     close_outbounds(&outbounds).await?;
 
     info!(event = "shutdown_complete", "shutdown complete");

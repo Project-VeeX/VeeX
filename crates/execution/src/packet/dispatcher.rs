@@ -17,8 +17,8 @@ use crate::{
     ExecutionFuture, OutboundCatalog,
     packet::{
         association::{
-            PacketAssociation, log_packet_association_close, log_packet_association_close_error,
-            log_packet_association_hit,
+            PacketAssociation, PacketSessionShutdownReason, log_packet_association_close_error,
+            log_packet_association_hit, log_packet_session_close,
         },
         dns::hijack_packet_dns,
     },
@@ -91,6 +91,26 @@ impl PacketDispatcher {
         remove_association_from_map(&self.associations, key, association_id);
     }
 
+    fn association_count(&self) -> usize {
+        lock_unpoisoned(&self.associations).len()
+    }
+
+    pub async fn shutdown(&self) {
+        let associations = {
+            let associations = lock_unpoisoned(&self.associations);
+            associations.values().cloned().collect::<Vec<_>>()
+        };
+        for association in &associations {
+            association.shutdown(PacketSessionShutdownReason::DispatcherShutdown);
+        }
+        for _ in 0..50 {
+            if self.association_count() == 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     async fn create_association(
         &self,
         mut ctx: SessionContext,
@@ -122,7 +142,7 @@ impl PacketDispatcher {
             if let Err(err) = association.session().close().await {
                 log_packet_association_close_error(&association, &err);
             }
-            log_packet_association_close(&association, &close_reason);
+            log_packet_session_close(&association, &close_reason);
         });
     }
 
@@ -141,9 +161,8 @@ impl PacketDispatcher {
         log_packet_association_hit(&association);
 
         if let Err(err) = association.send(packet.payload).await {
-            association.shutdown();
+            association.shutdown(PacketSessionShutdownReason::ForwardError);
             self.remove_association(association.key(), association.id());
-            let _ = association.session().close().await;
             return Err(err);
         }
 
@@ -171,6 +190,8 @@ impl PacketDispatcher {
             )));
         }
 
+        log_packet_session_start(&ctx);
+
         match &decision.final_action {
             RouteFinalAction::Route(target) => {
                 log_route_select(&ctx, &target.outbound_tag, decision.reason);
@@ -195,9 +216,8 @@ impl PacketDispatcher {
                 };
 
                 if let Err(err) = association.send(packet.payload).await {
-                    association.shutdown();
+                    association.shutdown(PacketSessionShutdownReason::ForwardError);
                     self.remove_association(association.key(), association.id());
-                    let _ = association.session().close().await;
                     return Err(err);
                 }
 
@@ -228,6 +248,18 @@ impl DnsHijack for PacketDispatcher {
             hijack_packet_dns(&executor, session_id, packet, writer, route_reason).await
         })
     }
+}
+
+fn log_packet_session_start(ctx: &SessionContext) {
+    tracing::info!(
+        event = "packet_session_start",
+        session_id = ctx.meta.id,
+        inbound = %veex_core::logging::sanitize_field(ctx.meta.inbound_tag.as_str()),
+        peer = %veex_core::logging::sanitize_field(&ctx.meta.peer.to_string()),
+        destination = %veex_core::logging::sanitize_field(&ctx.meta.destination.to_string()),
+        network = ctx.meta.network.as_str(),
+        "packet session start"
+    );
 }
 
 fn log_route_select(ctx: &SessionContext, outbound_tag: &str, route_reason: RouteReason) {
@@ -300,12 +332,22 @@ mod tests {
     struct TestPacketSession {
         sent: Arc<Mutex<Vec<Vec<u8>>>>,
         recv: AsyncMutex<mpsc::UnboundedReceiver<Vec<u8>>>,
+        send_error: Mutex<Option<ProxyError>>,
+        close_count: AtomicUsize,
     }
 
     impl PacketSession for TestPacketSession {
         fn send_packet(&self, payload: Vec<u8>) -> BoxFuture<'_, ()> {
             let sent = Arc::clone(&self.sent);
+            let err = self
+                .send_error
+                .lock()
+                .expect("send error mutex should lock")
+                .take();
             Box::pin(async move {
+                if let Some(err) = err {
+                    return Err(err);
+                }
                 sent.lock().expect("sent mutex should lock").push(payload);
                 Ok(())
             })
@@ -321,16 +363,30 @@ mod tests {
                     .ok_or(ProxyError::Shutdown)
             })
         }
+
+        fn close(&self) -> BoxFuture<'_, ()> {
+            self.close_count.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async { Ok(()) })
+        }
     }
 
     struct RecordingWriter {
         sent: RecordedPacketWrites,
+        send_error: Mutex<Option<ProxyError>>,
     }
 
     impl PacketWriter for RecordingWriter {
         fn send_to(&self, peer: SocketAddr, payload: Vec<u8>) -> BoxFuture<'_, ()> {
             let sent = Arc::clone(&self.sent);
+            let err = self
+                .send_error
+                .lock()
+                .expect("writer error mutex should lock")
+                .take();
             Box::pin(async move {
+                if let Some(err) = err {
+                    return Err(err);
+                }
                 sent.lock()
                     .expect("writer mutex should lock")
                     .push((peer, payload));
@@ -411,6 +467,8 @@ mod tests {
         Arc::new(TestPacketSession {
             sent: Arc::new(Mutex::new(Vec::new())),
             recv: AsyncMutex::new(upstream_rx),
+            send_error: Mutex::new(None),
+            close_count: AtomicUsize::new(0),
         })
     }
 
@@ -435,6 +493,8 @@ mod tests {
         let session: PacketSessionHandle = Arc::new(TestPacketSession {
             sent: Arc::clone(&sent),
             recv: AsyncMutex::new(upstream_rx),
+            send_error: Mutex::new(None),
+            close_count: AtomicUsize::new(0),
         });
         let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
         let dispatcher = PacketDispatcher::with_idle_timeout(
@@ -444,6 +504,7 @@ mod tests {
         let writer_sent = Arc::new(Mutex::new(Vec::new()));
         let writer: Arc<dyn PacketWriter> = Arc::new(RecordingWriter {
             sent: Arc::clone(&writer_sent),
+            send_error: Mutex::new(None),
         });
         let metadata = PacketMetadata::new(
             "direct-in",
@@ -509,6 +570,16 @@ mod tests {
         let events = captured_events(&trace_buffer);
         assert_has_event(
             &events,
+            "packet_session_start",
+            &[
+                ("session_id", "1"),
+                ("inbound", "direct-in"),
+                ("network", "udp"),
+                ("level", "INFO"),
+            ],
+        );
+        assert_has_event(
+            &events,
             "route_select",
             &[
                 ("session_id", "1"),
@@ -537,23 +608,49 @@ mod tests {
                 ("level", "DEBUG"),
             ],
         );
+        assert_has_event(
+            &events,
+            "packet_forward_send",
+            &[
+                ("inbound", "direct-in"),
+                ("outbound", "direct"),
+                ("route_reason", "final"),
+                ("level", "DEBUG"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "packet_reverse_recv",
+            &[
+                ("inbound", "direct-in"),
+                ("outbound", "direct"),
+                ("route_reason", "final"),
+                ("level", "DEBUG"),
+            ],
+        );
     }
 
     #[tokio::test]
     async fn packet_dispatcher_closes_idle_association() {
         let (_guard, trace_buffer) = install_test_subscriber();
         let (_upstream_tx, upstream_rx) = mpsc::unbounded_channel();
-        let session: PacketSessionHandle = Arc::new(TestPacketSession {
+        let session = Arc::new(TestPacketSession {
             sent: Arc::new(Mutex::new(Vec::new())),
             recv: AsyncMutex::new(upstream_rx),
+            send_error: Mutex::new(None),
+            close_count: AtomicUsize::new(0),
         });
-        let outbound = Arc::new(TestDispatchOutbound::new("direct", session));
+        let outbound = Arc::new(TestDispatchOutbound::new(
+            "direct",
+            session.clone() as PacketSessionHandle,
+        ));
         let dispatcher = PacketDispatcher::with_idle_timeout(
             finalized_catalog(outbound as Arc<dyn ExecutionOutbound>),
             Duration::from_millis(50),
         );
         let writer: Arc<dyn PacketWriter> = Arc::new(RecordingWriter {
             sent: Arc::new(Mutex::new(Vec::new())),
+            send_error: Mutex::new(None),
         });
 
         dispatcher
@@ -589,8 +686,24 @@ mod tests {
             .await
             .expect("packet should dispatch");
         tokio::time::sleep(Duration::from_millis(120)).await;
+        assert_eq!(session.close_count.load(Ordering::Relaxed), 1);
+        assert_eq!(dispatcher.association_count(), 0);
 
         let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "packet_session_idle_reclaimed",
+            &[("route_reason", "final"), ("level", "INFO")],
+        );
+        assert_has_event(
+            &events,
+            "packet_session_closed",
+            &[
+                ("close_reason", "idle"),
+                ("route_reason", "final"),
+                ("level", "INFO"),
+            ],
+        );
         assert_has_event(
             &events,
             "packet_association_close",
@@ -615,6 +728,7 @@ mod tests {
         let writer_sent = Arc::new(Mutex::new(Vec::new()));
         let writer: Arc<dyn PacketWriter> = Arc::new(RecordingWriter {
             sent: Arc::clone(&writer_sent),
+            send_error: Mutex::new(None),
         });
 
         dispatcher
@@ -688,6 +802,337 @@ mod tests {
                 event.fields.get("event").map(String::as_str) == Some("packet_association_create")
             }),
             "dns hijack should not create a forward association: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn packet_dispatcher_shutdown_closes_active_associations() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let (_upstream_tx, upstream_rx) = mpsc::unbounded_channel();
+        let session = Arc::new(TestPacketSession {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            recv: AsyncMutex::new(upstream_rx),
+            send_error: Mutex::new(None),
+            close_count: AtomicUsize::new(0),
+        });
+        let outbound = Arc::new(TestDispatchOutbound::new(
+            "direct",
+            session.clone() as PacketSessionHandle,
+        ));
+        let dispatcher = PacketDispatcher::with_idle_timeout(
+            finalized_catalog(outbound as Arc<dyn ExecutionOutbound>),
+            Duration::from_secs(5),
+        );
+        let writer: Arc<dyn PacketWriter> = Arc::new(RecordingWriter {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            send_error: Mutex::new(None),
+        });
+
+        dispatcher
+            .dispatch_routed(RouteResult {
+                ctx: SessionContext::new(
+                    SessionMeta {
+                        id: 1,
+                        network: Network::Udp,
+                        inbound_tag: "direct-in".into(),
+                        peer: SocketAddr::from(([127, 0, 0, 1], 53011)),
+                        destination: Destination::new(
+                            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                            5353,
+                        ),
+                        start: std::time::Instant::now(),
+                    },
+                    Vec::new(),
+                ),
+                decision: RouteDecision::route("direct", RouteReason::Final),
+                input: PacketCarrier::new(
+                    PacketFrame::new(
+                        PacketMetadata::new(
+                            "direct-in",
+                            SocketAddr::from(([127, 0, 0, 1], 53011)),
+                            Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 5353),
+                            Network::Udp,
+                        ),
+                        b"ping".to_vec(),
+                    ),
+                    writer,
+                ),
+            })
+            .await
+            .expect("packet should dispatch");
+
+        dispatcher.shutdown().await;
+
+        assert_eq!(dispatcher.association_count(), 0);
+        assert_eq!(session.close_count.load(Ordering::Relaxed), 1);
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "packet_session_shutdown",
+            &[
+                ("shutdown_reason", "dispatcher_shutdown"),
+                ("route_reason", "final"),
+                ("level", "INFO"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "packet_session_closed",
+            &[
+                ("close_reason", "shutdown"),
+                ("route_reason", "final"),
+                ("level", "INFO"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn packet_dispatcher_forward_send_failure_shuts_down_association() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let (_upstream_tx, upstream_rx) = mpsc::unbounded_channel();
+        let session = Arc::new(TestPacketSession {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            recv: AsyncMutex::new(upstream_rx),
+            send_error: Mutex::new(Some(ProxyError::dial("udp send init failed"))),
+            close_count: AtomicUsize::new(0),
+        });
+        let outbound = Arc::new(TestDispatchOutbound::new(
+            "direct",
+            session.clone() as PacketSessionHandle,
+        ));
+        let dispatcher = PacketDispatcher::with_idle_timeout(
+            finalized_catalog(outbound as Arc<dyn ExecutionOutbound>),
+            Duration::from_secs(5),
+        );
+        let writer: Arc<dyn PacketWriter> = Arc::new(RecordingWriter {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            send_error: Mutex::new(None),
+        });
+
+        let err = dispatcher
+            .dispatch_routed(RouteResult {
+                ctx: SessionContext::new(
+                    SessionMeta {
+                        id: 1,
+                        network: Network::Udp,
+                        inbound_tag: "direct-in".into(),
+                        peer: SocketAddr::from(([127, 0, 0, 1], 53012)),
+                        destination: Destination::new(
+                            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                            5353,
+                        ),
+                        start: std::time::Instant::now(),
+                    },
+                    Vec::new(),
+                ),
+                decision: RouteDecision::route("direct", RouteReason::Final),
+                input: PacketCarrier::new(
+                    PacketFrame::new(
+                        PacketMetadata::new(
+                            "direct-in",
+                            SocketAddr::from(([127, 0, 0, 1], 53012)),
+                            Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 5353),
+                            Network::Udp,
+                        ),
+                        b"ping".to_vec(),
+                    ),
+                    writer,
+                ),
+            })
+            .await
+            .expect_err("forward send failure should surface");
+        assert_eq!(err.kind(), veex_core::ErrorKind::Dial);
+
+        wait_for(|| {
+            dispatcher.association_count() == 0 && session.close_count.load(Ordering::Relaxed) == 1
+        })
+        .await;
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "packet_forward_failed",
+            &[
+                ("route_reason", "final"),
+                ("error_kind", "dial"),
+                ("level", "WARN"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "packet_session_shutdown",
+            &[
+                ("shutdown_reason", "forward_error"),
+                ("route_reason", "final"),
+                ("level", "INFO"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "packet_session_closed",
+            &[
+                ("close_reason", "shutdown"),
+                ("route_reason", "final"),
+                ("level", "INFO"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn packet_dispatcher_reverse_failure_does_not_leak_association() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let (upstream_tx, upstream_rx) = mpsc::unbounded_channel();
+        let session = Arc::new(TestPacketSession {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            recv: AsyncMutex::new(upstream_rx),
+            send_error: Mutex::new(None),
+            close_count: AtomicUsize::new(0),
+        });
+        let outbound = Arc::new(TestDispatchOutbound::new(
+            "direct",
+            session.clone() as PacketSessionHandle,
+        ));
+        let dispatcher = PacketDispatcher::with_idle_timeout(
+            finalized_catalog(outbound as Arc<dyn ExecutionOutbound>),
+            Duration::from_secs(5),
+        );
+        let writer: Arc<dyn PacketWriter> = Arc::new(RecordingWriter {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            send_error: Mutex::new(Some(ProxyError::from(std::io::Error::other(
+                "client socket closed",
+            )))),
+        });
+
+        dispatcher
+            .dispatch_routed(RouteResult {
+                ctx: SessionContext::new(
+                    SessionMeta {
+                        id: 1,
+                        network: Network::Udp,
+                        inbound_tag: "direct-in".into(),
+                        peer: SocketAddr::from(([127, 0, 0, 1], 53013)),
+                        destination: Destination::new(
+                            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                            5353,
+                        ),
+                        start: std::time::Instant::now(),
+                    },
+                    Vec::new(),
+                ),
+                decision: RouteDecision::route("direct", RouteReason::Final),
+                input: PacketCarrier::new(
+                    PacketFrame::new(
+                        PacketMetadata::new(
+                            "direct-in",
+                            SocketAddr::from(([127, 0, 0, 1], 53013)),
+                            Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 5353),
+                            Network::Udp,
+                        ),
+                        b"ping".to_vec(),
+                    ),
+                    writer,
+                ),
+            })
+            .await
+            .expect("packet should dispatch");
+
+        upstream_tx
+            .send(b"pong".to_vec())
+            .expect("upstream payload should enqueue");
+        wait_for(|| {
+            dispatcher.association_count() == 0 && session.close_count.load(Ordering::Relaxed) == 1
+        })
+        .await;
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "packet_reverse_recv",
+            &[("route_reason", "final"), ("level", "DEBUG")],
+        );
+        assert_has_event(
+            &events,
+            "packet_reverse_failed",
+            &[
+                ("failure_stage", "write_back"),
+                ("error_kind", "io"),
+                ("level", "WARN"),
+            ],
+        );
+        assert_has_event(
+            &events,
+            "packet_session_closed",
+            &[
+                ("close_reason", "client_write_error"),
+                ("error_kind", "io"),
+                ("level", "WARN"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn packet_dispatcher_hijack_dns_without_executor_is_a_config_error() {
+        let (_guard, trace_buffer) = install_test_subscriber();
+        let dispatcher = PacketDispatcher::with_dns_executor(empty_catalog(), None);
+        let writer: Arc<dyn PacketWriter> = Arc::new(RecordingWriter {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            send_error: Mutex::new(None),
+        });
+
+        let err = dispatcher
+            .dispatch_routed(RouteResult {
+                ctx: SessionContext::new(
+                    SessionMeta {
+                        id: 1,
+                        network: Network::Udp,
+                        inbound_tag: "dns-in".into(),
+                        peer: SocketAddr::from(([127, 0, 0, 1], 53054)),
+                        destination: Destination::new(
+                            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                            53,
+                        ),
+                        start: std::time::Instant::now(),
+                    },
+                    Vec::new(),
+                ),
+                decision: RouteDecision {
+                    final_action: RouteFinalAction::HijackDns,
+                    reason: RouteReason::Rule,
+                },
+                input: PacketCarrier::new(
+                    PacketFrame::new(
+                        PacketMetadata::new(
+                            "dns-in",
+                            SocketAddr::from(([127, 0, 0, 1], 53054)),
+                            Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
+                            Network::Udp,
+                        ),
+                        b"dns-query".to_vec(),
+                    ),
+                    writer,
+                ),
+            })
+            .await
+            .expect_err("dns hijack without executor should fail");
+        assert_eq!(err.kind(), veex_core::ErrorKind::Config);
+        assert_eq!(dispatcher.association_count(), 0);
+
+        let events = captured_events(&trace_buffer);
+        assert_has_event(
+            &events,
+            "packet_session_start",
+            &[
+                ("session_id", "1"),
+                ("inbound", "dns-in"),
+                ("level", "INFO"),
+            ],
+        );
+        assert!(
+            !events.iter().any(|event| {
+                event.fields.get("event").map(String::as_str) == Some("packet_association_create")
+            }),
+            "failed hijack should not create packet associations: {events:?}"
         );
     }
 

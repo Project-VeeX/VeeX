@@ -16,6 +16,7 @@ use crate::factory::{
 pub struct RuntimeState {
     pub inbounds: Vec<Arc<dyn Inbound>>,
     pub outbounds: Arc<RuntimeOutbounds>,
+    pub packet_executor: Arc<PacketDispatcher>,
 }
 
 #[derive(Debug, Error)]
@@ -57,14 +58,17 @@ pub fn build_runtime_state(config: &ProxyConfig) -> Result<RuntimeState, Bootstr
     ));
     let stream_sink: Arc<dyn StreamDispatch> =
         Arc::new(RoutedStreamDispatch::new(router.clone(), stream_executor));
-    let packet_sink: Arc<dyn PacketDispatch> =
-        Arc::new(RoutedPacketDispatch::new(router, packet_executor));
+    let packet_sink: Arc<dyn PacketDispatch> = Arc::new(RoutedPacketDispatch::new(
+        router,
+        Arc::clone(&packet_executor),
+    ));
     let inbounds =
         build_inbounds(config, stream_sink, packet_sink).map_err(BootstrapError::InboundBuild)?;
 
     Ok(RuntimeState {
         inbounds,
         outbounds,
+        packet_executor,
     })
 }
 

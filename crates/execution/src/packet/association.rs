@@ -41,6 +41,12 @@ pub(crate) enum PacketAssociationCloseReason {
     Shutdown,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PacketSessionShutdownReason {
+    ForwardError,
+    DispatcherShutdown,
+}
+
 #[derive(Clone, Debug)]
 struct PacketAssociationTrace {
     association_id: u64,
@@ -89,12 +95,26 @@ impl PacketAssociation {
     }
 
     pub(crate) async fn send(&self, payload: Vec<u8>) -> veex_core::Result<()> {
+        let payload_len = payload.len();
+        if self.is_closed() {
+            let err = ProxyError::Shutdown;
+            log_packet_forward_failed(self, payload_len, &err);
+            return Err(err);
+        }
+
         self.touch();
         let result = self.session.send_packet(payload).await;
-        if result.is_ok() {
-            self.touch();
+        match result {
+            Ok(()) => {
+                self.touch();
+                log_packet_forward_send(self, payload_len);
+                Ok(())
+            }
+            Err(err) => {
+                log_packet_forward_failed(self, payload_len, &err);
+                Err(err)
+            }
         }
-        result
     }
 
     pub(crate) async fn run_reverse_loop(
@@ -122,16 +142,21 @@ impl PacketAssociation {
                     match recv_result {
                         Ok(payload) => {
                             self.touch();
-                            log_packet_reverse(self, payload.len());
+                            log_packet_reverse_recv(self, payload.len());
                             if let Err(err) = self.writer.send_to(self.key.peer, payload).await {
+                                log_packet_reverse_failed(self, "write_back", &err);
                                 return PacketAssociationCloseReason::ClientWriteError(err);
                             }
                         }
-                        Err(err) => return PacketAssociationCloseReason::UpstreamError(err),
+                        Err(err) => {
+                            log_packet_reverse_failed(self, "upstream_recv", &err);
+                            return PacketAssociationCloseReason::UpstreamError(err);
+                        }
                     }
                 }
                 _ = &mut idle_wait => {
                     if self.is_idle(idle_timeout) {
+                        log_packet_session_idle_reclaimed(self, idle_timeout);
                         return PacketAssociationCloseReason::Idle;
                     }
                 }
@@ -139,8 +164,11 @@ impl PacketAssociation {
         }
     }
 
-    pub(crate) fn shutdown(&self) {
-        self.closed.store(true, Ordering::Relaxed);
+    pub(crate) fn shutdown(&self, reason: PacketSessionShutdownReason) {
+        if self.closed.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        log_packet_session_shutdown(self, reason);
         self.close_notify.notify_waiters();
     }
 
@@ -286,16 +314,158 @@ fn log_packet_association_create(association: &PacketAssociation) {
     );
 }
 
-fn log_packet_reverse(association: &PacketAssociation, payload_len: usize) {
+fn log_packet_forward_send(association: &PacketAssociation, payload_len: usize) {
     let trace = PacketAssociationTrace::from_association(association);
     debug!(
-        event = "packet_reverse_write",
+        event = "packet_forward_send",
         association_id = trace.association_id,
         inbound = %trace.inbound_field,
         outbound = %trace.outbound_field,
         peer = %trace.peer_field,
         destination = %trace.destination_field,
+        route_reason = %trace.route_reason.as_str(),
         payload_len = payload_len as u64,
-        "packet reverse write"
+        "packet forwarded to outbound session"
     );
+}
+
+fn log_packet_forward_failed(
+    association: &PacketAssociation,
+    payload_len: usize,
+    err: &ProxyError,
+) {
+    let trace = PacketAssociationTrace::from_association(association);
+    warn!(
+        event = "packet_forward_failed",
+        association_id = trace.association_id,
+        inbound = %trace.inbound_field,
+        outbound = %trace.outbound_field,
+        peer = %trace.peer_field,
+        destination = %trace.destination_field,
+        route_reason = %trace.route_reason.as_str(),
+        payload_len = payload_len as u64,
+        error_kind = ?err.kind(),
+        error = %err,
+        "packet forward send failed"
+    );
+}
+
+fn log_packet_reverse_recv(association: &PacketAssociation, payload_len: usize) {
+    let trace = PacketAssociationTrace::from_association(association);
+    debug!(
+        event = "packet_reverse_recv",
+        association_id = trace.association_id,
+        inbound = %trace.inbound_field,
+        outbound = %trace.outbound_field,
+        peer = %trace.peer_field,
+        destination = %trace.destination_field,
+        route_reason = %trace.route_reason.as_str(),
+        payload_len = payload_len as u64,
+        "packet reverse packet received"
+    );
+}
+
+fn log_packet_reverse_failed(
+    association: &PacketAssociation,
+    failure_stage: &str,
+    err: &ProxyError,
+) {
+    let trace = PacketAssociationTrace::from_association(association);
+    warn!(
+        event = "packet_reverse_failed",
+        association_id = trace.association_id,
+        inbound = %trace.inbound_field,
+        outbound = %trace.outbound_field,
+        peer = %trace.peer_field,
+        destination = %trace.destination_field,
+        route_reason = %trace.route_reason.as_str(),
+        failure_stage = failure_stage,
+        error_kind = ?err.kind(),
+        error = %err,
+        "packet reverse path failed"
+    );
+}
+
+fn log_packet_session_idle_reclaimed(association: &PacketAssociation, idle_timeout: Duration) {
+    let trace = PacketAssociationTrace::from_association(association);
+    info!(
+        event = "packet_session_idle_reclaimed",
+        association_id = trace.association_id,
+        inbound = %trace.inbound_field,
+        outbound = %trace.outbound_field,
+        peer = %trace.peer_field,
+        destination = %trace.destination_field,
+        route_reason = %trace.route_reason.as_str(),
+        idle_timeout_ms = idle_timeout.as_millis() as u64,
+        "packet session reclaimed after idle timeout"
+    );
+}
+
+fn log_packet_session_shutdown(
+    association: &PacketAssociation,
+    reason: PacketSessionShutdownReason,
+) {
+    let trace = PacketAssociationTrace::from_association(association);
+    info!(
+        event = "packet_session_shutdown",
+        association_id = trace.association_id,
+        inbound = %trace.inbound_field,
+        outbound = %trace.outbound_field,
+        peer = %trace.peer_field,
+        destination = %trace.destination_field,
+        route_reason = %trace.route_reason.as_str(),
+        shutdown_reason = reason.label(),
+        "packet session shutdown requested"
+    );
+}
+
+fn log_packet_session_closed(
+    association: &PacketAssociation,
+    close_reason: &PacketAssociationCloseReason,
+) {
+    let trace = PacketAssociationTrace::from_association(association);
+    if let Some(err) = close_reason.error() {
+        warn!(
+            event = "packet_session_closed",
+            association_id = trace.association_id,
+            inbound = %trace.inbound_field,
+            outbound = %trace.outbound_field,
+            peer = %trace.peer_field,
+            destination = %trace.destination_field,
+            close_reason = close_reason.label(),
+            route_reason = %trace.route_reason.as_str(),
+            error_kind = ?err.kind(),
+            error = %err,
+            "packet session closed"
+        );
+    } else {
+        info!(
+            event = "packet_session_closed",
+            association_id = trace.association_id,
+            inbound = %trace.inbound_field,
+            outbound = %trace.outbound_field,
+            peer = %trace.peer_field,
+            destination = %trace.destination_field,
+            close_reason = close_reason.label(),
+            route_reason = %trace.route_reason.as_str(),
+            "packet session closed"
+        );
+    }
+}
+
+impl PacketSessionShutdownReason {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ForwardError => "forward_error",
+            Self::DispatcherShutdown => "dispatcher_shutdown",
+        }
+    }
+}
+
+pub(crate) fn log_packet_session_close(
+    association: &PacketAssociation,
+    close_reason: &PacketAssociationCloseReason,
+) {
+    log_packet_session_closed(association, close_reason);
+    log_packet_association_close(association, close_reason);
 }

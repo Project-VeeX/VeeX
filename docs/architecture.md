@@ -111,14 +111,23 @@ inbound handoff
 The current packet path is:
 
 ```text
-packet ingress
+first packet
 -> PacketDispatch
 -> Router
+-> association create
 -> selected outbound packet session
 -> association-managed reverse flow
+-> idle reclaim or runtime shutdown
 ```
 
 These two execution paths are peers. VeeX does not collapse them into a single TCP/UDP abstraction, and documentation should not describe one of them as architecturally subordinate to the other.
+
+Packet execution keeps its own lifecycle semantics:
+
+- the first packet owns route selection and association creation
+- the association owns packet-session state, outbound packet binding, and reverse-path lifetime
+- subsequent packets with the same association key bypass routing and stay on the existing association
+- reverse-path exit, idle reclaim, and runtime shutdown are all close paths, but they remain distinct lifecycle reasons
 
 ## 5. Transport
 

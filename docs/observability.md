@@ -60,6 +60,7 @@ The public baseline centers on these event families:
 
 - runtime lifecycle events
 - session lifecycle events
+- packet session lifecycle events
 - route-selection events
 - connect and TLS events
 - protocol-setup events
@@ -85,6 +86,14 @@ Representative event names include:
 - `protocol_handshake_start`
 - `protocol_handshake_success`
 - `protocol_handshake_failed`
+- `packet_session_start`
+- `packet_forward_send`
+- `packet_forward_failed`
+- `packet_reverse_recv`
+- `packet_reverse_failed`
+- `packet_session_idle_reclaimed`
+- `packet_session_shutdown`
+- `packet_session_closed`
 - `sniff_start`
 - `sniff_success`
 - `sniff_timeout`
@@ -110,6 +119,13 @@ Operators and integrators should expect the core event model to preserve stable 
 - `duration_ms`
 - `bytes_up`
 - `bytes_down`
+
+Packet lifecycle events also preserve packet-path fields such as:
+
+- `association_id`
+- `close_reason`
+- `shutdown_reason`
+- `payload_len`
 
 For route-rule explainability, debug-level routing events also preserve fields such as:
 

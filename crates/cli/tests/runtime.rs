@@ -255,6 +255,24 @@ async fn runtime_supports_direct_udp_to_direct_udp_round_trip() {
             ("level", "INFO"),
         ],
     );
+    assert_has_event(
+        &events,
+        "packet_session_shutdown",
+        &[
+            ("inbound", "direct-udp-in"),
+            ("shutdown_reason", "dispatcher_shutdown"),
+            ("level", "INFO"),
+        ],
+    );
+    assert_has_event(
+        &events,
+        "packet_session_closed",
+        &[
+            ("inbound", "direct-udp-in"),
+            ("close_reason", "shutdown"),
+            ("level", "INFO"),
+        ],
+    );
 }
 
 #[tokio::test]
