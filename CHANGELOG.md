@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0
+
+- Closed the current DNS runtime around explicit dial-side resolver semantics, in-memory response cache, per-rule cache bypass, and concurrent safe-upstream exchange, while keeping resolver priority, safe selection, and recursion-guard behavior explicit and unchanged. FakeDNS, fake-ip mapping, and stale/optimistic cache remain out of scope.
+- Locked outbound stage ownership and timeout semantics around the shared `resolve -> connect -> (tls) -> (protocol) -> relay` chain, including clearer `domain_resolver` behavior for outbound and DNS upstream dialing and stronger stage-specific observability for connect, TLS, and protocol setup.
+- Locked packet and relay lifecycle semantics without widening the supported surface: packet associations now have a clearer first-packet route / reverse-path / idle-reclaim model, and relay finish, half-close, shutdown, and failure accounting are more explicit and better traced.
+- Added structured `veex version` build/version reporting, moved the workspace to Rust 2024 edition, and aligned docs, examples, and internal DNS module layout with the now-closed runtime semantics.
+
 ## 0.6.7
 
 - Extracted routing into the dedicated `veex-router` crate and finished closing the `config -> router -> execution` boundary around an ordered upgrade/final pipeline that returns a stable `RouteResult<...>` handoff.
