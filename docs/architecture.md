@@ -373,6 +373,8 @@ Its current roles are:
 - resolve outbound domain names through a controlled resolver path
 - select DNS upstreams through a DNS-specific router
 - reach upstream servers through outbound detour capability
+- apply in-memory response cache at the DNS runtime layer
+- run single or concurrent upstream exchange after server selection
 
 For dial-side resolution, the current upstream selection order is:
 
@@ -386,6 +388,16 @@ The current safety guard is explicit and narrow:
 - do not reuse the caller outbound as the DNS server detour
 - do not recurse back into the caller DNS server tag
 - keep recursion bounded by resolver-depth checks
+
+The current DNS runtime closure keeps cache and concurrency inside the existing execution boundary:
+
+- router still selects DNS server candidates and does not become a cache or policy engine
+- cache lookup happens after server selection and before upstream exchange
+- cache key is scoped by normalized query name, query type, and the selected candidate-set context
+- only successful responses with a usable TTL are cached; negative and stale/expired responses are not reused
+- concurrent upstream exchange chooses the first usable success from the selected candidate set and cancels or ignores losers
+- explicit `domain_resolver`, safe `dns.final`, and safe default fallback semantics remain unchanged
+- FakeDNS, fake-ip reverse mapping, persistent cache, and optimistic/stale cache are not part of the current architecture
 
 Current dial-side resolution failures stay inside the existing runtime error model, including:
 

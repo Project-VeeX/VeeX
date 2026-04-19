@@ -6,11 +6,20 @@
   },
   "dns": {
     "final": "direct-dns",
+    "disable_cache": false,
+    "cache_capacity": 2048,
     "servers": [
       {
         "tag": "direct-dns",
         "type": "udp",
         "server": "223.5.5.5",
+        "server_port": 53,
+        "detour": "direct"
+      },
+      {
+        "tag": "backup-dns",
+        "type": "udp",
+        "server": "1.1.1.1",
         "server_port": 53,
         "detour": "direct"
       }
@@ -21,7 +30,9 @@
           "trojan.example.com"
         ],
         "server": "direct-dns",
-        "action": "route"
+        "action": {
+          "disable_cache": true
+        }
       }
     ]
   },

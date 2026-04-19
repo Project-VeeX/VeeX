@@ -62,6 +62,8 @@ The public baseline centers on these event families:
 - session lifecycle events
 - packet session lifecycle events
 - route-selection events
+- dns cache events
+- dns upstream exchange events
 - connect and TLS events
 - protocol-setup events
 - sniff diagnostic events
@@ -78,6 +80,18 @@ Representative event names include:
 - `route_upgrade_applied`
 - `route_final_selected`
 - `route_default_final_selected`
+- `dns_cache_lookup`
+- `dns_cache_hit`
+- `dns_cache_miss`
+- `dns_cache_expired`
+- `dns_cache_bypass`
+- `dns_cache_store`
+- `dns_upstream_query_start`
+- `dns_upstream_query_won`
+- `dns_upstream_query_cancelled`
+- `dns_upstream_query_failed`
+- `dns_query_finish`
+- `dns_query_failed`
 - `tcp_connect_attempt`
 - `tcp_connect_success`
 - `tcp_connect_failed`
@@ -110,6 +124,14 @@ Representative event names include:
 - `transparent_socket_config`
 
 The exact set may evolve, but the event families and their operational purpose should remain stable.
+
+For DNS specifically, operators should be able to distinguish:
+
+- cache lookup outcomes from upstream failures
+- concurrent winner selection from loser cancellation
+- dial-side resolve usability failures from raw exchange or transport failures
+
+The current DNS observability surface still does not imply FakeDNS, optimistic/stale cache, or a separate tracing abstraction layer.
 
 ## 6. Stable Diagnostic Fields
 

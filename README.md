@@ -15,6 +15,8 @@
 - DNS:
   - internal DNS executor with `local`, `UDP`, `TCP`, `TLS`, and `HTTPS` upstream support
   - owns both hijacked client query handling and dial-side domain resolution
+  - runtime response cache, per-rule cache bypass, and concurrent safe-upstream exchange
+  - does not include FakeDNS, fake-ip mapping, or stale/optimistic cache
 - CLI: `veex run`, `veex check`, `veex version`
 
 ## Scope
@@ -30,6 +32,13 @@ first packet -> association create -> route decision -> outbound packet session 
 The first packet determines the route and creates the association. Subsequent packets reuse that association until the reverse path exits, the association is reclaimed for idleness, or runtime shutdown closes active packet sessions.
 
 When outbound or DNS upstream dialing needs domain resolution, VeeX uses the DNS subsystem's controlled resolver path. `domain_resolver` selects an explicit DNS server when configured; otherwise dial-side resolution falls back through safe DNS server selection rather than hidden transport-side policy.
+
+The current DNS runtime closure stays intentionally narrow:
+
+- response cache is a DNS runtime capability, not a new routing or policy layer
+- concurrent upstream query is an exchange strategy over the router-selected candidate set
+- cache lookup happens before upstream exchange, and only successful responses write back
+- FakeDNS, fake-ip reverse mapping, and optimistic/stale cache remain out of scope
 
 Outbound stream execution follows one shared chain:
 
