@@ -1,10 +1,10 @@
 use veex_core::{ProxyError, Result, types::Destination};
-use veex_transport::TlsClientOptions;
+use veex_transport::OutboundTls;
 
 pub(crate) fn validate_trojan_client(
     tag: &str,
     upstream_addr: &Destination,
-    tls: &TlsClientOptions,
+    tls: &OutboundTls,
 ) -> Result<()> {
     if tag.trim().is_empty() {
         return Err(ProxyError::Config(

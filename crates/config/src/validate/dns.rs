@@ -80,13 +80,16 @@ fn validate_dns_server(
         ));
     }
 
-    if !server.detour.trim().is_empty() && !outbound_tags.contains(&server.detour) {
+    if let Some(detour) = server
+        .dial
+        .detour
+        .as_deref()
+        .filter(|detour| !detour.trim().is_empty())
+        && !outbound_tags.contains(detour)
+    {
         return Err(ConfigError::semantic(
             format!("$.dns.servers[{index}].detour"),
-            format!(
-                "dns server detour points to missing outbound '{}'",
-                server.detour
-            ),
+            format!("dns server detour points to missing outbound '{detour}'"),
         ));
     }
 

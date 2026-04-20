@@ -22,7 +22,7 @@ use veex_core::{
 use veex_portal_outbound::trojan::{
     TrojanOutbound, build_dialer, build_trojan_request, system_host_resolver,
 };
-use veex_transport::TlsClientOptions;
+use veex_transport::OutboundTls;
 
 #[tokio::test]
 async fn trojan_outbound_connects_and_writes_request() {
@@ -44,11 +44,11 @@ async fn trojan_outbound_connects_and_writes_request() {
             server.addr.port(),
         ),
         "secret",
-        TlsClientOptions {
+        OutboundTls {
             enabled: true,
             insecure: true,
             server_name: Some("localhost".into()),
-            ..TlsClientOptions::default()
+            ..OutboundTls::default()
         },
     )
     .expect("trojan outbound should build");

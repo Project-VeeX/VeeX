@@ -1,13 +1,12 @@
 use crate::{
-    defaults::DEFAULT_CONNECT_TIMEOUT,
     error::ConfigError,
     input::{InputOutbound, InputOutboundType},
     schema::{DirectOutboundConfig, OutboundConfig, TrojanOutboundConfig},
 };
 
 use super::shared::{
-    input_trojan_tls_into_config, input_trojan_tls_or_default, optional_domain_resolver,
-    required_nested_port, required_nested_string,
+    dial_fields, input_tls_fields_into_config, input_tls_fields_or_default, required_nested_port,
+    required_nested_string,
 };
 
 pub(crate) fn input_outbound_into_config(
@@ -17,11 +16,10 @@ pub(crate) fn input_outbound_into_config(
     match input_config.kind {
         InputOutboundType::Direct => Ok(OutboundConfig::Direct(DirectOutboundConfig {
             tag: input_config.tag,
-            connect_timeout: input_config
-                .connect_timeout
-                .unwrap_or(DEFAULT_CONNECT_TIMEOUT),
-            routing_mark: input_config.routing_mark,
-            domain_resolver: optional_domain_resolver(
+            dial: dial_fields(
+                None,
+                input_config.connect_timeout,
+                input_config.routing_mark,
                 input_config.domain_resolver,
                 format!("$.outbounds[{index}].domain_resolver"),
             )?,
@@ -40,14 +38,14 @@ pub(crate) fn input_outbound_into_config(
                 input_config.password,
                 format!("$.outbounds[{index}].password"),
             )?,
-            connect_timeout: input_config
-                .connect_timeout
-                .unwrap_or(DEFAULT_CONNECT_TIMEOUT),
-            domain_resolver: optional_domain_resolver(
+            dial: dial_fields(
+                None,
+                input_config.connect_timeout,
+                input_config.routing_mark,
                 input_config.domain_resolver,
                 format!("$.outbounds[{index}].domain_resolver"),
             )?,
-            tls: input_trojan_tls_into_config(input_trojan_tls_or_default(
+            tls: input_tls_fields_into_config(input_tls_fields_or_default(
                 input_config.tls,
                 format!("$.outbounds[{index}].tls"),
             )?),

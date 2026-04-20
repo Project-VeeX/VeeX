@@ -21,11 +21,11 @@ use tokio::{
 use tokio_rustls::TlsAcceptor;
 use veex_cli::runtime::{RuntimeError, run_with_shutdown};
 use veex_config::{
-    DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT, DirectInboundConfig,
+    DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT, DialFields, DirectInboundConfig,
     DirectOutboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig, DnsServerTypeConfig,
-    DomainResolverConfig, InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteActionConfig,
-    RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig, SocksInboundConfig,
-    TrojanOutboundConfig, TrojanTlsConfig,
+    DomainResolverConfig, InboundConfig, ListenFields, LogConfig, OutboundConfig, ProxyConfig,
+    RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig,
+    SocksInboundConfig, TlsFields, TrojanOutboundConfig,
 };
 use veex_core::{
     ErrorKind,
@@ -115,14 +115,11 @@ async fn runtime_supports_socks_to_direct_round_trip() {
         dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: socks_addr.port(),
+            listen: ListenFields::new("127.0.0.1", socks_addr.port()),
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            routing_mark: None,
-            domain_resolver: None,
+            dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -186,17 +183,14 @@ async fn runtime_supports_direct_udp_to_direct_udp_round_trip() {
         dns: None,
         inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
             tag: "direct-udp-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: inbound_addr.port(),
+            listen: ListenFields::new("127.0.0.1", inbound_addr.port()),
             network: Some("udp".into()),
             override_address: Some("127.0.0.1".into()),
             override_port: Some(echo_addr.port()),
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            routing_mark: None,
-            domain_resolver: None,
+            dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -342,8 +336,10 @@ async fn runtime_uses_explicit_domain_resolver_for_trojan_server_dial() {
                     server_port: bootstrap_addr.port(),
                     path: None,
                     headers: BTreeMap::new(),
-                    detour: "direct".into(),
-                    domain_resolver: None,
+                    dial: DialFields {
+                        detour: Some("direct".into()),
+                        ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                    },
                     tls: dns_server_tls_config(DnsUpstreamTransport::Udp),
                 },
                 DnsServerConfig {
@@ -353,8 +349,10 @@ async fn runtime_uses_explicit_domain_resolver_for_trojan_server_dial() {
                     server_port: misroute_addr.port(),
                     path: None,
                     headers: BTreeMap::new(),
-                    detour: "direct".into(),
-                    domain_resolver: None,
+                    dial: DialFields {
+                        detour: Some("direct".into()),
+                        ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                    },
                     tls: dns_server_tls_config(DnsUpstreamTransport::Udp),
                 },
             ],
@@ -366,26 +364,25 @@ async fn runtime_uses_explicit_domain_resolver_for_trojan_server_dial() {
         }),
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: socks_addr.port(),
+            listen: ListenFields::new("127.0.0.1", socks_addr.port()),
         })],
         outbounds: vec![
             OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                routing_mark: None,
-                domain_resolver: None,
+                dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
             }),
             OutboundConfig::Trojan(TrojanOutboundConfig {
                 tag: "proxy".into(),
                 server: "trojan-bootstrap.test".into(),
                 server_port: trojan_server.addr.port(),
                 password: "secret".into(),
-                domain_resolver: Some(DomainResolverConfig {
-                    server: "direct-dns".into(),
-                }),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                tls: TrojanTlsConfig {
+                dial: DialFields {
+                    domain_resolver: Some(DomainResolverConfig {
+                        server: "direct-dns".into(),
+                    }),
+                    ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                },
+                tls: TlsFields {
                     enabled: true,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
@@ -489,24 +486,20 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
         dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: socks_addr.port(),
+            listen: ListenFields::new("127.0.0.1", socks_addr.port()),
         })],
         outbounds: vec![
             OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                routing_mark: None,
-                domain_resolver: None,
+                dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
             }),
             OutboundConfig::Trojan(TrojanOutboundConfig {
                 tag: "proxy".into(),
                 server: "127.0.0.1".into(),
                 server_port: trojan_server.addr.port(),
                 password: "secret".into(),
-                domain_resolver: None,
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                tls: TrojanTlsConfig {
+                dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
+                tls: TlsFields {
                     enabled: true,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
@@ -659,24 +652,20 @@ async fn runtime_supports_socks_domain_route_rule_to_trojan() {
         dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: socks_addr.port(),
+            listen: ListenFields::new("127.0.0.1", socks_addr.port()),
         })],
         outbounds: vec![
             OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                routing_mark: None,
-                domain_resolver: None,
+                dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
             }),
             OutboundConfig::Trojan(TrojanOutboundConfig {
                 tag: "proxy".into(),
                 server: "127.0.0.1".into(),
                 server_port: trojan_server.addr.port(),
                 password: "secret".into(),
-                domain_resolver: None,
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                tls: TrojanTlsConfig {
+                dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
+                tls: TlsFields {
                     enabled: true,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
@@ -756,24 +745,20 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
         dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: socks_addr.port(),
+            listen: ListenFields::new("127.0.0.1", socks_addr.port()),
         })],
         outbounds: vec![
             OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                routing_mark: None,
-                domain_resolver: None,
+                dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
             }),
             OutboundConfig::Trojan(TrojanOutboundConfig {
                 tag: "proxy".into(),
                 server: "127.0.0.1".into(),
                 server_port: trojan_server.addr.port(),
                 password: "wrong-secret".into(),
-                domain_resolver: None,
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                tls: TrojanTlsConfig {
+                dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
+                tls: TlsFields {
                     enabled: true,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
@@ -879,14 +864,11 @@ async fn runtime_reports_direct_failure_on_unreachable_target() {
         dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: socks_addr.port(),
+            listen: ListenFields::new("127.0.0.1", socks_addr.port()),
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            routing_mark: None,
-            domain_resolver: None,
+            dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -991,15 +973,12 @@ async fn runtime_starts_with_redirect_inbound() {
         inbounds: vec![InboundConfig::Redirect(
             veex_config::RedirectInboundConfig {
                 tag: "redirect-in".into(),
-                listen: "127.0.0.1".into(),
-                listen_port: redirect_addr.port(),
+                listen: ListenFields::new("127.0.0.1", redirect_addr.port()),
             },
         )],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            routing_mark: None,
-            domain_resolver: None,
+            dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -1055,14 +1034,11 @@ async fn runtime_reports_listener_bind_failure_with_io_error_kind() {
         dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: occupied_addr.port(),
+            listen: ListenFields::new("127.0.0.1", occupied_addr.port()),
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            routing_mark: None,
-            domain_resolver: None,
+            dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -1131,14 +1107,11 @@ async fn runtime_emits_session_start_and_finish_events() {
         dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: socks_addr.port(),
+            listen: ListenFields::new("127.0.0.1", socks_addr.port()),
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            routing_mark: None,
-            domain_resolver: None,
+            dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -1266,14 +1239,11 @@ async fn invalid_socks_request_emits_handshake_failed_event() {
         dns: None,
         inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
             tag: "socks-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: socks_addr.port(),
+            listen: ListenFields::new("127.0.0.1", socks_addr.port()),
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            routing_mark: None,
-            domain_resolver: None,
+            dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -1612,8 +1582,10 @@ async fn assert_dns_hijack_round_trip(
                 server_port: upstream_addr.port(),
                 path: dns_server_path(upstream),
                 headers: dns_server_headers(upstream),
-                detour: "direct".into(),
-                domain_resolver: None,
+                dial: DialFields {
+                    detour: Some("direct".into()),
+                    ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                },
                 tls: dns_server_tls_config(upstream),
             }],
             rules: vec![DnsRuleConfig {
@@ -1624,17 +1596,14 @@ async fn assert_dns_hijack_round_trip(
         }),
         inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
             tag: "dns-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: inbound_addr.port(),
+            listen: ListenFields::new("127.0.0.1", inbound_addr.port()),
             network: Some(ingress.as_network().into()),
             override_address: None,
             override_port: None,
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            routing_mark: None,
-            domain_resolver: None,
+            dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -1824,10 +1793,13 @@ async fn assert_dns_upstream_self_resolution_round_trip(upstream: DnsUpstreamTra
                     server_port: upstream_addr.port(),
                     path: dns_server_path(upstream),
                     headers: dns_server_headers(upstream),
-                    detour: "direct".into(),
-                    domain_resolver: Some(DomainResolverConfig {
-                        server: "bootstrap".into(),
-                    }),
+                    dial: DialFields {
+                        detour: Some("direct".into()),
+                        domain_resolver: Some(DomainResolverConfig {
+                            server: "bootstrap".into(),
+                        }),
+                        ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                    },
                     tls: dns_server_tls_config(upstream),
                 },
                 DnsServerConfig {
@@ -1837,8 +1809,10 @@ async fn assert_dns_upstream_self_resolution_round_trip(upstream: DnsUpstreamTra
                     server_port: bootstrap_addr.port(),
                     path: None,
                     headers: BTreeMap::new(),
-                    detour: "direct".into(),
-                    domain_resolver: None,
+                    dial: DialFields {
+                        detour: Some("direct".into()),
+                        ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                    },
                     tls: dns_server_tls_config(DnsUpstreamTransport::Udp),
                 },
             ],
@@ -1850,17 +1824,14 @@ async fn assert_dns_upstream_self_resolution_round_trip(upstream: DnsUpstreamTra
         }),
         inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
             tag: "dns-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: inbound_addr.port(),
+            listen: ListenFields::new("127.0.0.1", inbound_addr.port()),
             network: Some("udp".into()),
             override_address: None,
             override_port: None,
         })],
         outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
             tag: "direct".into(),
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            routing_mark: None,
-            domain_resolver: None,
+            dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
         })],
         route: RouteConfig {
             final_outbound: "direct".into(),
@@ -2003,8 +1974,8 @@ async fn spawn_dns_upstream_server(
     }
 }
 
-fn dns_server_tls_config(upstream: DnsUpstreamTransport) -> TrojanTlsConfig {
-    TrojanTlsConfig {
+fn dns_server_tls_config(upstream: DnsUpstreamTransport) -> TlsFields {
+    TlsFields {
         enabled: true,
         server_name: match upstream {
             DnsUpstreamTransport::Tls | DnsUpstreamTransport::Https => Some("localhost".into()),

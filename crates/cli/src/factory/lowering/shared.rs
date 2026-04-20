@@ -1,11 +1,30 @@
 use std::{net::IpAddr, str::FromStr};
 
-use veex_config::TrojanTlsConfig;
-use veex_core::types::Host;
-use veex_transport::TlsClientOptions;
+use veex_config::{DialFields, ListenFields, TlsFields};
+use veex_core::{
+    portal::{Dial, Listen},
+    types::Host,
+};
+use veex_transport::OutboundTls;
 
-pub(super) fn lower_tls_options(config: &TrojanTlsConfig) -> TlsClientOptions {
-    TlsClientOptions {
+pub(super) fn lower_listen_fields(config: &ListenFields) -> Listen {
+    Listen::new(config.listen.clone(), config.listen_port)
+}
+
+pub(super) fn lower_dial_fields(config: &DialFields) -> Dial {
+    Dial {
+        detour: config.detour.clone(),
+        connect_timeout: Some(config.connect_timeout),
+        routing_mark: config.routing_mark,
+        domain_resolver: config
+            .domain_resolver
+            .as_ref()
+            .map(|resolver| resolver.server.clone()),
+    }
+}
+
+pub(super) fn lower_tls_fields(config: &TlsFields) -> OutboundTls {
+    OutboundTls {
         enabled: config.enabled,
         server_name: config.server_name.clone(),
         disable_sni: config.disable_sni,

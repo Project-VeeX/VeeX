@@ -1,3 +1,5 @@
+use super::shared::ListenFields;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InboundConfig {
     Direct(DirectInboundConfig),
@@ -17,8 +19,7 @@ pub enum InboundType {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectInboundConfig {
     pub tag: String,
-    pub listen: String,
-    pub listen_port: u16,
+    pub listen: ListenFields,
     pub network: Option<String>,
     pub override_address: Option<String>,
     pub override_port: Option<u16>,
@@ -27,22 +28,19 @@ pub struct DirectInboundConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SocksInboundConfig {
     pub tag: String,
-    pub listen: String,
-    pub listen_port: u16,
+    pub listen: ListenFields,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RedirectInboundConfig {
     pub tag: String,
-    pub listen: String,
-    pub listen_port: u16,
+    pub listen: ListenFields,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TProxyInboundConfig {
     pub tag: String,
-    pub listen: String,
-    pub listen_port: u16,
+    pub listen: ListenFields,
     pub network: Option<String>,
 }
 

@@ -28,7 +28,7 @@ use veex_portal_outbound::{
     },
 };
 use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
-use veex_transport::{HostResolveRequest, HostResolver, TlsClientOptions};
+use veex_transport::{HostResolveRequest, HostResolver, OutboundTls};
 
 fn capture_contexts(store: Arc<Mutex<Vec<ResolveContext>>>) -> Arc<HostResolver> {
     Arc::new(move |request: HostResolveRequest| {
@@ -191,11 +191,11 @@ fn trojan_outbound_for_test(
         build_trojan_dialer_with_connector(dial, resolver, connector),
         Destination::new(Host::Domain("proxy.example".into()), 443),
         "secret",
-        TlsClientOptions {
+        OutboundTls {
             enabled: true,
             insecure: true,
             server_name: Some("localhost".into()),
-            ..TlsClientOptions::default()
+            ..OutboundTls::default()
         },
     )
     .expect("trojan outbound should build")

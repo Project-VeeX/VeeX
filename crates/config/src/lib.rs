@@ -19,11 +19,11 @@ pub use parse::{
     parse_config_with_diagnostics,
 };
 pub use schema::{
-    DirectInboundConfig, DirectOutboundConfig, DnsConfig, DnsRuleConfig, DnsServerConfig,
-    DnsServerTypeConfig, DomainResolverConfig, InboundConfig, InboundType, LogConfig,
-    OutboundConfig, OutboundType, ProxyConfig, RedirectInboundConfig, RouteActionConfig,
-    RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig,
+    DialFields, DirectInboundConfig, DirectOutboundConfig, DnsConfig, DnsRuleConfig,
+    DnsServerConfig, DnsServerTypeConfig, DomainResolverConfig, InboundConfig, InboundType,
+    ListenFields, LogConfig, OutboundConfig, OutboundType, ProxyConfig, RedirectInboundConfig,
+    RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig,
     RouteUpgradeActionConfig, SniffActionConfig, SocksInboundConfig, TProxyInboundConfig,
-    TrojanOutboundConfig, TrojanTlsConfig,
+    TlsFields, TrojanOutboundConfig,
 };
 pub use validate::validate_config;

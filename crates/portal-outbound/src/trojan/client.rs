@@ -22,7 +22,7 @@ use veex_protocol::{
     adapter::{StreamAdapter, StreamParams},
     trojan::{TrojanStreamAdapter, validate_trojan_key},
 };
-use veex_transport::{ConnectTraceContext, TlsClientOptions, connect_tls};
+use veex_transport::{ConnectTraceContext, OutboundTls, connect_tls};
 
 use super::error::validate_trojan_client;
 
@@ -39,7 +39,7 @@ pub struct TrojanOutbound {
     dialer: Dialer,
     upstream_addr: UpstreamAddr,
     key: String,
-    tls: TlsClientOptions,
+    tls: OutboundTls,
     state: Arc<TrojanOutboundState>,
 }
 
@@ -63,7 +63,7 @@ impl TrojanOutbound {
         dialer: Dialer,
         upstream_addr: UpstreamAddr,
         key: impl Into<String>,
-        tls: TlsClientOptions,
+        tls: OutboundTls,
     ) -> Result<Self> {
         let key = key.into();
         let outbound = Self {
@@ -269,7 +269,7 @@ mod tests {
     use veex_test_tracing::{
         CapturedEvent, assert_has_event, captured_events, install_test_subscriber,
     };
-    use veex_transport::{HostResolveRequest, TlsClientOptions};
+    use veex_transport::{HostResolveRequest, OutboundTls};
 
     use super::super::build_trojan_request;
     use super::super::dialer::build_dialer_with_connector;
@@ -306,11 +306,11 @@ mod tests {
             dialer,
             Destination::new(Host::Domain("fallback.test".into()), server.addr.port()),
             "secret",
-            TlsClientOptions {
+            OutboundTls {
                 enabled: true,
                 insecure: true,
                 server_name: Some("localhost".into()),
-                ..TlsClientOptions::default()
+                ..OutboundTls::default()
             },
         )
         .expect("trojan outbound should build");
@@ -432,11 +432,11 @@ mod tests {
             dialer,
             Destination::new(Host::Domain("fallback.test".into()), 18443),
             "secret",
-            TlsClientOptions {
+            OutboundTls {
                 enabled: true,
                 insecure: true,
                 server_name: Some("localhost".into()),
-                ..TlsClientOptions::default()
+                ..OutboundTls::default()
             },
         )
         .expect("trojan outbound should build");
@@ -522,12 +522,12 @@ mod tests {
             ),
             Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), addr.port()),
             "secret",
-            TlsClientOptions {
+            OutboundTls {
                 enabled: true,
                 insecure: true,
                 server_name: Some("localhost".into()),
                 handshake_timeout: Duration::from_millis(50),
-                ..TlsClientOptions::default()
+                ..OutboundTls::default()
             },
         )
         .expect("trojan outbound should build");
@@ -600,11 +600,11 @@ mod tests {
                 server.addr.port(),
             ),
             "secret",
-            TlsClientOptions {
+            OutboundTls {
                 enabled: true,
                 insecure: true,
                 server_name: Some("localhost".into()),
-                ..TlsClientOptions::default()
+                ..OutboundTls::default()
             },
         )
         .expect("trojan outbound should build");

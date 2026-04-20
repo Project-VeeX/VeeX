@@ -8,5 +8,5 @@ pub use tcp::{
     ConnectTraceContext, HostResolveRequest, HostResolver, TcpAttemptConnector, TcpConnectOptions,
     connect_host, connect_host_with_resolver, connect_resolved_addresses, resolve_host,
 };
-pub use tls::{TlsClientOptions, TlsError, connect_tls, connect_tls_stream, server_name_for_tls};
+pub use tls::{OutboundTls, TlsError, connect_tls, connect_tls_stream, server_name_for_tls};
 pub use verifier::{CertificateVerifierOptions, VerifierError};

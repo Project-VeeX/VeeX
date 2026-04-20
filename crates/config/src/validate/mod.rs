@@ -33,11 +33,12 @@ pub fn validate_config(config: &ProxyConfig) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT, DirectInboundConfig, DirectOutboundConfig,
-        DnsConfig, DnsServerConfig, DnsServerTypeConfig, InboundConfig, LogConfig, OutboundConfig,
-        ProxyConfig, RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig,
-        RouteTargetConfig, RouteUpgradeActionConfig, SniffActionConfig, SocksInboundConfig,
-        TProxyInboundConfig,
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT, DialFields, DirectInboundConfig,
+        DirectOutboundConfig, DnsConfig, DnsServerConfig, DnsServerTypeConfig,
+        DomainResolverConfig, InboundConfig, ListenFields, LogConfig, OutboundConfig, ProxyConfig,
+        RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig,
+        RouteUpgradeActionConfig, SniffActionConfig, SocksInboundConfig, TProxyInboundConfig,
+        TlsFields,
     };
 
     use super::validate_config;
@@ -52,14 +53,11 @@ mod tests {
             dns: None,
             inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
                 tag: "socks-in".into(),
-                listen: "127.0.0.1".into(),
-                listen_port: 1080,
+                listen: ListenFields::new("127.0.0.1", 1080),
             })],
             outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                routing_mark: None,
-                domain_resolver: None,
+                dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
             })],
             route: RouteConfig {
                 final_outbound: "direct".into(),
@@ -93,8 +91,7 @@ mod tests {
         let mut config = valid_config();
         config.inbounds = vec![InboundConfig::TProxy(TProxyInboundConfig {
             tag: "tproxy-in".into(),
-            listen: "0.0.0.0".into(),
-            listen_port: 1041,
+            listen: ListenFields::new("0.0.0.0", 1041),
             network: Some("udp".into()),
         })];
 
@@ -108,8 +105,7 @@ mod tests {
         let mut config = valid_config();
         config.inbounds = vec![InboundConfig::Direct(DirectInboundConfig {
             tag: "direct-in".into(),
-            listen: "0.0.0.0".into(),
-            listen_port: 9000,
+            listen: ListenFields::new("0.0.0.0", 9000),
             network: Some("quic".into()),
             override_address: None,
             override_port: None,
@@ -128,8 +124,7 @@ mod tests {
         let mut config = valid_config();
         config.inbounds = vec![InboundConfig::Direct(DirectInboundConfig {
             tag: "direct-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: 9000,
+            listen: ListenFields::new("127.0.0.1", 9000),
             network: Some("udp".into()),
             override_address: Some("127.0.0.1".into()),
             override_port: Some(53),
@@ -143,8 +138,7 @@ mod tests {
         let mut config = valid_config();
         config.inbounds = vec![InboundConfig::Direct(DirectInboundConfig {
             tag: "direct-in".into(),
-            listen: "127.0.0.1".into(),
-            listen_port: 9000,
+            listen: ListenFields::new("127.0.0.1", 9000),
             network: None,
             override_address: Some("   ".into()),
             override_port: None,
@@ -189,9 +183,11 @@ mod tests {
                 server_port: 53,
                 path: None,
                 headers: Default::default(),
-                detour: "direct".into(),
-                domain_resolver: None,
-                tls: crate::TrojanTlsConfig {
+                dial: DialFields {
+                    detour: Some("direct".into()),
+                    ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                },
+                tls: TlsFields {
                     enabled: true,
                     server_name: None,
                     disable_sni: false,
@@ -221,9 +217,11 @@ mod tests {
                 server_port: 53,
                 path: None,
                 headers: Default::default(),
-                detour: "direct".into(),
-                domain_resolver: None,
-                tls: crate::TrojanTlsConfig {
+                dial: DialFields {
+                    detour: Some("direct".into()),
+                    ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                },
+                tls: TlsFields {
                     enabled: true,
                     server_name: None,
                     disable_sni: false,
@@ -253,9 +251,11 @@ mod tests {
                 server_port: 853,
                 path: None,
                 headers: Default::default(),
-                detour: "direct".into(),
-                domain_resolver: None,
-                tls: crate::TrojanTlsConfig {
+                dial: DialFields {
+                    detour: Some("direct".into()),
+                    ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                },
+                tls: TlsFields {
                     enabled: true,
                     server_name: Some("dns.example.com".into()),
                     disable_sni: false,
@@ -288,9 +288,11 @@ mod tests {
                     String::from("X-Test"),
                     String::from("true"),
                 )]),
-                detour: "direct".into(),
-                domain_resolver: None,
-                tls: crate::TrojanTlsConfig {
+                dial: DialFields {
+                    detour: Some("direct".into()),
+                    ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                },
+                tls: TlsFields {
                     enabled: true,
                     server_name: Some("dns.example.com".into()),
                     disable_sni: false,
@@ -323,11 +325,13 @@ mod tests {
                     String::from(""),
                     String::from("value"),
                 )]),
-                detour: String::new(),
-                domain_resolver: Some(crate::DomainResolverConfig {
-                    server: "missing".into(),
-                }),
-                tls: crate::TrojanTlsConfig {
+                dial: DialFields {
+                    domain_resolver: Some(DomainResolverConfig {
+                        server: "missing".into(),
+                    }),
+                    ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                },
+                tls: TlsFields {
                     enabled: false,
                     server_name: None,
                     disable_sni: false,
@@ -357,9 +361,8 @@ mod tests {
                 server_port: 53,
                 path: None,
                 headers: Default::default(),
-                detour: String::new(),
-                domain_resolver: None,
-                tls: crate::TrojanTlsConfig {
+                dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
+                tls: TlsFields {
                     enabled: false,
                     server_name: None,
                     disable_sni: false,
@@ -383,9 +386,8 @@ mod tests {
             server: "trojan.example.com".into(),
             server_port: 443,
             password: "secret".into(),
-            domain_resolver: None,
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            tls: crate::TrojanTlsConfig {
+            dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
+            tls: TlsFields {
                 enabled: true,
                 server_name: Some("trojan.example.com".into()),
                 disable_sni: false,
@@ -414,9 +416,8 @@ mod tests {
                 server_port: 53,
                 path: None,
                 headers: Default::default(),
-                detour: String::new(),
-                domain_resolver: None,
-                tls: crate::TrojanTlsConfig {
+                dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
+                tls: TlsFields {
                     enabled: true,
                     server_name: None,
                     disable_sni: false,
@@ -443,20 +444,20 @@ mod tests {
         config.outbounds = vec![
             OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                routing_mark: None,
-                domain_resolver: None,
+                dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
             }),
             OutboundConfig::Trojan(crate::TrojanOutboundConfig {
                 tag: "proxy".into(),
                 server: "trojan.example.com".into(),
                 server_port: 443,
                 password: "secret".into(),
-                domain_resolver: Some(crate::DomainResolverConfig {
-                    server: "bootstrap".into(),
-                }),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                tls: crate::TrojanTlsConfig {
+                dial: DialFields {
+                    domain_resolver: Some(DomainResolverConfig {
+                        server: "bootstrap".into(),
+                    }),
+                    ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                },
+                tls: TlsFields {
                     enabled: true,
                     server_name: Some("trojan.example.com".into()),
                     disable_sni: false,
@@ -491,11 +492,14 @@ mod tests {
                 server_port: 853,
                 path: None,
                 headers: Default::default(),
-                detour: "direct".into(),
-                domain_resolver: Some(crate::DomainResolverConfig {
-                    server: "dot".into(),
-                }),
-                tls: crate::TrojanTlsConfig {
+                dial: DialFields {
+                    detour: Some("direct".into()),
+                    domain_resolver: Some(DomainResolverConfig {
+                        server: "dot".into(),
+                    }),
+                    ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                },
+                tls: TlsFields {
                     enabled: true,
                     server_name: Some("dns.example.com".into()),
                     disable_sni: false,

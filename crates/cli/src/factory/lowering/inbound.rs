@@ -1,10 +1,10 @@
 use veex_config::InboundConfig;
 use veex_core::{
-    portal::InboundMeta,
-    types::{Host, Listen, Network},
+    portal::{InboundMeta, Listen},
+    types::{Host, Network},
 };
 
-use crate::factory::lowering::shared::parse_host;
+use crate::factory::lowering::shared::{lower_listen_fields, parse_host};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LoweredSocksInbound {
@@ -53,22 +53,22 @@ pub(crate) fn lower_inbound(inbound: &InboundConfig) -> LoweredInbound {
     match inbound {
         InboundConfig::Direct(config) => LoweredInbound::Direct(LoweredDirectInbound {
             meta: InboundMeta::new(config.tag.clone(), "direct"),
-            listen: Listen::new(config.listen.clone(), config.listen_port),
+            listen: lower_listen_fields(&config.listen),
             network: normalize_direct_network(config.network.as_deref()),
             override_host: config.override_address.as_deref().map(parse_host),
             override_port: config.override_port,
         }),
         InboundConfig::Socks(config) => LoweredInbound::Socks(LoweredSocksInbound {
             meta: InboundMeta::new(config.tag.clone(), "socks"),
-            listen: Listen::new(config.listen.clone(), config.listen_port),
+            listen: lower_listen_fields(&config.listen),
         }),
         InboundConfig::Redirect(config) => LoweredInbound::Redirect(LoweredRedirectInbound {
             meta: InboundMeta::new(config.tag.clone(), "redirect"),
-            listen: Listen::new(config.listen.clone(), config.listen_port),
+            listen: lower_listen_fields(&config.listen),
         }),
         InboundConfig::TProxy(config) => LoweredInbound::TProxy(LoweredTProxyInbound {
             meta: InboundMeta::new(config.tag.clone(), "tproxy"),
-            listen: Listen::new(config.listen.clone(), config.listen_port),
+            listen: lower_listen_fields(&config.listen),
             network: normalize_tproxy_network(config.network.as_deref()),
         }),
     }

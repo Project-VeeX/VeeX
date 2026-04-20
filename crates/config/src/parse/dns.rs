@@ -7,9 +7,9 @@ use crate::{
 use super::{
     DEFAULT_DNS_SERVER_PORT, DEFAULT_DOH_PATH, DEFAULT_DOH_SERVER_PORT, DEFAULT_DOT_SERVER_PORT,
     shared::{
-        DomainMatcherKind, input_trojan_tls_into_config, input_trojan_tls_or_default,
-        nested_port_or_default, normalize_domain_matchers, optional_domain_resolver,
-        optional_nested_string, optional_string_map, parse_dns_server_type, required_nested_string,
+        DomainMatcherKind, dial_fields, input_tls_fields_into_config, input_tls_fields_or_default,
+        nested_port_or_default, normalize_domain_matchers, optional_nested_string,
+        optional_string_map, parse_dns_server_type, required_nested_string,
     },
 };
 
@@ -59,7 +59,7 @@ pub(crate) fn input_dns_server_into_config(
         input_server.detour,
         format!("$.dns.servers[{index}].detour"),
     )?
-    .unwrap_or_default();
+    .filter(|detour| !detour.is_empty());
 
     Ok(DnsServerConfig {
         tag: input_server.tag,
@@ -82,12 +82,14 @@ pub(crate) fn input_dns_server_into_config(
             input_server.headers,
             format!("$.dns.servers[{index}].headers"),
         )?,
-        detour,
-        domain_resolver: optional_domain_resolver(
+        dial: dial_fields(
+            detour,
+            input_server.connect_timeout,
+            input_server.routing_mark,
             input_server.domain_resolver,
             format!("$.dns.servers[{index}].domain_resolver"),
         )?,
-        tls: input_trojan_tls_into_config(input_trojan_tls_or_default(
+        tls: input_tls_fields_into_config(input_tls_fields_or_default(
             input_server.tls,
             format!("$.dns.servers[{index}].tls"),
         )?),

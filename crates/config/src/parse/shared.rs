@@ -1,12 +1,14 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use ipnet::IpNet;
 
 use crate::{
-    defaults::{DEFAULT_LOG_LEVEL, DEFAULT_TLS_HANDSHAKE_TIMEOUT},
+    defaults::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_LOG_LEVEL, DEFAULT_TLS_HANDSHAKE_TIMEOUT},
     error::ConfigError,
-    input::{InputDomainResolverValue, InputLogConfig, InputTrojanTlsConfig},
-    schema::{DnsServerTypeConfig, DomainResolverConfig, LogConfig, TrojanTlsConfig},
+    input::{InputDomainResolverValue, InputLogConfig, InputTlsFields},
+    schema::{
+        DialFields, DnsServerTypeConfig, DomainResolverConfig, ListenFields, LogConfig, TlsFields,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,8 +27,27 @@ pub(crate) fn input_log_into_config(input_config: InputLogConfig) -> LogConfig {
     }
 }
 
-pub(crate) fn input_trojan_tls_into_config(input_config: InputTrojanTlsConfig) -> TrojanTlsConfig {
-    TrojanTlsConfig {
+pub(crate) fn listen_fields(listen: String, listen_port: u16) -> ListenFields {
+    ListenFields::new(listen, listen_port)
+}
+
+pub(crate) fn dial_fields(
+    detour: Option<String>,
+    connect_timeout: Option<Duration>,
+    routing_mark: Option<u32>,
+    domain_resolver: Option<InputDomainResolverValue>,
+    domain_resolver_path: impl Into<String>,
+) -> Result<DialFields, ConfigError> {
+    Ok(DialFields {
+        detour,
+        connect_timeout: connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT),
+        routing_mark,
+        domain_resolver: optional_domain_resolver(domain_resolver, domain_resolver_path)?,
+    })
+}
+
+pub(crate) fn input_tls_fields_into_config(input_config: InputTlsFields) -> TlsFields {
+    TlsFields {
         enabled: input_config.enabled,
         server_name: input_config.server_name,
         disable_sni: input_config.disable_sni,
@@ -122,15 +143,15 @@ pub(crate) fn optional_domain_resolver(
     }
 }
 
-pub(crate) fn input_trojan_tls_or_default(
-    value: Option<Option<InputTrojanTlsConfig>>,
+pub(crate) fn input_tls_fields_or_default(
+    value: Option<Option<InputTlsFields>>,
     path: impl Into<String>,
-) -> Result<InputTrojanTlsConfig, ConfigError> {
+) -> Result<InputTlsFields, ConfigError> {
     let path = path.into();
     match value {
         Some(Some(value)) => Ok(value),
         Some(None) => Err(ConfigError::validation(path, "expected object")),
-        None => Ok(InputTrojanTlsConfig::default()),
+        None => Ok(InputTlsFields::default()),
     }
 }
 

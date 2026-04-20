@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
-use veex_core::{
-    portal::{Listener, ListenerFactory},
-    types::Listen,
-};
+use veex_core::portal::{Listen, Listener, ListenerFactory};
 
 pub fn create_socks_listener(listen: Listen) -> Listener {
     let factory: Arc<ListenerFactory> =

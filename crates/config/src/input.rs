@@ -118,7 +118,7 @@ pub struct InputOutbound {
     #[serde(default)]
     pub domain_resolver: Option<InputDomainResolverValue>,
     #[serde(default)]
-    pub tls: Option<Option<InputTrojanTlsConfig>>,
+    pub tls: Option<Option<InputTlsFields>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -139,7 +139,7 @@ pub struct InputDomainResolverObject {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct InputTrojanTlsConfig {
+pub struct InputTlsFields {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -156,7 +156,7 @@ pub struct InputTrojanTlsConfig {
     pub handshake_timeout: Option<Duration>,
 }
 
-impl Default for InputTrojanTlsConfig {
+impl Default for InputTlsFields {
     fn default() -> Self {
         Self {
             enabled: true,
@@ -244,9 +244,13 @@ pub struct InputDnsServer {
     #[serde(default)]
     pub detour: Option<Option<String>>,
     #[serde(default)]
+    pub routing_mark: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    pub connect_timeout: Option<Duration>,
+    #[serde(default)]
     pub domain_resolver: Option<InputDomainResolverValue>,
     #[serde(default)]
-    pub tls: Option<Option<InputTrojanTlsConfig>>,
+    pub tls: Option<Option<InputTlsFields>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

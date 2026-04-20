@@ -43,8 +43,8 @@ mod tests {
 
     use veex_config::{
         DEFAULT_CONNECT_TIMEOUT, DEFAULT_DIRECT_OUTBOUND_TAG, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
-        DirectOutboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
-        TrojanOutboundConfig, TrojanTlsConfig,
+        DialFields, DirectOutboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
+        TlsFields, TrojanOutboundConfig,
     };
     use veex_core::{
         ErrorKind,
@@ -69,6 +69,10 @@ mod tests {
         )
     }
 
+    fn test_dial() -> DialFields {
+        DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+    }
+
     #[tokio::test]
     async fn closing_registry_direct_outbound_is_visible_to_dispatch_view() {
         let config = ProxyConfig {
@@ -81,9 +85,7 @@ mod tests {
             inbounds: Vec::new(),
             outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                routing_mark: None,
-                domain_resolver: None,
+                dial: test_dial(),
             })],
             route: RouteConfig {
                 final_outbound: "direct".into(),
@@ -127,9 +129,8 @@ mod tests {
                 server: "127.0.0.1".into(),
                 server_port: 443,
                 password: "secret".into(),
-                domain_resolver: None,
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                tls: TrojanTlsConfig {
+                dial: test_dial(),
+                tls: TlsFields {
                     enabled: true,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
@@ -181,9 +182,8 @@ mod tests {
                 server: "127.0.0.1".into(),
                 server_port: 443,
                 password: "secret".into(),
-                domain_resolver: None,
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                tls: TrojanTlsConfig {
+                dial: test_dial(),
+                tls: TlsFields {
                     enabled: true,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
@@ -221,9 +221,8 @@ mod tests {
                 server: "127.0.0.1".into(),
                 server_port: 443,
                 password: "secret".into(),
-                domain_resolver: None,
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                tls: TrojanTlsConfig {
+                dial: test_dial(),
+                tls: TlsFields {
                     enabled: true,
                     server_name: Some("localhost".into()),
                     disable_sni: false,

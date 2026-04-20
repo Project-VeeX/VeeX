@@ -207,9 +207,10 @@ mod tests {
     use veex_core::{
         io::BoxedAsyncStream,
         logging::Logger,
+        portal::Listen,
         portal::{BoxFuture, Inbound, InboundMeta, Listener, ListenerFactory},
         session::SessionContext,
-        types::{Destination, Listen},
+        types::Destination,
     };
     use veex_execution::StreamDispatch;
 

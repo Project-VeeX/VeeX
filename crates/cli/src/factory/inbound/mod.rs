@@ -46,8 +46,9 @@ mod tests {
 
     use super::*;
     use veex_config::{
-        DEFAULT_CONNECT_TIMEOUT, DirectInboundConfig, DirectOutboundConfig, InboundConfig,
-        LogConfig, OutboundConfig, ProxyConfig, RouteConfig, TProxyInboundConfig,
+        DEFAULT_CONNECT_TIMEOUT, DialFields, DirectInboundConfig, DirectOutboundConfig,
+        InboundConfig, ListenFields, LogConfig, OutboundConfig, ProxyConfig, RouteConfig,
+        TProxyInboundConfig,
     };
     use veex_core::{
         io::BoxedAsyncStream,
@@ -105,6 +106,14 @@ mod tests {
         Arc::new(OutboundCatalog::new(outbounds, outbound))
     }
 
+    fn test_listen(listen: &str, listen_port: u16) -> ListenFields {
+        ListenFields::new(listen, listen_port)
+    }
+
+    fn test_dial() -> DialFields {
+        DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+    }
+
     #[test]
     fn builds_direct_inbound_from_config() {
         let config = ProxyConfig {
@@ -116,17 +125,14 @@ mod tests {
             dns: None,
             inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
                 tag: "direct-in".into(),
-                listen: "127.0.0.1".into(),
-                listen_port: 9000,
+                listen: test_listen("127.0.0.1", 9000),
                 network: Some("tcp".into()),
                 override_address: Some("example.com".into()),
                 override_port: Some(443),
             })],
             outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                routing_mark: None,
-                domain_resolver: None,
+                dial: test_dial(),
             })],
             route: RouteConfig {
                 final_outbound: "direct".into(),
@@ -159,17 +165,14 @@ mod tests {
             dns: None,
             inbounds: vec![InboundConfig::Direct(DirectInboundConfig {
                 tag: "dns-in".into(),
-                listen: "127.0.0.1".into(),
-                listen_port: 15353,
+                listen: test_listen("127.0.0.1", 15353),
                 network: None,
                 override_address: None,
                 override_port: None,
             })],
             outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                routing_mark: None,
-                domain_resolver: None,
+                dial: test_dial(),
             })],
             route: RouteConfig {
                 final_outbound: "direct".into(),
@@ -206,15 +209,12 @@ mod tests {
             dns: None,
             inbounds: vec![InboundConfig::TProxy(TProxyInboundConfig {
                 tag: "tproxy-in".into(),
-                listen: "0.0.0.0".into(),
-                listen_port: 1041,
+                listen: test_listen("0.0.0.0", 1041),
                 network: None,
             })],
             outbounds: vec![OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                routing_mark: None,
-                domain_resolver: None,
+                dial: test_dial(),
             })],
             route: RouteConfig {
                 final_outbound: "direct".into(),

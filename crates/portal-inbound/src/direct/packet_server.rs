@@ -176,8 +176,9 @@ mod tests {
     use veex_core::{
         io::{PacketFrame, PacketWriter},
         logging::Logger,
+        portal::Listen,
         portal::{BoxFuture, Inbound, InboundMeta},
-        types::{Destination, Host, Listen},
+        types::{Destination, Host},
     };
     use veex_execution::PacketDispatch;
 

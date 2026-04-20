@@ -19,7 +19,42 @@ pub struct LogConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TrojanTlsConfig {
+pub struct ListenFields {
+    pub listen: String,
+    pub listen_port: u16,
+}
+
+impl ListenFields {
+    pub fn new(listen: impl Into<String>, listen_port: u16) -> Self {
+        Self {
+            listen: listen.into(),
+            listen_port,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DialFields {
+    pub detour: Option<String>,
+    /// Per-address TCP connect timeout applied by transport dialing.
+    pub connect_timeout: Duration,
+    pub routing_mark: Option<u32>,
+    pub domain_resolver: Option<DomainResolverConfig>,
+}
+
+impl DialFields {
+    pub fn new(connect_timeout: Duration) -> Self {
+        Self {
+            detour: None,
+            connect_timeout,
+            routing_mark: None,
+            domain_resolver: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TlsFields {
     pub enabled: bool,
     pub server_name: Option<String>,
     pub disable_sni: bool,

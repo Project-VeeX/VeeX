@@ -170,10 +170,10 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
-        DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNIFF_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT, DialFields,
         DirectInboundConfig, DirectOutboundConfig, DnsServerTypeConfig, InboundConfig,
-        OutboundConfig, RouteActionConfig, RouteFinalActionConfig, RouteUpgradeActionConfig,
-        SniffActionConfig, TProxyInboundConfig, TrojanOutboundConfig,
+        ListenFields, OutboundConfig, RouteActionConfig, RouteFinalActionConfig,
+        RouteUpgradeActionConfig, SniffActionConfig, TProxyInboundConfig, TrojanOutboundConfig,
     };
 
     use super::{
@@ -608,7 +608,7 @@ mod tests {
 
         assert!(matches!(dns.servers[0].kind, DnsServerTypeConfig::Local));
         assert!(dns.servers[0].server.is_empty());
-        assert!(dns.servers[0].detour.is_empty());
+        assert!(dns.servers[0].dial.detour.is_none());
         assert_eq!(dns.servers[0].server_port, DEFAULT_DNS_SERVER_PORT);
     }
 
@@ -642,7 +642,7 @@ mod tests {
         let dns = config.dns.expect("dns config should exist");
 
         assert!(matches!(dns.servers[0].kind, DnsServerTypeConfig::Udp));
-        assert!(dns.servers[0].detour.is_empty());
+        assert!(dns.servers[0].dial.detour.is_none());
     }
 
     #[test]
@@ -957,7 +957,10 @@ mod tests {
         assert!(matches!(
             &report.config.outbounds[1],
             OutboundConfig::Trojan(TrojanOutboundConfig {
-                domain_resolver: Some(resolver),
+                dial: DialFields {
+                    domain_resolver: Some(resolver),
+                    ..
+                },
                 ..
             }) if resolver.server == "local"
         ));
@@ -1030,7 +1033,10 @@ mod tests {
         assert!(matches!(
             &report.config.outbounds[0],
             OutboundConfig::Direct(DirectOutboundConfig {
-                domain_resolver: Some(resolver),
+                dial: DialFields {
+                    domain_resolver: Some(resolver),
+                    ..
+                },
                 ..
             }) if resolver.server == "bootstrap"
         ));
@@ -1070,8 +1076,7 @@ mod tests {
             config.inbounds,
             vec![InboundConfig::Direct(DirectInboundConfig {
                 tag: "direct-in".into(),
-                listen: "::".into(),
-                listen_port: 9000,
+                listen: ListenFields::new("::", 9000),
                 network: Some("tcp".into()),
                 override_address: Some("example.com".into()),
                 override_port: Some(8443),
@@ -1317,8 +1322,7 @@ mod tests {
             config.inbounds,
             vec![InboundConfig::TProxy(TProxyInboundConfig {
                 tag: "tproxy-in".into(),
-                listen: "0.0.0.0".into(),
-                listen_port: 1041,
+                listen: ListenFields::new("0.0.0.0", 1041),
                 network: None,
             })]
         );
@@ -1343,9 +1347,10 @@ mod tests {
             config.outbounds,
             vec![OutboundConfig::Direct(DirectOutboundConfig {
                 tag: "direct".into(),
-                connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                routing_mark: Some(1),
-                domain_resolver: None,
+                dial: DialFields {
+                    routing_mark: Some(1),
+                    ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+                },
             })]
         );
     }
@@ -1380,14 +1385,14 @@ mod tests {
 
         match &config.outbounds[0] {
             OutboundConfig::Direct(direct) => {
-                assert_eq!(direct.connect_timeout, Duration::from_millis(300));
+                assert_eq!(direct.dial.connect_timeout, Duration::from_millis(300));
             }
             other => panic!("expected direct outbound, got {other:?}"),
         }
 
         match &config.outbounds[1] {
             OutboundConfig::Trojan(trojan) => {
-                assert_eq!(trojan.connect_timeout, Duration::from_secs(5));
+                assert_eq!(trojan.dial.connect_timeout, Duration::from_secs(5));
                 assert_eq!(trojan.tls.handshake_timeout, Duration::from_secs(1));
             }
             other => panic!("expected trojan outbound, got {other:?}"),
@@ -1420,14 +1425,14 @@ mod tests {
 
         match &config.outbounds[0] {
             OutboundConfig::Direct(direct) => {
-                assert_eq!(direct.connect_timeout, DEFAULT_CONNECT_TIMEOUT);
+                assert_eq!(direct.dial.connect_timeout, DEFAULT_CONNECT_TIMEOUT);
             }
             other => panic!("expected direct outbound, got {other:?}"),
         }
 
         match &config.outbounds[1] {
             OutboundConfig::Trojan(trojan) => {
-                assert_eq!(trojan.connect_timeout, DEFAULT_CONNECT_TIMEOUT);
+                assert_eq!(trojan.dial.connect_timeout, DEFAULT_CONNECT_TIMEOUT);
                 assert_eq!(trojan.tls.handshake_timeout, DEFAULT_TLS_HANDSHAKE_TIMEOUT);
             }
             other => panic!("expected trojan outbound, got {other:?}"),
@@ -1570,10 +1575,7 @@ mod tests {
 
         let err = parse_config(input).expect_err("non-object tls should fail");
         assert!(err.to_string().contains("$.outbounds[1].tls"));
-        assert!(
-            err.to_string()
-                .contains("expected struct InputTrojanTlsConfig")
-        );
+        assert!(err.to_string().contains("expected struct InputTlsFields"));
     }
 
     #[test]
@@ -1656,8 +1658,7 @@ mod tests {
             config.inbounds,
             vec![InboundConfig::Direct(DirectInboundConfig {
                 tag: "direct-in".into(),
-                listen: "127.0.0.1".into(),
-                listen_port: 9000,
+                listen: ListenFields::new("127.0.0.1", 9000),
                 network: Some("udp".into()),
                 override_address: Some("127.0.0.1".into()),
                 override_port: Some(53),

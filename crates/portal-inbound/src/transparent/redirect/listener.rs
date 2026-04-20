@@ -1,10 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use tokio::net::TcpListener;
-use veex_core::{
-    portal::{Listener, ListenerFactory},
-    types::Listen,
-};
+use veex_core::portal::{Listen, Listener, ListenerFactory};
 use veex_infra_linux::create_dual_stack_listener;
 
 use super::error::Result;

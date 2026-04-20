@@ -10,7 +10,7 @@ use veex_core::{
     types::{Destination, Host, Network},
 };
 use veex_infra_linux::load_system_dns_servers;
-use veex_transport::{ConnectTraceContext, TlsClientOptions, connect_tls_stream};
+use veex_transport::{ConnectTraceContext, OutboundTls, connect_tls_stream};
 
 use crate::{
     dialer::DnsDialer,
@@ -135,7 +135,7 @@ pub(crate) async fn connect_tls_for_dns(
     stream: BoxedAsyncStream,
     destination: &Destination,
     dialer: &DnsDialer,
-    tls: &TlsClientOptions,
+    tls: &OutboundTls,
     request: &DnsRequest,
 ) -> veex_core::Result<BoxedAsyncStream> {
     let trace = ConnectTraceContext {

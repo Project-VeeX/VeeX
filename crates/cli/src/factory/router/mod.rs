@@ -13,10 +13,10 @@ mod tests {
     use std::{net::SocketAddr, time::Instant};
 
     use veex_config::{
-        DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT, DirectOutboundConfig,
-        InboundConfig, LogConfig, OutboundConfig, ProxyConfig, RouteActionConfig, RouteConfig,
-        RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig, SocksInboundConfig,
-        TrojanOutboundConfig, TrojanTlsConfig,
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_TLS_HANDSHAKE_TIMEOUT, DialFields, DirectOutboundConfig,
+        InboundConfig, ListenFields, LogConfig, OutboundConfig, ProxyConfig, RouteActionConfig,
+        RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig,
+        SocksInboundConfig, TlsFields, TrojanOutboundConfig,
     };
     use veex_core::{
         io::StreamCarrier,
@@ -37,24 +37,20 @@ mod tests {
             dns: None,
             inbounds: vec![InboundConfig::Socks(SocksInboundConfig {
                 tag: "socks-in".into(),
-                listen: "127.0.0.1".into(),
-                listen_port: 1080,
+                listen: ListenFields::new("127.0.0.1", 1080),
             })],
             outbounds: vec![
                 OutboundConfig::Direct(DirectOutboundConfig {
                     tag: "direct".into(),
-                    connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                    routing_mark: None,
-                    domain_resolver: None,
+                    dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
                 }),
                 OutboundConfig::Trojan(TrojanOutboundConfig {
                     tag: "proxy".into(),
                     server: "trojan.example.com".into(),
                     server_port: 443,
                     password: "secret".into(),
-                    domain_resolver: None,
-                    connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                    tls: TrojanTlsConfig {
+                    dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
+                    tls: TlsFields {
                         enabled: true,
                         server_name: Some("trojan.example.com".into()),
                         disable_sni: false,

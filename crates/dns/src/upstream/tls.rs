@@ -5,7 +5,7 @@ use veex_core::{
     dns::{DnsRequest, DnsResponse},
     types::{Destination, Network},
 };
-use veex_transport::TlsClientOptions;
+use veex_transport::OutboundTls;
 
 use crate::{dialer::DnsDialer, traits::DnsUpstream};
 
@@ -14,7 +14,7 @@ use super::{connect_tls_for_dns, exchange_dns_over_stream};
 pub struct TlsUpstream {
     destination: Destination,
     dialer: DnsDialer,
-    tls: TlsClientOptions,
+    tls: OutboundTls,
     query_timeout: Duration,
 }
 
@@ -22,7 +22,7 @@ impl TlsUpstream {
     pub fn new(
         destination: Destination,
         dialer: DnsDialer,
-        tls: TlsClientOptions,
+        tls: OutboundTls,
         query_timeout: Duration,
     ) -> Self {
         Self {

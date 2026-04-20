@@ -14,4 +14,6 @@ pub use route::{
     RouteActionConfig, RouteConfig, RouteFinalActionConfig, RouteRuleConfig, RouteTargetConfig,
     RouteUpgradeActionConfig, SniffActionConfig,
 };
-pub use shared::{DomainResolverConfig, LogConfig, ProxyConfig, TrojanTlsConfig};
+pub use shared::{
+    DialFields, DomainResolverConfig, ListenFields, LogConfig, ProxyConfig, TlsFields,
+};

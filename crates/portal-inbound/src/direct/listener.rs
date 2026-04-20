@@ -5,10 +5,7 @@ use std::{
 };
 
 use tokio::net::{TcpListener, UdpSocket};
-use veex_core::{
-    portal::{Listener, ListenerFactory, PacketListener, PacketListenerFactory},
-    types::Listen,
-};
+use veex_core::portal::{Listen, Listener, ListenerFactory, PacketListener, PacketListenerFactory};
 
 use super::error::Result;
 

@@ -21,8 +21,8 @@ pub(crate) fn validate_domain_resolvers(
 ) -> Result<(), ConfigError> {
     for (index, outbound) in config.outbounds.iter().enumerate() {
         let domain_resolver = match outbound {
-            OutboundConfig::Direct(config) => config.domain_resolver.as_ref(),
-            OutboundConfig::Trojan(config) => config.domain_resolver.as_ref(),
+            OutboundConfig::Direct(config) => config.dial.domain_resolver.as_ref(),
+            OutboundConfig::Trojan(config) => config.dial.domain_resolver.as_ref(),
         };
 
         if let Some(resolver) = domain_resolver {
@@ -39,7 +39,7 @@ pub(crate) fn validate_domain_resolvers(
             if matches!(server.kind, DnsServerTypeConfig::Local) {
                 continue;
             }
-            if let Some(resolver) = server.domain_resolver.as_ref() {
+            if let Some(resolver) = server.dial.domain_resolver.as_ref() {
                 validate_domain_resolver_reference(
                     dns_server_tags,
                     &resolver.server,

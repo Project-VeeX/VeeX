@@ -4,7 +4,7 @@ use veex_core::{
     portal::Dial,
     types::{Destination, Network},
 };
-use veex_transport::TlsClientOptions;
+use veex_transport::OutboundTls;
 
 pub const DEFAULT_DNS_CACHE_CAPACITY: usize = 4096;
 pub const MIN_DNS_CACHE_CAPACITY: usize = 1024;
@@ -43,7 +43,7 @@ impl DnsServer {
 pub struct DnsHttpsOptions {
     pub path: String,
     pub headers: BTreeMap<String, String>,
-    pub tls: TlsClientOptions,
+    pub tls: OutboundTls,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,7 +51,7 @@ pub enum DnsServerTransport {
     Local,
     Udp,
     Tcp,
-    Tls(TlsClientOptions),
+    Tls(OutboundTls),
     Https(DnsHttpsOptions),
     Unsupported(String),
 }

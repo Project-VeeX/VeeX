@@ -1,14 +1,11 @@
 use veex_config::{DnsConfig, DnsRuleConfig, DnsServerConfig, DnsServerTypeConfig};
-use veex_core::{
-    portal::Dial,
-    types::{Destination, Host},
-};
+use veex_core::types::{Destination, Host};
 use veex_dns::{
     DEFAULT_DNS_CACHE_CAPACITY, DEFAULT_DOH_PATH, DnsHttpsOptions, DnsRule, DnsRuntimeConfig,
     DnsServer, DnsServerTransport, MIN_DNS_CACHE_CAPACITY,
 };
 
-use crate::factory::lowering::shared::{lower_tls_options, parse_host};
+use crate::factory::lowering::shared::{lower_dial_fields, lower_tls_fields, parse_host};
 
 pub(crate) fn lower_dns(dns: &DnsConfig) -> DnsRuntimeConfig {
     DnsRuntimeConfig {
@@ -27,14 +24,14 @@ fn lower_dns_server(server: &DnsServerConfig) -> DnsServer {
             DnsServerTypeConfig::Local => DnsServerTransport::Local,
             DnsServerTypeConfig::Udp => DnsServerTransport::Udp,
             DnsServerTypeConfig::Tcp => DnsServerTransport::Tcp,
-            DnsServerTypeConfig::Tls => DnsServerTransport::Tls(lower_tls_options(&server.tls)),
+            DnsServerTypeConfig::Tls => DnsServerTransport::Tls(lower_tls_fields(&server.tls)),
             DnsServerTypeConfig::Https => DnsServerTransport::Https(DnsHttpsOptions {
                 path: server
                     .path
                     .clone()
                     .unwrap_or_else(|| DEFAULT_DOH_PATH.to_string()),
                 headers: server.headers.clone(),
-                tls: lower_tls_options(&server.tls),
+                tls: lower_tls_fields(&server.tls),
             }),
             DnsServerTypeConfig::Unsupported(kind) => DnsServerTransport::Unsupported(kind.clone()),
         },
@@ -42,15 +39,7 @@ fn lower_dns_server(server: &DnsServerConfig) -> DnsServer {
             DnsServerTypeConfig::Local => Destination::new(Host::Domain("local".into()), 53),
             _ => Destination::new(parse_host(&server.server), server.server_port),
         },
-        dial: Dial {
-            detour: (!server.detour.is_empty()).then(|| server.detour.clone()),
-            connect_timeout: None,
-            routing_mark: None,
-            domain_resolver: server
-                .domain_resolver
-                .as_ref()
-                .map(|resolver| resolver.server.clone()),
-        },
+        dial: lower_dial_fields(&server.dial),
     }
 }
 
@@ -73,7 +62,10 @@ fn lower_dns_cache_capacity(value: Option<usize>) -> usize {
 mod tests {
     use std::collections::BTreeMap;
 
-    use veex_config::{DnsConfig, DnsRuleConfig, DnsServerConfig, DnsServerTypeConfig};
+    use veex_config::{
+        DEFAULT_CONNECT_TIMEOUT, DialFields, DnsConfig, DnsRuleConfig, DnsServerConfig,
+        DnsServerTypeConfig, TlsFields,
+    };
     use veex_dns::DEFAULT_DNS_CACHE_CAPACITY;
 
     use super::lower_dns;
@@ -86,9 +78,11 @@ mod tests {
             server_port: 53,
             path: None,
             headers: BTreeMap::new(),
-            detour: "direct".into(),
-            domain_resolver: None,
-            tls: veex_config::TrojanTlsConfig {
+            dial: DialFields {
+                detour: Some("direct".into()),
+                ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+            },
+            tls: TlsFields {
                 enabled: true,
                 server_name: None,
                 disable_sni: false,

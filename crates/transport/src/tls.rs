@@ -24,7 +24,7 @@ use crate::verifier::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TlsClientOptions {
+pub struct OutboundTls {
     pub enabled: bool,
     pub server_name: Option<String>,
     pub disable_sni: bool,
@@ -34,7 +34,7 @@ pub struct TlsClientOptions {
     pub handshake_timeout: Duration,
 }
 
-impl Default for TlsClientOptions {
+impl Default for OutboundTls {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -96,7 +96,7 @@ impl From<TlsError> for ProxyError {
     }
 }
 
-impl TlsClientOptions {
+impl OutboundTls {
     pub fn validate(&self) -> Result<()> {
         if self.disable_sni && !self.insecure && self.server_name.is_none() {
             return Err(TlsError::DisableSniRequiresServerName.into());
@@ -115,7 +115,7 @@ impl TlsClientOptions {
 
 pub fn server_name_for_tls(
     host: &Host,
-    options: &TlsClientOptions,
+    options: &OutboundTls,
 ) -> std::result::Result<String, TlsError> {
     if let Some(server_name) = &options.server_name {
         return Ok(server_name.clone());
@@ -131,7 +131,7 @@ pub async fn connect_tls(
     stream: TcpStream,
     host: &Host,
     port: u16,
-    options: &TlsClientOptions,
+    options: &OutboundTls,
     trace: Option<&ConnectTraceContext>,
 ) -> Result<BoxedAsyncStream> {
     let resolved_addr = stream.peer_addr().ok();
@@ -142,7 +142,7 @@ pub async fn connect_tls_stream(
     stream: BoxedAsyncStream,
     host: &Host,
     port: u16,
-    options: &TlsClientOptions,
+    options: &OutboundTls,
     trace: Option<&ConnectTraceContext>,
 ) -> Result<BoxedAsyncStream> {
     connect_tls_inner(stream, None, host, port, options, trace).await
@@ -153,7 +153,7 @@ async fn connect_tls_inner<S>(
     resolved_addr: Option<SocketAddr>,
     host: &Host,
     port: u16,
-    options: &TlsClientOptions,
+    options: &OutboundTls,
     trace: Option<&ConnectTraceContext>,
 ) -> Result<BoxedAsyncStream>
 where
@@ -272,7 +272,7 @@ impl<'a> TlsTraceFields<'a> {
 fn log_tls_handshake_start(
     trace: Option<&ConnectTraceContext>,
     fields: &TlsTraceFields<'_>,
-    options: &TlsClientOptions,
+    options: &OutboundTls,
 ) {
     let resolved_addr = fields.resolved_addr_field();
     match trace {
@@ -344,7 +344,7 @@ fn log_tls_handshake_success(
 fn log_tls_handshake_failed(
     trace: Option<&ConnectTraceContext>,
     fields: &TlsTraceFields<'_>,
-    options: &TlsClientOptions,
+    options: &OutboundTls,
     elapsed: std::time::Duration,
     failure_reason: &'static str,
     err: &ProxyError,
@@ -470,18 +470,16 @@ mod tests {
     use veex_core::types::Host;
 
     use super::{
-        TlsClientOptions, connect_tls, is_ignorable_tls_close_notify_error, server_name_for_tls,
+        OutboundTls, connect_tls, is_ignorable_tls_close_notify_error, server_name_for_tls,
     };
     use crate::tcp::ConnectTraceContext;
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     #[test]
     fn derives_server_name_from_domain() {
-        let name = server_name_for_tls(
-            &Host::Domain("example.com".into()),
-            &TlsClientOptions::default(),
-        )
-        .expect("domain host should derive server name");
+        let name =
+            server_name_for_tls(&Host::Domain("example.com".into()), &OutboundTls::default())
+                .expect("domain host should derive server name");
 
         assert_eq!(name, "example.com");
     }
@@ -490,7 +488,7 @@ mod tests {
     fn derives_server_name_from_ip() {
         let name = server_name_for_tls(
             &Host::Ip(IpAddr::from([127, 0, 0, 1])),
-            &TlsClientOptions::default(),
+            &OutboundTls::default(),
         )
         .expect("ip host should derive server name");
 
@@ -508,10 +506,10 @@ mod tests {
             stream,
             &Host::Domain("localhost".into()),
             server.addr.port(),
-            &TlsClientOptions {
+            &OutboundTls {
                 enabled: true,
                 insecure: true,
-                ..TlsClientOptions::default()
+                ..OutboundTls::default()
             },
             None,
         )
@@ -549,10 +547,10 @@ mod tests {
             stream,
             &Host::Domain("localhost".into()),
             server.addr.port(),
-            &TlsClientOptions {
+            &OutboundTls {
                 enabled: true,
                 ca_path: Some(server.certificate_path.to_string_lossy().into_owned()),
-                ..TlsClientOptions::default()
+                ..OutboundTls::default()
             },
             None,
         )
@@ -583,10 +581,10 @@ mod tests {
             stream,
             &Host::Domain("localhost".into()),
             server.addr.port(),
-            &TlsClientOptions {
+            &OutboundTls {
                 enabled: true,
                 certificate_path: Some(server.certificate_path.to_string_lossy().into_owned()),
-                ..TlsClientOptions::default()
+                ..OutboundTls::default()
             },
             None,
         )
@@ -618,11 +616,11 @@ mod tests {
             stream,
             &Host::Domain("localhost".into()),
             server.addr.port(),
-            &TlsClientOptions {
+            &OutboundTls {
                 enabled: true,
                 insecure: true,
                 server_name: Some("localhost".into()),
-                ..TlsClientOptions::default()
+                ..OutboundTls::default()
             },
             Some(&ConnectTraceContext {
                 session_id: 41,
@@ -686,11 +684,11 @@ mod tests {
             stream,
             &Host::Domain("localhost".into()),
             addr.port(),
-            &TlsClientOptions {
+            &OutboundTls {
                 enabled: true,
                 insecure: true,
                 server_name: Some("localhost".into()),
-                ..TlsClientOptions::default()
+                ..OutboundTls::default()
             },
             Some(&ConnectTraceContext {
                 session_id: 42,
@@ -758,12 +756,12 @@ mod tests {
             stream,
             &Host::Domain("localhost".into()),
             addr.port(),
-            &TlsClientOptions {
+            &OutboundTls {
                 enabled: true,
                 insecure: true,
                 server_name: Some("localhost".into()),
                 handshake_timeout: Duration::from_millis(50),
-                ..TlsClientOptions::default()
+                ..OutboundTls::default()
             },
             Some(&ConnectTraceContext {
                 session_id: 43,

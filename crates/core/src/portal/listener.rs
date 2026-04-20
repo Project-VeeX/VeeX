@@ -15,8 +15,9 @@ use tokio::{
 use crate::{
     error::{ProxyError, Result},
     io::PacketWriter,
-    types::Listen,
 };
+
+use super::Listen;
 
 /// Listener is responsible for:
 /// - binding and accepting incoming connections / packets

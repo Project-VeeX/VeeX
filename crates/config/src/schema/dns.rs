@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::shared::{DomainResolverConfig, TrojanTlsConfig};
+use super::shared::{DialFields, TlsFields};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DnsConfig {
@@ -19,9 +19,8 @@ pub struct DnsServerConfig {
     pub server_port: u16,
     pub path: Option<String>,
     pub headers: BTreeMap<String, String>,
-    pub detour: String,
-    pub domain_resolver: Option<DomainResolverConfig>,
-    pub tls: TrojanTlsConfig,
+    pub dial: DialFields,
+    pub tls: TlsFields,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
