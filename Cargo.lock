@@ -959,6 +959,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "rustls-pemfile",
+ "socket2 0.5.10",
  "thiserror",
  "tokio",
  "tokio-rustls",

@@ -32,10 +32,8 @@ async fn trojan_outbound_connects_and_writes_request() {
         Logger::new("proxy", "trojan"),
         build_dialer(
             Dial {
-                detour: None,
                 connect_timeout: Some(std::time::Duration::from_secs(1)),
-                routing_mark: None,
-                domain_resolver: None,
+                ..Dial::default()
             },
             system_host_resolver(),
         ),

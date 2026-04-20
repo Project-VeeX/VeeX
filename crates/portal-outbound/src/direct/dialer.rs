@@ -116,6 +116,9 @@ async fn connect_destination(
         resolver,
         TcpConnectOptions {
             timeout: dial.connect_timeout,
+            disable_keepalive: dial.disable_tcp_keep_alive,
+            keepalive: dial.tcp_keep_alive,
+            keepalive_interval: dial.tcp_keep_alive_interval,
             trace: Some(ConnectTraceContext {
                 session_id: ctx.session_id,
                 outbound: ctx.outbound_tag,

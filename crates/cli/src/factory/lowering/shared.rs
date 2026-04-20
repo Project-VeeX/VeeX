@@ -16,6 +16,10 @@ pub(super) fn lower_dial_fields(config: &DialFields) -> Dial {
         detour: config.detour.clone(),
         connect_timeout: Some(config.connect_timeout),
         routing_mark: config.routing_mark,
+        disable_tcp_keep_alive: config.disable_tcp_keep_alive,
+        tcp_keep_alive: (!config.disable_tcp_keep_alive).then_some(config.tcp_keep_alive),
+        tcp_keep_alive_interval: (!config.disable_tcp_keep_alive)
+            .then_some(config.tcp_keep_alive_interval),
         domain_resolver: config
             .domain_resolver
             .as_ref()
@@ -45,9 +49,34 @@ pub(super) fn parse_host(value: &str) -> Host {
 
 #[cfg(test)]
 mod tests {
-    use veex_config::TlsFields;
+    use std::time::Duration;
 
-    use super::lower_tls_fields;
+    use veex_config::{DEFAULT_CONNECT_TIMEOUT, DialFields, TlsFields};
+
+    use super::{lower_dial_fields, lower_tls_fields};
+
+    #[test]
+    fn lower_dial_fields_keeps_keepalive_semantics() {
+        let dial = lower_dial_fields(&DialFields {
+            disable_tcp_keep_alive: false,
+            tcp_keep_alive: Duration::from_secs(45),
+            tcp_keep_alive_interval: Duration::from_secs(12),
+            ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+        });
+        assert!(!dial.disable_tcp_keep_alive);
+        assert_eq!(dial.tcp_keep_alive, Some(Duration::from_secs(45)));
+        assert_eq!(dial.tcp_keep_alive_interval, Some(Duration::from_secs(12)));
+
+        let disabled = lower_dial_fields(&DialFields {
+            disable_tcp_keep_alive: true,
+            tcp_keep_alive: Duration::from_secs(45),
+            tcp_keep_alive_interval: Duration::from_secs(12),
+            ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+        });
+        assert!(disabled.disable_tcp_keep_alive);
+        assert_eq!(disabled.tcp_keep_alive, None);
+        assert_eq!(disabled.tcp_keep_alive_interval, None);
+    }
 
     #[test]
     fn lower_tls_fields_keeps_alpn_list() {

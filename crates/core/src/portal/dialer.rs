@@ -12,6 +12,9 @@ pub struct Dial {
     pub detour: Option<String>,
     pub connect_timeout: Option<Duration>,
     pub routing_mark: Option<u32>,
+    pub disable_tcp_keep_alive: bool,
+    pub tcp_keep_alive: Option<Duration>,
+    pub tcp_keep_alive_interval: Option<Duration>,
     pub domain_resolver: Option<String>,
 }
 

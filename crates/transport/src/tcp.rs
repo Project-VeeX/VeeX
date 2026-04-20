@@ -38,6 +38,9 @@ pub struct HostResolveRequest {
 #[derive(Clone, Default)]
 pub struct TcpConnectOptions {
     pub timeout: Option<Duration>,
+    pub disable_keepalive: bool,
+    pub keepalive: Option<Duration>,
+    pub keepalive_interval: Option<Duration>,
     pub trace: Option<ConnectTraceContext>,
     pub connector: Option<Arc<TcpAttemptConnector>>,
 }
@@ -46,6 +49,9 @@ impl fmt::Debug for TcpConnectOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TcpConnectOptions")
             .field("timeout", &self.timeout)
+            .field("disable_keepalive", &self.disable_keepalive)
+            .field("keepalive", &self.keepalive)
+            .field("keepalive_interval", &self.keepalive_interval)
             .field("trace", &self.trace)
             .field("connector", &self.connector.as_ref().map(|_| "<custom>"))
             .finish()
@@ -174,17 +180,45 @@ async fn connect_socket(
     };
 
     match options.timeout {
-        Some(duration) => timeout(duration, connect_future)
-            .await
-            .map_err(|_| TcpConnectError {
-                error: ProxyError::timeout(format!("tcp connect timeout to {address}")),
-                failure_reason: "timeout",
-            })?
-            .map_err(|err| TcpConnectError::from_io(address, err)),
-        None => connect_future
-            .await
-            .map_err(|err| TcpConnectError::from_io(address, err)),
+        Some(duration) => {
+            let stream = timeout(duration, connect_future)
+                .await
+                .map_err(|_| TcpConnectError {
+                    error: ProxyError::timeout(format!("tcp connect timeout to {address}")),
+                    failure_reason: "timeout",
+                })?
+                .map_err(|err| TcpConnectError::from_io(address, err))?;
+            apply_keepalive(stream, options).map_err(|err| TcpConnectError::from_io(address, err))
+        }
+        None => {
+            let stream = connect_future
+                .await
+                .map_err(|err| TcpConnectError::from_io(address, err))?;
+            apply_keepalive(stream, options).map_err(|err| TcpConnectError::from_io(address, err))
+        }
     }
+}
+
+fn apply_keepalive(stream: TcpStream, options: &TcpConnectOptions) -> io::Result<TcpStream> {
+    if options.disable_keepalive {
+        return Ok(stream);
+    }
+
+    let keepalive = options.keepalive.unwrap_or(Duration::from_secs(300));
+    let keepalive_interval = options
+        .keepalive_interval
+        .unwrap_or(Duration::from_secs(75));
+    let socket = socket2::SockRef::from(&stream);
+    socket.set_keepalive(true)?;
+    #[allow(deprecated)]
+    {
+        let _ = socket.set_tcp_keepalive(
+            &socket2::TcpKeepalive::new()
+                .with_time(keepalive)
+                .with_interval(keepalive_interval),
+        );
+    }
+    Ok(stream)
 }
 
 #[derive(Debug)]
@@ -493,6 +527,9 @@ mod tests {
             addr.port(),
             TcpConnectOptions {
                 timeout: Some(Duration::from_secs(1)),
+                disable_keepalive: false,
+                keepalive: None,
+                keepalive_interval: None,
                 trace: Some(trace),
                 connector: None,
             },
@@ -541,6 +578,9 @@ mod tests {
             addr.port(),
             TcpConnectOptions {
                 timeout: Some(Duration::from_millis(200)),
+                disable_keepalive: false,
+                keepalive: None,
+                keepalive_interval: None,
                 trace: Some(ConnectTraceContext {
                     session_id: 8,
                     outbound: "proxy".into(),
@@ -600,6 +640,9 @@ mod tests {
             vec![first_addr, second_addr, addr],
             TcpConnectOptions {
                 timeout: Some(Duration::from_secs(1)),
+                disable_keepalive: false,
+                keepalive: None,
+                keepalive_interval: None,
                 trace: Some(ConnectTraceContext {
                     session_id: 9,
                     outbound: "proxy".into(),
@@ -666,6 +709,9 @@ mod tests {
             vec![first_addr, second_addr],
             TcpConnectOptions {
                 timeout: Some(Duration::from_millis(200)),
+                disable_keepalive: false,
+                keepalive: None,
+                keepalive_interval: None,
                 trace: Some(ConnectTraceContext {
                     session_id: 10,
                     outbound: "proxy".into(),
@@ -727,6 +773,9 @@ mod tests {
             vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 443)],
             TcpConnectOptions {
                 timeout: Some(Duration::from_millis(50)),
+                disable_keepalive: false,
+                keepalive: None,
+                keepalive_interval: None,
                 trace: Some(ConnectTraceContext {
                     session_id: 13,
                     outbound: "proxy".into(),
@@ -787,6 +836,9 @@ mod tests {
             vec![delayed, reachable],
             TcpConnectOptions {
                 timeout: Some(Duration::from_millis(50)),
+                disable_keepalive: false,
+                keepalive: None,
+                keepalive_interval: None,
                 trace: Some(ConnectTraceContext {
                     session_id: 14,
                     outbound: "proxy".into(),

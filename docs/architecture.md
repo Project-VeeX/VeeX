@@ -315,6 +315,9 @@ The current `Dial` model includes:
 - `detour`
 - `connect_timeout`
 - `routing_mark`
+- `disable_tcp_keep_alive`
+- `tcp_keep_alive`
+- `tcp_keep_alive_interval`
 - `domain_resolver`
 
 Dispatcher does not call transport directly. The runtime flow is:
@@ -328,6 +331,7 @@ Dialers derive request-specific dialing context from `SessionContext`, including
 Timeout boundaries stay phase-specific:
 
 - `connect_timeout` applies only to the connect stage
+- `disable_tcp_keep_alive` / `tcp_keep_alive` / `tcp_keep_alive_interval` apply only to TCP socket dialing behavior
 - `tls.handshake_timeout` and `tls.alpn` apply only to the TLS stage
 - protocol setup failures stay in the protocol stage
 - relay failures stay in the relay stage and do not back-propagate as connect or TLS failures

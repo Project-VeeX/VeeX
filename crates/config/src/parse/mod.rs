@@ -1426,6 +1426,12 @@ mod tests {
         match &config.outbounds[0] {
             OutboundConfig::Direct(direct) => {
                 assert_eq!(direct.dial.connect_timeout, DEFAULT_CONNECT_TIMEOUT);
+                assert!(!direct.dial.disable_tcp_keep_alive);
+                assert_eq!(direct.dial.tcp_keep_alive, crate::DEFAULT_TCP_KEEPALIVE);
+                assert_eq!(
+                    direct.dial.tcp_keep_alive_interval,
+                    crate::DEFAULT_TCP_KEEPALIVE_INTERVAL
+                );
             }
             other => panic!("expected direct outbound, got {other:?}"),
         }
@@ -1433,8 +1439,52 @@ mod tests {
         match &config.outbounds[1] {
             OutboundConfig::Trojan(trojan) => {
                 assert_eq!(trojan.dial.connect_timeout, DEFAULT_CONNECT_TIMEOUT);
+                assert!(!trojan.dial.disable_tcp_keep_alive);
+                assert_eq!(trojan.dial.tcp_keep_alive, crate::DEFAULT_TCP_KEEPALIVE);
+                assert_eq!(
+                    trojan.dial.tcp_keep_alive_interval,
+                    crate::DEFAULT_TCP_KEEPALIVE_INTERVAL
+                );
                 assert_eq!(trojan.tls.alpn, None);
                 assert_eq!(trojan.tls.handshake_timeout, DEFAULT_TLS_HANDSHAKE_TIMEOUT);
+            }
+            other => panic!("expected trojan outbound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_tcp_keepalive_fields() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            {
+              "type": "trojan",
+              "tag": "proxy",
+              "server": "example.com",
+              "server_port": 443,
+              "password": "secret",
+              "disable_tcp_keep_alive": true,
+              "tcp_keep_alive": "30s",
+              "tcp_keep_alive_interval": "12s",
+              "tls": {
+                "server_name": "example.com"
+              }
+            }
+          ],
+          "route": { "final": "proxy" }
+        }
+        "#;
+
+        let config = parse_config(input).expect("tcp keepalive fields should parse");
+
+        match &config.outbounds[0] {
+            OutboundConfig::Trojan(trojan) => {
+                assert!(trojan.dial.disable_tcp_keep_alive);
+                assert_eq!(trojan.dial.tcp_keep_alive, Duration::from_secs(30));
+                assert_eq!(trojan.dial.tcp_keep_alive_interval, Duration::from_secs(12));
             }
             other => panic!("expected trojan outbound, got {other:?}"),
         }

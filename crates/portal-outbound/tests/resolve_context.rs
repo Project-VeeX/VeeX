@@ -49,20 +49,16 @@ async fn direct_and_trojan_build_the_same_fresh_resolve_context() {
     let trojan_contexts = Arc::new(Mutex::new(Vec::new()));
     let direct = build_direct_dialer(
         Dial {
-            detour: None,
-            connect_timeout: None,
-            routing_mark: None,
             domain_resolver: Some("bootstrap".into()),
+            ..Dial::default()
         },
         capture_contexts(Arc::clone(&direct_contexts)),
     )
     .expect("direct dialer should build");
     let trojan = build_trojan_dialer(
         Dial {
-            detour: None,
-            connect_timeout: None,
-            routing_mark: None,
             domain_resolver: Some("bootstrap".into()),
+            ..Dial::default()
         },
         capture_contexts(Arc::clone(&trojan_contexts)),
     );
@@ -216,20 +212,19 @@ async fn direct_and_trojan_surface_resolve_failures_before_connect() {
     });
     let direct = direct_outbound_for_test(
         Dial {
-            detour: None,
             connect_timeout: Some(Duration::from_secs(1)),
             routing_mark: Some(9),
             domain_resolver: Some("bootstrap".into()),
+            ..Dial::default()
         },
         Arc::clone(&resolver),
         panic_marked_connector(),
     );
     let trojan = trojan_outbound_for_test(
         Dial {
-            detour: None,
             connect_timeout: Some(Duration::from_secs(1)),
-            routing_mark: None,
             domain_resolver: Some("bootstrap".into()),
+            ..Dial::default()
         },
         resolver,
         Arc::new(|_address| Box::pin(async move { panic!("connector should not run") })),
@@ -286,10 +281,9 @@ async fn direct_and_trojan_share_connect_timeout_semantics() {
     });
     let direct = direct_outbound_for_test(
         Dial {
-            detour: None,
             connect_timeout: Some(Duration::from_millis(50)),
             routing_mark: Some(7),
-            domain_resolver: None,
+            ..Dial::default()
         },
         Arc::clone(&resolver),
         Arc::new(|_address, _routing_mark| {
@@ -304,10 +298,8 @@ async fn direct_and_trojan_share_connect_timeout_semantics() {
     );
     let trojan = trojan_outbound_for_test(
         Dial {
-            detour: None,
             connect_timeout: Some(Duration::from_millis(50)),
-            routing_mark: None,
-            domain_resolver: None,
+            ..Dial::default()
         },
         resolver,
         Arc::new(|_address| {
@@ -382,20 +374,16 @@ async fn direct_and_trojan_preserve_inherited_resolve_context() {
     let trojan_contexts = Arc::new(Mutex::new(Vec::new()));
     let direct = build_direct_dialer(
         Dial {
-            detour: None,
-            connect_timeout: None,
-            routing_mark: None,
             domain_resolver: Some("ignored".into()),
+            ..Dial::default()
         },
         capture_contexts(Arc::clone(&direct_contexts)),
     )
     .expect("direct dialer should build");
     let trojan = build_trojan_dialer(
         Dial {
-            detour: None,
-            connect_timeout: None,
-            routing_mark: None,
             domain_resolver: Some("ignored".into()),
+            ..Dial::default()
         },
         capture_contexts(Arc::clone(&trojan_contexts)),
     );

@@ -3,7 +3,10 @@ use std::{collections::BTreeMap, time::Duration};
 use ipnet::IpNet;
 
 use crate::{
-    defaults::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_LOG_LEVEL, DEFAULT_TLS_HANDSHAKE_TIMEOUT},
+    defaults::{
+        DEFAULT_CONNECT_TIMEOUT, DEFAULT_LOG_LEVEL, DEFAULT_TCP_KEEPALIVE,
+        DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+    },
     error::ConfigError,
     input::{InputDomainResolverValue, InputLogConfig, InputTlsFields},
     schema::{
@@ -35,6 +38,9 @@ pub(crate) fn dial_fields(
     detour: Option<String>,
     connect_timeout: Option<Duration>,
     routing_mark: Option<u32>,
+    disable_tcp_keep_alive: bool,
+    tcp_keep_alive: Option<Duration>,
+    tcp_keep_alive_interval: Option<Duration>,
     domain_resolver: Option<InputDomainResolverValue>,
     domain_resolver_path: impl Into<String>,
 ) -> Result<DialFields, ConfigError> {
@@ -42,6 +48,9 @@ pub(crate) fn dial_fields(
         detour,
         connect_timeout: connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT),
         routing_mark,
+        disable_tcp_keep_alive,
+        tcp_keep_alive: tcp_keep_alive.unwrap_or(DEFAULT_TCP_KEEPALIVE),
+        tcp_keep_alive_interval: tcp_keep_alive_interval.unwrap_or(DEFAULT_TCP_KEEPALIVE_INTERVAL),
         domain_resolver: optional_domain_resolver(domain_resolver, domain_resolver_path)?,
     })
 }

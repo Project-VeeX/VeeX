@@ -11,6 +11,7 @@ veex-core = { path = "../core" }
 rustls.workspace = true
 rustls-native-certs.workspace = true
 rustls-pemfile.workspace = true
+socket2 = "0.5"
 tokio.workspace = true
 tokio-rustls.workspace = true
 

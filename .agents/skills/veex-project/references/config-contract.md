@@ -36,11 +36,17 @@ Current supported configuration surface:
 - direct outbound fields:
   - `tag`
   - `routing_mark`
+  - `disable_tcp_keep_alive`
+  - `tcp_keep_alive`
+  - `tcp_keep_alive_interval`
   - runtime behavior:
     - TCP stream connect is supported
     - UDP packet session connect is supported
 - trojan outbound shared dial/tls fields:
   - `connect_timeout`
+  - `disable_tcp_keep_alive`
+  - `tcp_keep_alive`
+  - `tcp_keep_alive_interval`
   - `tls.server_name`
   - `tls.disable_sni`
   - `tls.insecure`
@@ -115,6 +121,9 @@ The current accepted DNS subset is intentionally narrow:
   - `server` / `server_port` / `detour` for non-`local` upstreams
   - `connect_timeout`
   - `routing_mark`
+  - `disable_tcp_keep_alive`
+  - `tcp_keep_alive`
+  - `tcp_keep_alive_interval`
   - `tls.server_name`
   - `tls.disable_sni`
   - `tls.insecure`

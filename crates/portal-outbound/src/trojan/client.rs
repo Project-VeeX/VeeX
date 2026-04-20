@@ -290,10 +290,8 @@ mod tests {
         let good_addr = server.addr;
         let dialer = build_dialer_with_connector(
             Dial {
-                detour: None,
                 connect_timeout: Some(Duration::from_secs(1)),
-                routing_mark: None,
-                domain_resolver: None,
+                ..Dial::default()
             },
             Arc::new(move |_request: HostResolveRequest| {
                 Box::pin(async move { Ok(vec![bad_addr, good_addr]) })
@@ -416,10 +414,8 @@ mod tests {
         let second = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)), 18443);
         let dialer = build_dialer_with_connector(
             Dial {
-                detour: None,
                 connect_timeout: Some(Duration::from_millis(200)),
-                routing_mark: None,
-                domain_resolver: None,
+                ..Dial::default()
             },
             Arc::new(move |_request: HostResolveRequest| {
                 Box::pin(async move { Ok(vec![first, second]) })
@@ -512,10 +508,8 @@ mod tests {
             Logger::new("proxy", "trojan"),
             build_dialer_with_connector(
                 Dial {
-                    detour: None,
                     connect_timeout: Some(Duration::from_secs(1)),
-                    routing_mark: None,
-                    domain_resolver: None,
+                    ..Dial::default()
                 },
                 super::super::dialer::system_host_resolver(),
                 super::super::dialer::system_tcp_connector(),
@@ -587,10 +581,8 @@ mod tests {
             Logger::new("proxy", "trojan"),
             build_dialer_with_connector(
                 Dial {
-                    detour: None,
                     connect_timeout: Some(Duration::from_secs(1)),
-                    routing_mark: None,
-                    domain_resolver: None,
+                    ..Dial::default()
                 },
                 super::super::dialer::system_host_resolver(),
                 super::super::dialer::system_tcp_connector(),

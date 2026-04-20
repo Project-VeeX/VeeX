@@ -187,10 +187,8 @@ mod tests {
     fn shutdown_packet_dialer() -> PacketDialer {
         PacketDialer::new(
             Dial {
-                detour: None,
                 connect_timeout: Some(Duration::from_secs(1)),
-                routing_mark: None,
-                domain_resolver: None,
+                ..Dial::default()
             },
             Arc::new(|_host, _port, _dial, _ctx| {
                 Box::pin(async { Err(veex_core::ProxyError::Shutdown) })
@@ -215,10 +213,8 @@ mod tests {
     fn direct_outbound_is_constructible_for_dispatcher_registration() {
         let dialer = Dialer::new(
             Dial {
-                detour: None,
                 connect_timeout: Some(Duration::from_secs(1)),
-                routing_mark: None,
-                domain_resolver: None,
+                ..Dial::default()
             },
             Arc::new(|_host, _port, _dial, _ctx| {
                 Box::pin(async { Err(veex_core::ProxyError::Shutdown) })
@@ -253,10 +249,9 @@ mod tests {
         });
         let dialer = build_dialer_with_connector(
             Dial {
-                detour: None,
                 connect_timeout: Some(Duration::from_secs(1)),
                 routing_mark: Some(9),
-                domain_resolver: None,
+                ..Dial::default()
             },
             system_host_resolver(),
             connector,
@@ -334,10 +329,9 @@ mod tests {
         });
         let dialer = build_dialer_with_connector(
             Dial {
-                detour: None,
                 connect_timeout: Some(Duration::from_secs(1)),
                 routing_mark: Some(255),
-                domain_resolver: None,
+                ..Dial::default()
             },
             system_host_resolver(),
             connector,
@@ -398,10 +392,9 @@ mod tests {
         });
         let dialer = build_dialer_with_connector(
             Dial {
-                detour: None,
                 connect_timeout: Some(Duration::from_millis(50)),
                 routing_mark: Some(7),
-                domain_resolver: None,
+                ..Dial::default()
             },
             system_host_resolver(),
             connector,
@@ -460,10 +453,8 @@ mod tests {
 
         let dialer = Dialer::new(
             Dial {
-                detour: None,
                 connect_timeout: Some(Duration::from_secs(1)),
-                routing_mark: None,
-                domain_resolver: None,
+                ..Dial::default()
             },
             Arc::new(|_host, _port, _dial, _ctx| {
                 Box::pin(async { Err(veex_core::ProxyError::Shutdown) })
@@ -473,10 +464,8 @@ mod tests {
         let recorded_calls = Arc::clone(&calls);
         let packet_dialer = PacketDialer::new(
             Dial {
-                detour: None,
                 connect_timeout: Some(Duration::from_secs(1)),
-                routing_mark: None,
-                domain_resolver: None,
+                ..Dial::default()
             },
             Arc::new(move |host, port, _dial, ctx: DialContext| {
                 let recorded_calls = Arc::clone(&recorded_calls);
@@ -534,10 +523,8 @@ mod tests {
     async fn closing_direct_outbound_blocks_packet_execution() {
         let dialer = Dialer::new(
             Dial {
-                detour: None,
                 connect_timeout: Some(Duration::from_secs(1)),
-                routing_mark: None,
-                domain_resolver: None,
+                ..Dial::default()
             },
             Arc::new(|_host, _port, _dial, _ctx| {
                 Box::pin(async { Err(veex_core::ProxyError::Shutdown) })
@@ -545,10 +532,8 @@ mod tests {
         );
         let packet_dialer = PacketDialer::new(
             Dial {
-                detour: None,
                 connect_timeout: Some(Duration::from_secs(1)),
-                routing_mark: None,
-                domain_resolver: None,
+                ..Dial::default()
             },
             Arc::new(|_host, _port, _dial, _ctx| {
                 Box::pin(async { Ok(Arc::new(TestPacketSession) as PacketSessionHandle) })

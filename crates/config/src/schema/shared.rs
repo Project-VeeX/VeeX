@@ -39,6 +39,9 @@ pub struct DialFields {
     /// Per-address TCP connect timeout applied by transport dialing.
     pub connect_timeout: Duration,
     pub routing_mark: Option<u32>,
+    pub disable_tcp_keep_alive: bool,
+    pub tcp_keep_alive: Duration,
+    pub tcp_keep_alive_interval: Duration,
     pub domain_resolver: Option<DomainResolverConfig>,
 }
 
@@ -48,6 +51,9 @@ impl DialFields {
             detour: None,
             connect_timeout,
             routing_mark: None,
+            disable_tcp_keep_alive: false,
+            tcp_keep_alive: crate::DEFAULT_TCP_KEEPALIVE,
+            tcp_keep_alive_interval: crate::DEFAULT_TCP_KEEPALIVE_INTERVAL,
             domain_resolver: None,
         }
     }

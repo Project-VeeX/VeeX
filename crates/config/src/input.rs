@@ -107,6 +107,12 @@ pub struct InputOutbound {
     pub tag: String,
     #[serde(default)]
     pub routing_mark: Option<u32>,
+    #[serde(default)]
+    pub disable_tcp_keep_alive: bool,
+    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    pub tcp_keep_alive: Option<Duration>,
+    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    pub tcp_keep_alive_interval: Option<Duration>,
     #[serde(default, deserialize_with = "deserialize_optional_duration")]
     pub connect_timeout: Option<Duration>,
     #[serde(default)]
@@ -251,6 +257,12 @@ pub struct InputDnsServer {
     pub detour: Option<Option<String>>,
     #[serde(default)]
     pub routing_mark: Option<u32>,
+    #[serde(default)]
+    pub disable_tcp_keep_alive: bool,
+    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    pub tcp_keep_alive: Option<Duration>,
+    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    pub tcp_keep_alive_interval: Option<Duration>,
     #[serde(default, deserialize_with = "deserialize_optional_duration")]
     pub connect_timeout: Option<Duration>,
     #[serde(default)]
