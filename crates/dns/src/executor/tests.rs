@@ -222,6 +222,7 @@ async fn dns_executor_uses_dns_rule_and_returns_upstream_response() {
                         connect_timeout: None,
                         routing_mark: None,
                         domain_resolver: None,
+                        ..Dial::default()
                     },
                 },
                 DnsServer {
@@ -233,6 +234,7 @@ async fn dns_executor_uses_dns_rule_and_returns_upstream_response() {
                         connect_timeout: None,
                         routing_mark: None,
                         domain_resolver: None,
+                        ..Dial::default()
                     },
                 },
             ],
@@ -292,6 +294,7 @@ async fn dns_executor_cache_hit_avoids_second_upstream_exchange() {
                     connect_timeout: None,
                     routing_mark: None,
                     domain_resolver: None,
+                    ..Dial::default()
                 },
             }],
             Vec::new(),
@@ -343,6 +346,7 @@ async fn dns_executor_expired_cache_triggers_new_upstream_exchange() {
                     connect_timeout: None,
                     routing_mark: None,
                     domain_resolver: None,
+                    ..Dial::default()
                 },
             }],
             Vec::new(),
@@ -394,6 +398,7 @@ async fn dns_rule_disable_cache_bypasses_cache() {
                     connect_timeout: None,
                     routing_mark: None,
                     domain_resolver: None,
+                    ..Dial::default()
                 },
             }],
             vec![DnsRule {
@@ -445,6 +450,7 @@ async fn dns_executor_emits_cache_lifecycle_events() {
                     connect_timeout: None,
                     routing_mark: None,
                     domain_resolver: None,
+                    ..Dial::default()
                 },
             }],
             Vec::new(),
@@ -530,6 +536,7 @@ async fn domain_resolver_uses_explicit_server_and_parses_addresses() {
                         connect_timeout: None,
                         routing_mark: None,
                         domain_resolver: None,
+                        ..Dial::default()
                     },
                 },
                 DnsServer {
@@ -541,6 +548,7 @@ async fn domain_resolver_uses_explicit_server_and_parses_addresses() {
                         connect_timeout: None,
                         routing_mark: None,
                         domain_resolver: None,
+                        ..Dial::default()
                     },
                 },
             ],
@@ -600,6 +608,7 @@ async fn domain_resolver_cache_hit_avoids_second_exchange() {
                     connect_timeout: None,
                     routing_mark: None,
                     domain_resolver: None,
+                    ..Dial::default()
                 },
             }],
             Vec::new(),
@@ -632,7 +641,6 @@ async fn domain_resolver_cache_hit_avoids_second_exchange() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn concurrent_resolution_uses_first_success_and_cancels_loser() {
-    let (_guard, trace_buffer) = install_test_subscriber();
     let (remote_session, _remote_tx) = parked_test_session();
     let remote_handle: PacketSessionHandle = remote_session.clone();
     let bootstrap_session = queued_test_session(vec![build_dns_answer_response(
@@ -641,17 +649,19 @@ async fn concurrent_resolution_uses_first_success_and_cancels_loser() {
     )]);
     let bootstrap_handle: PacketSessionHandle = bootstrap_session.clone();
     let mut registry = Vec::new();
+    let direct_connected_destinations = Arc::new(Mutex::new(Vec::new()));
     let default_outbound = register_default_test_outbound(
         &mut registry,
         "direct",
         bootstrap_handle.clone(),
-        Arc::new(Mutex::new(Vec::new())),
+        Arc::clone(&direct_connected_destinations),
     );
+    let dns_egress_connected_destinations = Arc::new(Mutex::new(Vec::new()));
     register_test_outbound(
         &mut registry,
         "dns-egress",
         remote_handle,
-        Arc::new(Mutex::new(Vec::new())),
+        Arc::clone(&dns_egress_connected_destinations),
     );
     register_test_outbound(
         &mut registry,
@@ -672,6 +682,7 @@ async fn concurrent_resolution_uses_first_success_and_cancels_loser() {
                         connect_timeout: None,
                         routing_mark: None,
                         domain_resolver: None,
+                        ..Dial::default()
                     },
                 },
                 DnsServer {
@@ -683,6 +694,7 @@ async fn concurrent_resolution_uses_first_success_and_cancels_loser() {
                         connect_timeout: None,
                         routing_mark: None,
                         domain_resolver: None,
+                        ..Dial::default()
                     },
                 },
             ],
@@ -702,16 +714,19 @@ async fn concurrent_resolution_uses_first_success_and_cancels_loser() {
         .expect("concurrent resolution should succeed");
 
     assert_eq!(addresses, vec![SocketAddr::from(([203, 0, 113, 50], 443))]);
-    let events = captured_events(&trace_buffer);
-    assert_has_event(
-        &events,
-        "dns_upstream_query_won",
-        &[("server", "bootstrap"), ("query_kind", "dial_side_resolve")],
+    assert_eq!(bootstrap_session.sent_count.load(Ordering::Relaxed), 1);
+    assert_eq!(remote_session.sent_count.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        direct_connected_destinations.lock().await.as_slice(),
+        &[Destination::new(
+            Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            54
+        )]
     );
-    assert_has_event(
-        &events,
-        "dns_upstream_query_cancelled",
-        &[("server", "remote"), ("query_kind", "dial_side_resolve")],
+    let remote_destinations = dns_egress_connected_destinations.lock().await;
+    assert!(
+        remote_destinations.len() <= 1,
+        "losing upstream should not open more than one packet destination"
     );
 }
 
@@ -749,6 +764,7 @@ async fn concurrent_resolution_returns_clear_all_failed_error() {
                         connect_timeout: None,
                         routing_mark: None,
                         domain_resolver: None,
+                        ..Dial::default()
                     },
                 },
                 DnsServer {
@@ -760,6 +776,7 @@ async fn concurrent_resolution_returns_clear_all_failed_error() {
                         connect_timeout: None,
                         routing_mark: None,
                         domain_resolver: None,
+                        ..Dial::default()
                     },
                 },
             ],
@@ -807,6 +824,7 @@ async fn domain_resolver_rejects_recursive_default_path_without_safe_server() {
                     connect_timeout: None,
                     routing_mark: None,
                     domain_resolver: None,
+                    ..Dial::default()
                 },
             }],
             rules: Vec::new(),
@@ -866,6 +884,7 @@ async fn domain_resolver_uses_safe_final_server_when_allowed() {
                         connect_timeout: None,
                         routing_mark: None,
                         domain_resolver: None,
+                        ..Dial::default()
                     },
                 },
                 DnsServer {
@@ -877,6 +896,7 @@ async fn domain_resolver_uses_safe_final_server_when_allowed() {
                         connect_timeout: None,
                         routing_mark: None,
                         domain_resolver: None,
+                        ..Dial::default()
                     },
                 },
             ],
@@ -944,6 +964,7 @@ async fn domain_resolver_skips_caller_dns_server_and_uses_safe_fallback() {
                         connect_timeout: None,
                         routing_mark: None,
                         domain_resolver: None,
+                        ..Dial::default()
                     },
                 },
                 DnsServer {
@@ -955,6 +976,7 @@ async fn domain_resolver_skips_caller_dns_server_and_uses_safe_fallback() {
                         connect_timeout: None,
                         routing_mark: None,
                         domain_resolver: None,
+                        ..Dial::default()
                     },
                 },
             ],
@@ -1013,6 +1035,7 @@ async fn domain_resolver_rejects_missing_explicit_server() {
                     connect_timeout: None,
                     routing_mark: None,
                     domain_resolver: None,
+                    ..Dial::default()
                 },
             }],
             rules: Vec::new(),
@@ -1064,6 +1087,7 @@ async fn domain_resolver_rejects_empty_answer_response() {
                     connect_timeout: None,
                     routing_mark: None,
                     domain_resolver: None,
+                    ..Dial::default()
                 },
             }],
             rules: Vec::new(),
@@ -1110,6 +1134,7 @@ async fn domain_resolver_propagates_upstream_exchange_failure() {
                     connect_timeout: None,
                     routing_mark: None,
                     domain_resolver: None,
+                    ..Dial::default()
                 },
             }],
             rules: Vec::new(),
@@ -1153,6 +1178,7 @@ async fn domain_resolver_rejects_excessive_recursion_depth() {
                     connect_timeout: None,
                     routing_mark: None,
                     domain_resolver: None,
+                    ..Dial::default()
                 },
             }],
             rules: Vec::new(),

@@ -170,6 +170,7 @@ mod tests {
                 connect_timeout: None,
                 routing_mark: None,
                 domain_resolver: None,
+                ..Dial::default()
             },
             outbound: Arc::new(UnusedExecutionOutbound::new()),
         };
@@ -207,6 +208,7 @@ mod tests {
                 connect_timeout: None,
                 routing_mark: None,
                 domain_resolver: None,
+                ..Dial::default()
             },
             &Arc::new(registry),
         )

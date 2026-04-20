@@ -78,6 +78,7 @@ mod tests {
                 connect_timeout: None,
                 routing_mark: None,
                 domain_resolver: None,
+                ..Dial::default()
             },
         };
 

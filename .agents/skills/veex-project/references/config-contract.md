@@ -35,10 +35,12 @@ Current supported configuration surface:
   - `trojan`
 - direct outbound fields:
   - `tag`
+  - `connect_timeout`
   - `routing_mark`
   - `disable_tcp_keep_alive`
   - `tcp_keep_alive`
   - `tcp_keep_alive_interval`
+  - `domain_resolver`
   - runtime behavior:
     - TCP stream connect is supported
     - UDP packet session connect is supported
@@ -47,6 +49,7 @@ Current supported configuration surface:
   - `disable_tcp_keep_alive`
   - `tcp_keep_alive`
   - `tcp_keep_alive_interval`
+  - `domain_resolver`
   - `tls.server_name`
   - `tls.disable_sni`
   - `tls.insecure`
@@ -74,6 +77,7 @@ Compatibility handling note:
 - the compatibility quarantine is intentional
 - tolerated legacy or sing-box-aligned fields are isolated so they do not leak back into the main typed parse / validate / factory path
 - tolerated fields are not implemented features
+- the external config remains a flat sing-box-subset surface; shared `listen` / `dial` / `tls` groupings are internal organization, not a second public nesting model
 
 Current UDP execution boundary:
 

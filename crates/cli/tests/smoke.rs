@@ -141,7 +141,8 @@ fn check_returns_config_error_for_invalid_config() {
 
 #[test]
 fn check_accepts_tproxy_compat_example() {
-    let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/tproxy-compat.json");
+    let config_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/tproxy-compat.json");
 
     let output = Command::new(env!("CARGO_BIN_EXE_veex"))
         .args([
@@ -192,7 +193,8 @@ fn check_accepts_direct_trojan_example() {
 
 #[test]
 fn check_accepts_direct_udp_echo_example() {
-    let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/direct-udp-echo.json");
+    let config_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/direct-udp-echo.json");
 
     let output = Command::new(env!("CARGO_BIN_EXE_veex"))
         .args([
@@ -217,7 +219,8 @@ fn check_accepts_direct_udp_echo_example() {
 
 #[test]
 fn check_accepts_direct_udp_dns_example() {
-    let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/direct-udp-dns.json");
+    let config_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/direct-udp-dns.json");
 
     let output = Command::new(env!("CARGO_BIN_EXE_veex"))
         .args([
@@ -242,7 +245,8 @@ fn check_accepts_direct_udp_dns_example() {
 
 #[test]
 fn check_accepts_tproxy_compat_example_and_prints_warnings_with_verbose() {
-    let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/tproxy-compat.json");
+    let config_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/tproxy-compat.json");
 
     let output = Command::new(env!("CARGO_BIN_EXE_veex"))
         .args([
