@@ -26,6 +26,7 @@ use crate::verifier::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OutboundTls {
     pub enabled: bool,
+    pub alpn: Option<Vec<String>>,
     pub server_name: Option<String>,
     pub disable_sni: bool,
     pub insecure: bool,
@@ -38,6 +39,7 @@ impl Default for OutboundTls {
     fn default() -> Self {
         Self {
             enabled: false,
+            alpn: None,
             server_name: None,
             disable_sni: false,
             insecure: false,
@@ -173,6 +175,9 @@ where
     .map_err(TlsError::from)
     .map_err(ProxyError::from)?;
     config.enable_sni = !options.disable_sni;
+    if let Some(alpn) = &options.alpn {
+        config.alpn_protocols = alpn.iter().map(|value| value.as_bytes().to_vec()).collect();
+    }
 
     let connector = TlsConnector::from(Arc::new(config));
     let tls_server_name = ServerName::try_from(server_name.clone()).map_err(|err| {
@@ -537,6 +542,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tls_alpn_is_applied_to_client_handshake() {
+        let mut server = spawn_tls_server_with_alpn("localhost", vec!["h2", "http/1.1"]).await;
+        let stream = tokio::net::TcpStream::connect(server.addr)
+            .await
+            .expect("tcp connect should succeed");
+
+        let mut stream = connect_tls(
+            stream,
+            &Host::Domain("localhost".into()),
+            server.addr.port(),
+            &OutboundTls {
+                enabled: true,
+                insecure: true,
+                alpn: Some(vec!["h2".into(), "http/1.1".into()]),
+                ..OutboundTls::default()
+            },
+            None,
+        )
+        .await
+        .expect("tls with alpn should connect");
+
+        stream
+            .write_all(b"ping")
+            .await
+            .expect("client write should succeed");
+
+        let selected = server
+            .selected_alpn_rx
+            .take()
+            .expect("alpn receiver should exist")
+            .await
+            .expect("server should report selected alpn");
+        assert_eq!(selected.as_deref(), Some(b"h2".as_slice()));
+    }
+
+    #[tokio::test]
     async fn connects_with_ca_path() {
         let server = spawn_tls_server("localhost").await;
         let stream = tokio::net::TcpStream::connect(server.addr)
@@ -808,6 +849,7 @@ mod tests {
     struct TestTlsServer {
         addr: std::net::SocketAddr,
         certificate_path: PathBuf,
+        selected_alpn_rx: Option<tokio::sync::oneshot::Receiver<Option<Vec<u8>>>>,
     }
 
     impl Drop for TestTlsServer {
@@ -817,25 +859,37 @@ mod tests {
     }
 
     async fn spawn_tls_server(server_name: &str) -> TestTlsServer {
+        spawn_tls_server_with_alpn(server_name, Vec::new()).await
+    }
+
+    async fn spawn_tls_server_with_alpn(
+        server_name: &str,
+        alpn_protocols: Vec<&str>,
+    ) -> TestTlsServer {
         let certified = generate_simple_self_signed(vec![server_name.to_string()])
             .expect("certificate generation should succeed");
         let certificate = certified.cert.der().clone();
         let key = certified.key_pair.serialize_der();
         let certificate_path = write_temp_certificate(certificate.as_ref());
 
-        let config = ServerConfig::builder()
+        let mut config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(
                 vec![CertificateDer::from(certificate.as_ref().to_vec())],
                 PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key)),
             )
             .expect("server config should build");
+        config.alpn_protocols = alpn_protocols
+            .into_iter()
+            .map(|protocol| protocol.as_bytes().to_vec())
+            .collect();
 
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("listener bind should succeed");
         let addr = listener.local_addr().expect("listener addr should exist");
         let acceptor = TlsAcceptor::from(Arc::new(config));
+        let (selected_alpn_tx, selected_alpn_rx) = tokio::sync::oneshot::channel();
 
         tokio::spawn(async move {
             let (stream, _) = listener
@@ -846,6 +900,12 @@ mod tests {
                 .accept(stream)
                 .await
                 .expect("tls accept should succeed");
+            let protocol = stream
+                .get_ref()
+                .1
+                .alpn_protocol()
+                .map(|value| value.to_vec());
+            let _ = selected_alpn_tx.send(protocol);
 
             let mut request = [0u8; 4];
             stream
@@ -863,6 +923,7 @@ mod tests {
         TestTlsServer {
             addr,
             certificate_path,
+            selected_alpn_rx: Some(selected_alpn_rx),
         }
     }
 

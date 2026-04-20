@@ -328,7 +328,7 @@ Dialers derive request-specific dialing context from `SessionContext`, including
 Timeout boundaries stay phase-specific:
 
 - `connect_timeout` applies only to the connect stage
-- `tls.handshake_timeout` applies only to the TLS stage
+- `tls.handshake_timeout` and `tls.alpn` apply only to the TLS stage
 - protocol setup failures stay in the protocol stage
 - relay failures stay in the relay stage and do not back-propagate as connect or TLS failures
 

@@ -84,6 +84,7 @@ mod tests {
             },
             tls: TlsFields {
                 enabled: true,
+                alpn: None,
                 server_name: None,
                 disable_sni: false,
                 insecure: false,

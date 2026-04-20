@@ -189,6 +189,7 @@ mod tests {
                 },
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: None,
                     disable_sni: false,
                     insecure: false,
@@ -223,6 +224,7 @@ mod tests {
                 },
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: None,
                     disable_sni: false,
                     insecure: false,
@@ -257,6 +259,7 @@ mod tests {
                 },
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: Some("dns.example.com".into()),
                     disable_sni: false,
                     insecure: false,
@@ -294,6 +297,7 @@ mod tests {
                 },
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: Some("dns.example.com".into()),
                     disable_sni: false,
                     insecure: false,
@@ -333,6 +337,7 @@ mod tests {
                 },
                 tls: TlsFields {
                     enabled: false,
+                    alpn: None,
                     server_name: None,
                     disable_sni: false,
                     insecure: false,
@@ -364,6 +369,7 @@ mod tests {
                 dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
                 tls: TlsFields {
                     enabled: false,
+                    alpn: None,
                     server_name: None,
                     disable_sni: false,
                     insecure: false,
@@ -389,6 +395,7 @@ mod tests {
             dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
             tls: TlsFields {
                 enabled: true,
+                alpn: None,
                 server_name: Some("trojan.example.com".into()),
                 disable_sni: false,
                 insecure: false,
@@ -419,6 +426,7 @@ mod tests {
                 dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: None,
                     disable_sni: false,
                     insecure: false,
@@ -459,6 +467,7 @@ mod tests {
                 },
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: Some("trojan.example.com".into()),
                     disable_sni: false,
                     insecure: false,
@@ -501,6 +510,7 @@ mod tests {
                 },
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: Some("dns.example.com".into()),
                     disable_sni: false,
                     insecure: false,

@@ -142,6 +142,11 @@ pub struct InputDomainResolverObject {
 pub struct InputTlsFields {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_string_list_or_string"
+    )]
+    pub alpn: Option<Vec<String>>,
     #[serde(default)]
     pub server_name: Option<String>,
     #[serde(default)]
@@ -160,6 +165,7 @@ impl Default for InputTlsFields {
     fn default() -> Self {
         Self {
             enabled: true,
+            alpn: None,
             server_name: None,
             disable_sni: false,
             insecure: false,

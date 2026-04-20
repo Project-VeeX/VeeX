@@ -132,6 +132,7 @@ mod tests {
                 dial: test_dial(),
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
                     insecure: true,
@@ -185,6 +186,7 @@ mod tests {
                 dial: test_dial(),
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
                     insecure: true,
@@ -224,6 +226,7 @@ mod tests {
                 dial: test_dial(),
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
                     insecure: true,

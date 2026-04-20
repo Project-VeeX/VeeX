@@ -1433,7 +1433,45 @@ mod tests {
         match &config.outbounds[1] {
             OutboundConfig::Trojan(trojan) => {
                 assert_eq!(trojan.dial.connect_timeout, DEFAULT_CONNECT_TIMEOUT);
+                assert_eq!(trojan.tls.alpn, None);
                 assert_eq!(trojan.tls.handshake_timeout, DEFAULT_TLS_HANDSHAKE_TIMEOUT);
+            }
+            other => panic!("expected trojan outbound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_tls_alpn_fields() {
+        let input = r#"
+        {
+          "inbounds": [
+            { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
+          ],
+          "outbounds": [
+            {
+              "type": "trojan",
+              "tag": "proxy",
+              "server": "example.com",
+              "server_port": 443,
+              "password": "secret",
+              "tls": {
+                "server_name": "example.com",
+                "alpn": ["h2", "http/1.1"]
+              }
+            }
+          ],
+          "route": { "final": "proxy" }
+        }
+        "#;
+
+        let config = parse_config(input).expect("tls alpn fields should parse");
+
+        match &config.outbounds[0] {
+            OutboundConfig::Trojan(trojan) => {
+                assert_eq!(
+                    trojan.tls.alpn.as_deref(),
+                    Some(&["h2".to_string(), "http/1.1".to_string()][..])
+                );
             }
             other => panic!("expected trojan outbound, got {other:?}"),
         }

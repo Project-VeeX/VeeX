@@ -49,6 +49,7 @@ pub(crate) fn dial_fields(
 pub(crate) fn input_tls_fields_into_config(input_config: InputTlsFields) -> TlsFields {
     TlsFields {
         enabled: input_config.enabled,
+        alpn: input_config.alpn,
         server_name: input_config.server_name,
         disable_sni: input_config.disable_sni,
         insecure: input_config.insecure,

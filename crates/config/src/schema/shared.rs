@@ -56,6 +56,7 @@ impl DialFields {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TlsFields {
     pub enabled: bool,
+    pub alpn: Option<Vec<String>>,
     pub server_name: Option<String>,
     pub disable_sni: bool,
     pub insecure: bool,

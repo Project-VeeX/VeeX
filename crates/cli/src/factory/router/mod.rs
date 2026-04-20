@@ -52,6 +52,7 @@ mod tests {
                     dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
                     tls: TlsFields {
                         enabled: true,
+                        alpn: None,
                         server_name: Some("trojan.example.com".into()),
                         disable_sni: false,
                         insecure: false,

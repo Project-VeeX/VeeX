@@ -384,6 +384,7 @@ async fn runtime_uses_explicit_domain_resolver_for_trojan_server_dial() {
                 },
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
                     insecure: true,
@@ -501,6 +502,7 @@ async fn runtime_supports_socks_to_trojan_round_trip() {
                 dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
                     insecure: true,
@@ -667,6 +669,7 @@ async fn runtime_supports_socks_domain_route_rule_to_trojan() {
                 dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
                     insecure: true,
@@ -760,6 +763,7 @@ async fn runtime_reports_trojan_failure_on_wrong_password() {
                 dial: DialFields::new(DEFAULT_CONNECT_TIMEOUT),
                 tls: TlsFields {
                     enabled: true,
+                    alpn: None,
                     server_name: Some("localhost".into()),
                     disable_sni: false,
                     insecure: true,
@@ -1977,6 +1981,7 @@ async fn spawn_dns_upstream_server(
 fn dns_server_tls_config(upstream: DnsUpstreamTransport) -> TlsFields {
     TlsFields {
         enabled: true,
+        alpn: None,
         server_name: match upstream {
             DnsUpstreamTransport::Tls | DnsUpstreamTransport::Https => Some("localhost".into()),
             DnsUpstreamTransport::Udp | DnsUpstreamTransport::Tcp => None,

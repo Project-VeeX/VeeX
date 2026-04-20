@@ -46,7 +46,7 @@ Outbound stream execution follows one shared chain:
 resolve -> connect -> (tls) -> (protocol) -> relay
 ```
 
-`direct` uses the shared resolve/connect semantics and then enters relay immediately. `trojan` keeps the same resolve/connect base semantics, adds TLS when enabled, then performs Trojan protocol request setup before relay. `connect_timeout` belongs to the connect stage; `tls.handshake_timeout` belongs only to the TLS stage.
+`direct` uses the shared resolve/connect semantics and then enters relay immediately. `trojan` keeps the same resolve/connect base semantics, adds TLS when enabled, then performs Trojan protocol request setup before relay. `connect_timeout` belongs to the connect stage; `tls.handshake_timeout` and `tls.alpn` belong only to the TLS stage.
 
 Relay is the execution terminal stage on stream paths:
 
