@@ -159,23 +159,35 @@ Migration direction:
 
 Known tolerated-but-unimplemented fields (accepted in config but have no effect):
 
-- `domain_resolver` — domain resolution strategy
+- `dns.strategy` — DNS lookup preference hint
 - `log.output` — log output destination (e.g. file path, syslog); VeeX currently logs to stdout/stderr only
 
 Note: `log.timestamp` is implemented and controls whether tracing output includes RFC3339 timestamps.
 
 Known fields remain strictly typed. An unsupported type on a known field is still an error.
 
-## Compatibility Fixture
+## Public Examples
 
-The repository compatibility fixture is:
+Public starting-point configs under `examples/` are:
 
 - `examples/direct-trojan.json`
-- `examples/direct-udp-dns.json`
-- `examples/direct-udp-echo.json`
-- `examples/tproxy-compat.json`
+- `examples/socks-trojan.json`
+- `examples/redirect-trojan.json`
+- `examples/dns-hijack.json`
+- `examples/tproxy-sniff-rules.json`
 
-`examples/tproxy-compat.json` intentionally uses `listen="::"` to cover dual-stack validation more closely.
+These files are intended to be user-facing starting points. They should stay within the currently supported subset and avoid compatibility-only or tolerated-but-unimplemented fields.
+
+## Internal Validation Fixtures
+
+Compatibility and smoke-test JSON inputs live under crate-local `tests/data/` paths:
+
+- `crates/cli/tests/data/direct-udp-dns.json`
+- `crates/cli/tests/data/direct-udp-echo.json`
+- `crates/cli/tests/data/tproxy-compat.json`
+- `crates/config/tests/data/tproxy-compat.json`
+
+`tproxy-compat.json` remains internal because it intentionally exercises tolerated compatibility inputs such as `dns.strategy` and `log.output`, rather than serving as a recommended public example.
 
 Typical validation command:
 

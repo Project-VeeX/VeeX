@@ -30,9 +30,6 @@
         "disable_sni": false,
         "insecure": false,
         "handshake_timeout": "5s"
-      },
-      "multiplex": {
-        "enabled": false
       }
     }
   ],

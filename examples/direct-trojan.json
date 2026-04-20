@@ -40,7 +40,6 @@
       "server_port": 443,
       "password": "change-me",
       "connect_timeout": "5s",
-      "domain_resolver": "local",
       "tls": {
         "enabled": true,
         "server_name": "trojan.example.com",

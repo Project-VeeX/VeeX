@@ -2052,7 +2052,7 @@ mod tests {
 
     #[test]
     fn parses_tproxy_compat_example_with_ignored_fields() {
-        let input = include_str!("../../../../examples/tproxy-compat.json");
+        let input = include_str!("../../tests/data/tproxy-compat.json");
 
         let report =
             parse_config_report_unvalidated(input).expect("compat example should parse cleanly");

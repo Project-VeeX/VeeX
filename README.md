@@ -83,6 +83,24 @@ for developer:
 cargo build -p veex-cli
 ```
 
+## Examples
+
+Public example configs live under `examples/` and are intended as user-facing starting points:
+
+- `examples/direct-trojan.json`: direct inbound to trojan outbound
+- `examples/socks-trojan.json`: SOCKS inbound to trojan outbound
+- `examples/redirect-trojan.json`: redirect inbound to trojan outbound
+- `examples/dns-hijack.json`: UDP DNS hijack with runtime cache and rule-scoped cache bypass
+- `examples/tproxy-sniff-rules.json`: tproxy ingress with explicit sniff and direct-exception route rules
+
+Typical check command:
+
+```bash
+veex check -c examples/direct-trojan.json
+```
+
+Internal compatibility and smoke-test JSON inputs live under crate-local `tests/data/` paths. They are validation fixtures, not public examples.
+
 ## Docs
 
 - `docs/architecture.md` for the public architecture and capability boundaries

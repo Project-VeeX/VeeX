@@ -1,0 +1,90 @@
+{
+  "log": {
+    "level": "info",
+    "disabled": false,
+    "timestamp": true,
+    "output": "stdout"
+  },
+  "dns": {
+    "final": "local",
+    "strategy": "prefer_ipv4",
+    "servers": [
+      {
+        "tag": "local",
+        "type": "udp",
+        "server": "223.5.5.5",
+        "server_port": 53,
+        "detour": "direct"
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "type": "tproxy",
+      "tag": "tproxy-in",
+      "listen": "::",
+      "listen_port": 1041,
+      "network": "tcp"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct",
+      "connect_timeout": "5s",
+      "routing_mark": 255
+    },
+    {
+      "type": "trojan",
+      "tag": "proxy",
+      "server": "trojan.example.com",
+      "server_port": 443,
+      "password": "change-me",
+      "connect_timeout": "5s",
+      "domain_resolver": "local",
+      "tls": {
+        "enabled": true,
+        "server_name": "trojan.example.com",
+        "disable_sni": false,
+        "insecure": false,
+        "handshake_timeout": "5s"
+      }
+    }
+  ],
+  "route": {
+    "final": "proxy",
+    "rules": [
+      {
+        "ip_is_loopback": true,
+        "outbound": "direct"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "ip_is_link_local": true,
+        "outbound": "direct"
+      },
+      {
+        "inbound": [
+          "tproxy-in"
+        ],
+        "action": "sniff",
+        "timeout": "300ms"
+      },
+      {
+        "outbound": "direct",
+        "domain": [
+          "trojan.example.com"
+        ]
+      },
+      {
+        "outbound": "direct",
+        "domain_suffix": [
+          "lan"
+        ]
+      }
+    ]
+  }
+}

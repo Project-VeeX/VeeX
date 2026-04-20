@@ -40,9 +40,9 @@ After the above, open only the topic-specific sources you need:
   - authoritative source for what changed between releases
 - `examples/socks-trojan.json`
 - `examples/direct-trojan.json`
-- `examples/direct-udp-echo.json`
+- `examples/dns-hijack.json`
 - `examples/redirect-trojan.json`
-- `examples/tproxy-compat.json`
+- `examples/tproxy-sniff-rules.json`
   - use examples as concrete configuration starting points
 
 ## Stable Internal References
@@ -77,3 +77,4 @@ After the above, open only the topic-specific sources you need:
 - temporary stage material such as `.local` task files is not part of the active knowledge base
 - if an important fact exists only in temporary material, it should be migrated into a persistent doc or reference
 - when a fact appears in both a stable public guide and an internal reference, the public guide has priority unless the question is specifically about internal engineering constraints
+- crate-local `tests/data/` JSON files are internal validation inputs, not public examples
