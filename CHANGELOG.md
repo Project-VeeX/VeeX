@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1
+
+- Expanded outbound dialing and TLS config support within the existing sing-box-compatible subset: added outbound `tls.alpn`, added `disable_tcp_keep_alive` / `tcp_keep_alive` / `tcp_keep_alive_interval`, and aligned the default outbound `connect_timeout` from `10s` to `5s` with sing-box's current TCP connect timeout baseline.
+- Reorganized `examples/` into public starting-point configs only, moved compatibility and smoke-only JSON files into crate-local `tests/data/`, and aligned the changelog, config contract, and example guidance with the current supported surface.
+- Fix the issue of unstable tracing test capture under parallel testing in the workspace.
+
 ## 0.7.0
 
 - Closed the current DNS runtime around explicit dial-side resolver semantics, in-memory response cache, per-rule cache bypass, and concurrent safe-upstream exchange, while keeping resolver priority, safe selection, and recursion-guard behavior explicit and unchanged. FakeDNS, fake-ip mapping, and stale/optimistic cache remain out of scope.
