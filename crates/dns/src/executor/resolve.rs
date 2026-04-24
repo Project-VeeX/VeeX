@@ -7,7 +7,9 @@ use crate::{
     request::build_resolution_upstream_request,
 };
 
-use super::{DnsExecutor, MAX_DNS_RECURSION_DEPTH, RESOLVE_QUERY_KIND};
+use super::{
+    DnsExecutor, MAX_DNS_RECURSION_DEPTH, RESOLVE_QUERY_KIND, exchange::CacheStoreContext,
+};
 
 impl DnsExecutor {
     pub(super) async fn resolve_host_impl(
@@ -114,13 +116,15 @@ impl DnsExecutor {
         match exchange {
             Ok((winner_server_tag, response, addresses)) => {
                 self.maybe_store_cache(
-                    query_id,
-                    RESOLVE_QUERY_KIND,
-                    &cache_key,
-                    &query.name,
-                    query.qtype,
-                    context.disable_cache,
-                    &winner_server_tag,
+                    CacheStoreContext {
+                        query_id,
+                        query_kind: RESOLVE_QUERY_KIND,
+                        cache_key: &cache_key,
+                        query_name: &query.name,
+                        query_type: query.qtype,
+                        disable_cache: context.disable_cache,
+                        winner_server_tag: &winner_server_tag,
+                    },
                     &response,
                 );
                 self.log_domain_resolve_success(

@@ -2,7 +2,7 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
 };
 
 use tracing::{
@@ -48,9 +48,43 @@ impl Visit for EventVisitor {
     }
 }
 
-#[derive(Clone)]
-struct CaptureLayer {
-    events: Arc<Mutex<Vec<CapturedEvent>>>,
+#[derive(Clone, Default)]
+struct CaptureLayer;
+
+type EventBuffer = Arc<Mutex<Vec<CapturedEvent>>>;
+type ActiveEventBuffer = Mutex<Option<EventBuffer>>;
+
+pub struct CaptureGuard {
+    lock_guard: Option<MutexGuard<'static, ()>>,
+}
+
+static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+static ACTIVE_BUFFER: OnceLock<ActiveEventBuffer> = OnceLock::new();
+static SUBSCRIBER_INIT: OnceLock<()> = OnceLock::new();
+
+fn active_buffer() -> &'static ActiveEventBuffer {
+    ACTIVE_BUFFER.get_or_init(|| Mutex::new(None))
+}
+
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn ensure_capture_subscriber() {
+    SUBSCRIBER_INIT.get_or_init(|| {
+        let subscriber = tracing_subscriber::registry().with(CaptureLayer);
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("test tracing subscriber should install exactly once");
+    });
+}
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        *lock_unpoisoned(active_buffer()) = None;
+        self.lock_guard.take();
+    }
 }
 
 impl<S> Layer<S> for CaptureLayer
@@ -58,37 +92,36 @@ where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
     fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
+        let Some(events) = lock_unpoisoned(active_buffer()).as_ref().cloned() else {
+            return;
+        };
         let mut visitor = EventVisitor::default();
         event.record(&mut visitor);
         visitor
             .fields
             .insert("level".to_string(), event.metadata().level().to_string());
-        self.events
-            .lock()
-            .expect("captured events lock poisoned")
-            .push(CapturedEvent {
-                fields: visitor.fields,
-            });
+        lock_unpoisoned(&events).push(CapturedEvent {
+            fields: visitor.fields,
+        });
     }
 }
 
-pub fn install_test_subscriber() -> (
-    tracing::subscriber::DefaultGuard,
-    Arc<Mutex<Vec<CapturedEvent>>>,
-) {
+pub fn install_test_subscriber() -> (CaptureGuard, EventBuffer) {
+    ensure_capture_subscriber();
+    let capture_lock = lock_unpoisoned(&CAPTURE_LOCK);
     let events = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(CaptureLayer {
-        events: Arc::clone(&events),
-    });
+    *lock_unpoisoned(active_buffer()) = Some(Arc::clone(&events));
 
-    (tracing::subscriber::set_default(subscriber), events)
+    (
+        CaptureGuard {
+            lock_guard: Some(capture_lock),
+        },
+        events,
+    )
 }
 
 pub fn captured_events(buffer: &Arc<Mutex<Vec<CapturedEvent>>>) -> Vec<CapturedEvent> {
-    buffer
-        .lock()
-        .expect("captured events lock poisoned")
-        .clone()
+    lock_unpoisoned(buffer).clone()
 }
 
 pub fn assert_has_event(

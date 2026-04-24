@@ -15,6 +15,16 @@ use crate::{
 
 use super::{DnsExecutor, runtime::DnsServerRuntime};
 
+pub(super) struct QueryFinishContext<'a> {
+    pub request: &'a DnsRequest,
+    pub query: &'a DnsQueryInfo,
+    pub server: &'a DnsServer,
+    pub selection: &'a DnsSelection,
+    pub query_id: u64,
+    pub cache_hit: bool,
+    pub winner_server_tag: &'a str,
+}
+
 impl DnsExecutor {
     pub(super) fn log_cache_lookup(
         &self,
@@ -268,48 +278,38 @@ impl DnsExecutor {
         // until the DNS subsystem grows an explicit reverse map store.
     }
 
-    pub(super) fn log_query_finish(
-        &self,
-        request: &DnsRequest,
-        query: &DnsQueryInfo,
-        server: &DnsServer,
-        selection: &DnsSelection,
-        query_id: u64,
-        response: &DnsResponse,
-        cache_hit: bool,
-        winner_server_tag: &str,
-    ) {
+    pub(super) fn log_query_finish(&self, context: QueryFinishContext<'_>, response: &DnsResponse) {
         info!(
             event = "dns_query_finish",
-            query_id,
-            inbound = %sanitize_field(&request.inbound_tag),
-            ingress_protocol = %request.protocol.as_str(),
-            query_name = %sanitize_field(&query.name),
-            query_type = query.qtype as u64,
-            server = %sanitize_field(&server.tag),
-            winner_server = %sanitize_field(winner_server_tag),
-            detour = %sanitize_field(server.detour_tag()),
-            destination = %sanitize_field(&server.destination.to_string()),
-            route_reason = %selection.reason.as_str(),
-            transport = %server.transport.as_str(),
-            cache_hit,
+            query_id = context.query_id,
+            inbound = %sanitize_field(&context.request.inbound_tag),
+            ingress_protocol = %context.request.protocol.as_str(),
+            query_name = %sanitize_field(&context.query.name),
+            query_type = context.query.qtype as u64,
+            server = %sanitize_field(&context.server.tag),
+            winner_server = %sanitize_field(context.winner_server_tag),
+            detour = %sanitize_field(context.server.detour_tag()),
+            destination = %sanitize_field(&context.server.destination.to_string()),
+            route_reason = %context.selection.reason.as_str(),
+            transport = %context.server.transport.as_str(),
+            cache_hit = context.cache_hit,
             response_bytes = response.raw_message.len() as u64,
             "dns query finished"
         );
         info!(
             event = "dns_query_success",
-            query_id,
-            inbound = %sanitize_field(&request.inbound_tag),
-            ingress_protocol = %request.protocol.as_str(),
-            query_name = %sanitize_field(&query.name),
-            query_type = query.qtype as u64,
-            server = %sanitize_field(&server.tag),
-            winner_server = %sanitize_field(winner_server_tag),
-            detour = %sanitize_field(server.detour_tag()),
-            destination = %sanitize_field(&server.destination.to_string()),
-            route_reason = %selection.reason.as_str(),
-            transport = %server.transport.as_str(),
-            cache_hit,
+            query_id = context.query_id,
+            inbound = %sanitize_field(&context.request.inbound_tag),
+            ingress_protocol = %context.request.protocol.as_str(),
+            query_name = %sanitize_field(&context.query.name),
+            query_type = context.query.qtype as u64,
+            server = %sanitize_field(&context.server.tag),
+            winner_server = %sanitize_field(context.winner_server_tag),
+            detour = %sanitize_field(context.server.detour_tag()),
+            destination = %sanitize_field(&context.server.destination.to_string()),
+            route_reason = %context.selection.reason.as_str(),
+            transport = %context.server.transport.as_str(),
+            cache_hit = context.cache_hit,
             response_bytes = response.raw_message.len() as u64,
             "dns query succeeded"
         );

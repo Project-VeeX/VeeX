@@ -16,6 +16,16 @@ use crate::{
 
 use super::{DnsExecutor, RESOLVE_QUERY_KIND, runtime::DnsServerRuntime};
 
+pub(super) struct CacheStoreContext<'a> {
+    pub query_id: u64,
+    pub query_kind: &'a str,
+    pub cache_key: &'a DnsCacheKey,
+    pub query_name: &'a str,
+    pub query_type: u16,
+    pub disable_cache: bool,
+    pub winner_server_tag: &'a str,
+}
+
 impl DnsExecutor {
     pub(super) fn lookup_cache(
         &self,
@@ -61,31 +71,21 @@ impl DnsExecutor {
         }
     }
 
-    pub(super) fn maybe_store_cache(
-        &self,
-        query_id: u64,
-        query_kind: &str,
-        cache_key: &DnsCacheKey,
-        query_name: &str,
-        query_type: u16,
-        disable_cache: bool,
-        winner_server_tag: &str,
-        response: &DnsResponse,
-    ) {
-        if !self.cache_enabled || disable_cache {
+    pub(super) fn maybe_store_cache(&self, context: CacheStoreContext<'_>, response: &DnsResponse) {
+        if !self.cache_enabled || context.disable_cache {
             return;
         }
 
-        let ttl = match parse_response_min_ttl(&response.raw_message, query_type) {
+        let ttl = match parse_response_min_ttl(&response.raw_message, context.query_type) {
             Ok(Some(ttl)) => ttl,
             Ok(None) => return,
             Err(err) => {
                 warn!(
                     event = "dns_cache_store_skipped",
-                    query_id,
-                    query_kind = %query_kind,
-                    query_name = %sanitize_field(query_name),
-                    query_type = query_type as u64,
+                    query_id = context.query_id,
+                    query_kind = %context.query_kind,
+                    query_name = %sanitize_field(context.query_name),
+                    query_type = context.query_type as u64,
                     error_kind = ?err.kind(),
                     error = %err,
                     "dns cache store skipped due to uncacheable response"
@@ -95,18 +95,18 @@ impl DnsExecutor {
         };
 
         self.cache.lock().expect("dns cache lock poisoned").store(
-            cache_key.clone(),
+            context.cache_key.clone(),
             response.raw_message.clone(),
             ttl,
-            winner_server_tag.to_string(),
+            context.winner_server_tag.to_string(),
         );
         self.log_cache_store(
-            query_id,
-            query_kind,
-            query_name,
-            query_type,
-            &cache_key.selection_scope,
-            winner_server_tag,
+            context.query_id,
+            context.query_kind,
+            context.query_name,
+            context.query_type,
+            &context.cache_key.selection_scope,
+            context.winner_server_tag,
             ttl,
         );
     }

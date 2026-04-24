@@ -30,6 +30,14 @@ use veex_portal_outbound::{
 use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 use veex_transport::{HostResolveRequest, HostResolver, OutboundTls};
 
+type TcpConnectFuture =
+    Pin<Box<dyn Future<Output = io::Result<tokio::net::TcpStream>> + Send + 'static>>;
+type UdpConnectFuture =
+    Pin<Box<dyn Future<Output = io::Result<tokio::net::UdpSocket>> + Send + 'static>>;
+type MarkedTcpConnector = Arc<dyn Fn(SocketAddr, u32) -> TcpConnectFuture + Send + Sync>;
+type MarkedUdpConnector = Arc<dyn Fn(SocketAddr, u32) -> UdpConnectFuture + Send + Sync>;
+type TcpConnector = Arc<dyn Fn(SocketAddr) -> TcpConnectFuture + Send + Sync>;
+
 fn capture_contexts(store: Arc<Mutex<Vec<ResolveContext>>>) -> Arc<HostResolver> {
     Arc::new(move |request: HostResolveRequest| {
         let store = Arc::clone(&store);
@@ -119,27 +127,11 @@ fn test_stream_session(destination: Destination) -> SessionContext {
     )
 }
 
-fn panic_marked_connector() -> Arc<
-    dyn Fn(
-            SocketAddr,
-            u32,
-        )
-            -> Pin<Box<dyn Future<Output = io::Result<tokio::net::TcpStream>> + Send + 'static>>
-        + Send
-        + Sync,
-> {
+fn panic_marked_connector() -> MarkedTcpConnector {
     Arc::new(|_address, _routing_mark| Box::pin(async move { panic!("connector should not run") }))
 }
 
-fn panic_udp_connector() -> Arc<
-    dyn Fn(
-            SocketAddr,
-            u32,
-        )
-            -> Pin<Box<dyn Future<Output = io::Result<tokio::net::UdpSocket>> + Send + 'static>>
-        + Send
-        + Sync,
-> {
+fn panic_udp_connector() -> MarkedUdpConnector {
     Arc::new(|_address, _routing_mark| {
         Box::pin(async move { panic!("udp connector should not run") })
     })
@@ -148,15 +140,7 @@ fn panic_udp_connector() -> Arc<
 fn direct_outbound_for_test(
     dial: Dial,
     resolver: Arc<HostResolver>,
-    connector: Arc<
-        dyn Fn(
-                SocketAddr,
-                u32,
-            )
-                -> Pin<Box<dyn Future<Output = io::Result<tokio::net::TcpStream>> + Send + 'static>>
-            + Send
-            + Sync,
-    >,
+    connector: MarkedTcpConnector,
 ) -> DirectOutbound {
     DirectOutbound::new(
         OutboundMeta::new("direct", "direct"),
@@ -172,14 +156,7 @@ fn direct_outbound_for_test(
 fn trojan_outbound_for_test(
     dial: Dial,
     resolver: Arc<HostResolver>,
-    connector: Arc<
-        dyn Fn(
-                SocketAddr,
-            )
-                -> Pin<Box<dyn Future<Output = io::Result<tokio::net::TcpStream>> + Send + 'static>>
-            + Send
-            + Sync,
-    >,
+    connector: TcpConnector,
 ) -> TrojanOutbound {
     TrojanOutbound::new(
         OutboundMeta::new("proxy", "trojan"),
@@ -411,7 +388,7 @@ async fn direct_and_trojan_preserve_inherited_resolve_context() {
             .lock()
             .expect("direct contexts should lock")
             .as_slice(),
-        &[inherited.clone()]
+        std::slice::from_ref(&inherited)
     );
     assert_eq!(
         trojan_contexts

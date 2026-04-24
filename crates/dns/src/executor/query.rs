@@ -4,7 +4,9 @@ use crate::{
     cache::DnsCacheKey, parse_query_info, request::bind_client_upstream_request, rewrite_message_id,
 };
 
-use super::{CLIENT_QUERY_KIND, DnsExecutor};
+use super::{
+    CLIENT_QUERY_KIND, DnsExecutor, exchange::CacheStoreContext, logging::QueryFinishContext,
+};
 
 impl DnsExecutor {
     pub(super) async fn execute_query_impl(
@@ -37,14 +39,16 @@ impl DnsExecutor {
             let response = DnsResponse::new(rewrite_message_id(&cached.raw_message, query.id)?);
             self.on_client_response(&query.name, &response);
             self.log_query_finish(
-                &request,
-                &query,
-                &server.server,
-                &selection,
-                query_id,
+                QueryFinishContext {
+                    request: &request,
+                    query: &query,
+                    server: &server.server,
+                    selection: &selection,
+                    query_id,
+                    cache_hit: true,
+                    winner_server_tag: &cached.stored_server_tag,
+                },
                 &response,
-                true,
-                &cached.stored_server_tag,
             );
             return Ok(response);
         }
@@ -64,25 +68,29 @@ impl DnsExecutor {
         match exchange {
             Ok((winner_server_tag, response, _)) => {
                 self.maybe_store_cache(
-                    query_id,
-                    CLIENT_QUERY_KIND,
-                    &cache_key,
-                    &query.name,
-                    query.qtype,
-                    disable_cache,
-                    &winner_server_tag,
+                    CacheStoreContext {
+                        query_id,
+                        query_kind: CLIENT_QUERY_KIND,
+                        cache_key: &cache_key,
+                        query_name: &query.name,
+                        query_type: query.qtype,
+                        disable_cache,
+                        winner_server_tag: &winner_server_tag,
+                    },
                     &response,
                 );
                 self.on_client_response(&query.name, &response);
                 self.log_query_finish(
-                    &request,
-                    &query,
-                    &server.server,
-                    &selection,
-                    query_id,
+                    QueryFinishContext {
+                        request: &request,
+                        query: &query,
+                        server: &server.server,
+                        selection: &selection,
+                        query_id,
+                        cache_hit: false,
+                        winner_server_tag: &winner_server_tag,
+                    },
                     &response,
-                    false,
-                    &winner_server_tag,
                 );
                 Ok(response)
             }
