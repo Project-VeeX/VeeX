@@ -13,7 +13,13 @@ use tokio::{
     time::timeout,
 };
 use tracing::{debug, info, warn};
-use veex_core::{ProxyError, Result, dns::ResolveContext, logging::sanitize_field, types::Host};
+use veex_core::{
+    ProxyError, Result,
+    dns::ResolveContext,
+    logging::sanitize_field,
+    portal::{Dial, DialContext},
+    types::Host,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConnectTraceContext {
@@ -55,6 +61,23 @@ impl fmt::Debug for TcpConnectOptions {
             .field("trace", &self.trace)
             .field("connector", &self.connector.as_ref().map(|_| "<custom>"))
             .finish()
+    }
+}
+
+impl TcpConnectOptions {
+    pub fn from_dial(dial: &Dial, ctx: &DialContext) -> Self {
+        Self {
+            timeout: dial.connect_timeout,
+            disable_keepalive: dial.disable_tcp_keep_alive,
+            keepalive: dial.tcp_keep_alive,
+            keepalive_interval: dial.tcp_keep_alive_interval,
+            trace: Some(ConnectTraceContext {
+                session_id: ctx.session_id,
+                outbound: ctx.outbound_tag.clone(),
+                routing_mark: dial.routing_mark,
+            }),
+            connector: None,
+        }
     }
 }
 
@@ -494,7 +517,10 @@ mod tests {
         ConnectTraceContext, TcpAttemptConnector, TcpConnectOptions, connect_host,
         connect_resolved_addresses,
     };
-    use veex_core::types::Host;
+    use veex_core::{
+        portal::{Dial, DialContext},
+        types::Host,
+    };
     use veex_test_tracing::{
         CapturedEvent, assert_has_event, captured_events, install_test_subscriber,
     };
@@ -504,6 +530,39 @@ mod tests {
             .iter()
             .filter(|event| event.fields.get("event").map(String::as_str) == Some(event_name))
             .count()
+    }
+
+    #[test]
+    fn tcp_connect_options_from_dial_carries_shared_connect_semantics() {
+        let options = TcpConnectOptions::from_dial(
+            &Dial {
+                connect_timeout: Some(Duration::from_secs(3)),
+                routing_mark: Some(9),
+                disable_tcp_keep_alive: true,
+                tcp_keep_alive: Some(Duration::from_secs(45)),
+                tcp_keep_alive_interval: Some(Duration::from_secs(12)),
+                ..Dial::default()
+            },
+            &DialContext {
+                session_id: 17,
+                outbound_tag: "proxy".into(),
+                resolve_context: None,
+            },
+        );
+
+        assert_eq!(options.timeout, Some(Duration::from_secs(3)));
+        assert!(options.disable_keepalive);
+        assert_eq!(options.keepalive, Some(Duration::from_secs(45)));
+        assert_eq!(options.keepalive_interval, Some(Duration::from_secs(12)));
+        assert_eq!(
+            options.trace,
+            Some(ConnectTraceContext {
+                session_id: 17,
+                outbound: "proxy".into(),
+                routing_mark: Some(9),
+            })
+        );
+        assert!(options.connector.is_none());
     }
 
     #[tokio::test]

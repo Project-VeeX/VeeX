@@ -14,7 +14,7 @@ use veex_core::{
     types::Host,
 };
 use veex_transport::{
-    ConnectTraceContext, HostResolveRequest, HostResolver, TcpAttemptConnector, TcpConnectOptions,
+    HostResolveRequest, HostResolver, TcpAttemptConnector, TcpConnectOptions,
     connect_host_with_resolver, resolve_host,
 };
 
@@ -108,26 +108,10 @@ async fn connect_destination(
         let marked_connector = Arc::clone(marked_connector);
         Arc::new(move |address| marked_connector(address, routing_mark)) as Arc<TcpAttemptConnector>
     });
+    let mut options = TcpConnectOptions::from_dial(&dial, &ctx);
+    options.connector = connector;
 
-    connect_host_with_resolver(
-        host,
-        port,
-        resolve_context,
-        resolver,
-        TcpConnectOptions {
-            timeout: dial.connect_timeout,
-            disable_keepalive: dial.disable_tcp_keep_alive,
-            keepalive: dial.tcp_keep_alive,
-            keepalive_interval: dial.tcp_keep_alive_interval,
-            trace: Some(ConnectTraceContext {
-                session_id: ctx.session_id,
-                outbound: ctx.outbound_tag,
-                routing_mark: dial.routing_mark,
-            }),
-            connector,
-        },
-    )
-    .await
+    connect_host_with_resolver(host, port, resolve_context, resolver, options).await
 }
 
 async fn connect_packet_destination(
