@@ -19,6 +19,41 @@ pub struct Dial {
     pub domain_resolver_disable_cache: bool,
 }
 
+impl Dial {
+    pub fn resolve_context(
+        &self,
+        existing: Option<&ResolveContext>,
+        outbound_tag: impl Into<String>,
+    ) -> ResolveContext {
+        let mut context = ResolveContext::from_outbound_policy(
+            existing,
+            outbound_tag,
+            self.domain_resolver.clone(),
+        );
+        if self.domain_resolver_disable_cache {
+            context = context.with_disable_cache(true);
+        }
+        context
+    }
+
+    pub fn dns_upstream_resolve_context(
+        &self,
+        parent: &ResolveContext,
+        outbound_tag: impl Into<String>,
+        dns_server_tag: impl Into<String>,
+    ) -> ResolveContext {
+        let mut context = parent.for_dns_upstream_dial(
+            outbound_tag,
+            dns_server_tag,
+            self.domain_resolver.clone(),
+        );
+        if self.domain_resolver_disable_cache {
+            context = context.with_disable_cache(true);
+        }
+        context
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DialContext {
     pub session_id: u64,
@@ -115,11 +150,76 @@ fn build_dial_context(dial: &Dial, session: &SessionContext, outbound_tag: Strin
     DialContext {
         session_id: session.meta.id,
         outbound_tag: outbound_tag.clone(),
-        resolve_context: Some(ResolveContext::from_outbound_policy(
-            session.state.resolve_context.as_ref(),
-            outbound_tag,
-            dial.domain_resolver.clone(),
-        )
-        .with_disable_cache(dial.domain_resolver_disable_cache)),
+        resolve_context: Some(
+            dial.resolve_context(session.state.resolve_context.as_ref(), outbound_tag),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::dns::ResolveContext;
+
+    use super::Dial;
+
+    #[test]
+    fn dial_resolve_context_applies_fresh_outbound_policy() {
+        let context = Dial {
+            domain_resolver: Some("bootstrap".into()),
+            domain_resolver_disable_cache: true,
+            ..Dial::default()
+        }
+        .resolve_context(None, "proxy");
+
+        assert_eq!(
+            context,
+            ResolveContext::outbound_dial("proxy", Some("bootstrap".into()))
+                .with_disable_cache(true)
+        );
+    }
+
+    #[test]
+    fn dial_resolve_context_preserves_inherited_policy() {
+        let inherited = ResolveContext::outbound_dial("parent", Some("bootstrap".into()))
+            .with_disable_cache(true)
+            .with_depth(2);
+
+        let context = Dial {
+            domain_resolver: Some("ignored".into()),
+            ..Dial::default()
+        }
+        .resolve_context(Some(&inherited), "proxy");
+
+        assert_eq!(context, inherited);
+    }
+
+    #[test]
+    fn dial_resolve_context_does_not_clear_inherited_disable_cache() {
+        let inherited = ResolveContext::outbound_dial("parent", Some("bootstrap".into()))
+            .with_disable_cache(true);
+
+        let context = Dial::default().resolve_context(Some(&inherited), "proxy");
+
+        assert!(context.disable_cache);
+        assert_eq!(context, inherited);
+    }
+
+    #[test]
+    fn dial_dns_upstream_resolve_context_uses_dns_upstream_semantics() {
+        let parent = ResolveContext::outbound_dial("proxy", None).with_depth(1);
+
+        let context = Dial {
+            domain_resolver: Some("bootstrap".into()),
+            domain_resolver_disable_cache: true,
+            ..Dial::default()
+        }
+        .dns_upstream_resolve_context(&parent, "direct", "bootstrap");
+
+        assert_eq!(context.purpose, crate::dns::ResolvePurpose::DnsUpstreamDial);
+        assert_eq!(context.caller_outbound_tag.as_deref(), Some("direct"));
+        assert_eq!(context.caller_dns_server_tag.as_deref(), Some("bootstrap"));
+        assert_eq!(context.explicit_server_tag.as_deref(), Some("bootstrap"));
+        assert!(context.disable_cache);
+        assert_eq!(context.recursion_depth, 2);
     }
 }

@@ -53,6 +53,8 @@ After the above, open only the topic-specific sources you need:
   - crate ownership, dependency constraints, and landing zones
 - `references/internal-architecture.md`
   - stable internal model, anti-patterns, and review checklist
+- `references/owner-matrix.md`
+  - owner mapping for shared fields, runtime landing zones, and config-to-runtime boundaries
 - `references/observability-errors.md`
   - distilled skill-facing summary of current error-model and tracing contracts
 - `references/architecture-closure.md`

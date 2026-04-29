@@ -8,7 +8,6 @@ use tokio::{
 use tracing::{debug, info, warn};
 use veex_core::{
     ProxyError, Result,
-    dns::ResolveContext,
     io::{PacketSession, PacketSessionHandle},
     logging::sanitize_field,
     portal::{BoxFuture, Dial, DialContext, Dialer, PacketDialer},
@@ -103,7 +102,8 @@ async fn connect_destination(
     ctx: DialContext,
     marked_connector: &Arc<MarkedConnector>,
 ) -> Result<TcpStream> {
-    let resolve_context = build_resolve_context(&dial, &ctx);
+    let resolve_context =
+        dial.resolve_context(ctx.resolve_context.as_ref(), ctx.outbound_tag.clone());
     let connector = dial.routing_mark.map(|routing_mark| {
         let marked_connector = Arc::clone(marked_connector);
         Arc::new(move |address| marked_connector(address, routing_mark)) as Arc<TcpAttemptConnector>
@@ -142,7 +142,7 @@ async fn connect_packet_destination(
     let addresses = resolver(HostResolveRequest {
         host: host.clone(),
         port,
-        context: build_resolve_context(&dial, &ctx),
+        context: dial.resolve_context(ctx.resolve_context.as_ref(), ctx.outbound_tag.clone()),
     })
     .await?;
     let attempt_count = addresses.len();
@@ -199,13 +199,6 @@ async fn connect_packet_destination(
             "no reachable udp address for {host_field}:{port} after {attempt_count} attempts"
         ))
     }))
-}
-
-fn build_resolve_context(dial: &Dial, ctx: &DialContext) -> ResolveContext {
-    ctx.resolve_context.clone().unwrap_or_else(|| {
-        ResolveContext::outbound_dial(ctx.outbound_tag.clone(), dial.domain_resolver.clone())
-            .with_disable_cache(dial.domain_resolver_disable_cache)
-    })
 }
 
 async fn connect_udp_socket(

@@ -45,10 +45,10 @@ pub(crate) fn build_upstream_resolve_context(
     parent_context: &ResolveContext,
 ) -> Option<ResolveContext> {
     server.outbound_tag().map(|detour| {
-        parent_context.for_dns_upstream_dial(
+        server.dial.dns_upstream_resolve_context(
+            parent_context,
             detour.to_string(),
             server.tag.clone(),
-            server.dial.domain_resolver.clone(),
         )
     })
 }
@@ -102,5 +102,36 @@ mod tests {
             Some("direct")
         );
         assert!(request.buffered_payload.is_empty());
+    }
+
+    #[test]
+    fn upstream_resolve_context_inherits_parent_cache_disable_and_server_policy() {
+        let server = DnsServer {
+            tag: "bootstrap".into(),
+            transport: DnsServerTransport::Udp,
+            destination: Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
+            dial: Dial {
+                detour: Some("direct".into()),
+                domain_resolver: Some("local".into()),
+                domain_resolver_disable_cache: true,
+                ..Dial::default()
+            },
+        };
+
+        let context = super::build_upstream_resolve_context(
+            &server,
+            &ResolveContext::outbound_dial("proxy", None).with_depth(1),
+        )
+        .expect("upstream resolve context should exist");
+
+        assert_eq!(
+            context.purpose,
+            veex_core::dns::ResolvePurpose::DnsUpstreamDial
+        );
+        assert_eq!(context.caller_outbound_tag.as_deref(), Some("direct"));
+        assert_eq!(context.caller_dns_server_tag.as_deref(), Some("bootstrap"));
+        assert_eq!(context.explicit_server_tag.as_deref(), Some("local"));
+        assert!(context.disable_cache);
+        assert_eq!(context.recursion_depth, 2);
     }
 }

@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use tokio::net::TcpStream;
-use veex_core::{
-    dns::ResolveContext,
-    portal::{Dial, DialContext, Dialer},
-};
+use veex_core::portal::{Dial, Dialer};
 use veex_transport::{
     ConnectTraceContext, HostResolver, TcpAttemptConnector, TcpConnectOptions,
     connect_host_with_resolver, resolve_host,
@@ -37,7 +34,7 @@ pub fn build_dialer_with_connector(
                 connect_host_with_resolver(
                     &host,
                     port,
-                    build_resolve_context(&dial, &ctx),
+                    dial.resolve_context(ctx.resolve_context.as_ref(), ctx.outbound_tag.clone()),
                     resolver.as_ref(),
                     TcpConnectOptions {
                         timeout: dial.connect_timeout,
@@ -56,11 +53,4 @@ pub fn build_dialer_with_connector(
             })
         }),
     )
-}
-
-fn build_resolve_context(dial: &Dial, ctx: &DialContext) -> ResolveContext {
-    ctx.resolve_context.clone().unwrap_or_else(|| {
-        ResolveContext::outbound_dial(ctx.outbound_tag.clone(), dial.domain_resolver.clone())
-            .with_disable_cache(dial.domain_resolver_disable_cache)
-    })
 }
