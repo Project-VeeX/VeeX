@@ -30,7 +30,7 @@ impl DnsServer {
     pub fn outbound_tag(&self) -> Option<&str> {
         match self.transport {
             DnsServerTransport::Unsupported(_) => None,
-            _ => Some(self.dial.detour.as_deref().unwrap_or("direct")),
+            _ => Some(self.dial.detour_tag()),
         }
     }
 

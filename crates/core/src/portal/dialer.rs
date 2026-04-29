@@ -20,6 +20,14 @@ pub struct Dial {
 }
 
 impl Dial {
+    pub fn explicit_detour_tag(&self) -> Option<&str> {
+        self.detour.as_deref()
+    }
+
+    pub fn detour_tag(&self) -> &str {
+        self.detour.as_deref().unwrap_or("direct")
+    }
+
     pub fn resolve_context(
         &self,
         existing: Option<&ResolveContext>,
@@ -221,5 +229,27 @@ mod tests {
         assert_eq!(context.explicit_server_tag.as_deref(), Some("bootstrap"));
         assert!(context.disable_cache);
         assert_eq!(context.recursion_depth, 2);
+    }
+
+    #[test]
+    fn dial_detour_tag_defaults_to_direct() {
+        assert_eq!(Dial::default().detour_tag(), "direct");
+        assert_eq!(Dial::default().explicit_detour_tag(), None);
+        assert_eq!(
+            Dial {
+                detour: Some("proxy".into()),
+                ..Dial::default()
+            }
+            .detour_tag(),
+            "proxy"
+        );
+        assert_eq!(
+            Dial {
+                detour: Some("proxy".into()),
+                ..Dial::default()
+            }
+            .explicit_detour_tag(),
+            Some("proxy")
+        );
     }
 }

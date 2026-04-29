@@ -33,7 +33,7 @@ impl DnsDialer {
         dial: Dial,
         outbounds: &Arc<OutboundCatalog>,
     ) -> veex_core::Result<Self> {
-        let outbound = match dial.detour.as_deref() {
+        let outbound = match dial.explicit_detour_tag() {
             Some(tag) => outbounds.require(tag)?,
             None => {
                 debug!(
@@ -53,7 +53,7 @@ impl DnsDialer {
     }
 
     pub(crate) fn detour_tag(&self) -> &str {
-        self.dial.detour.as_deref().unwrap_or("direct")
+        self.dial.detour_tag()
     }
 
     pub(crate) fn routing_mark(&self) -> Option<u32> {
