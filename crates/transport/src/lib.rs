@@ -7,6 +7,16 @@ pub struct ConnectTraceContext {
     pub routing_mark: Option<u32>,
 }
 
+impl ConnectTraceContext {
+    pub fn new(session_id: u64, outbound: impl Into<String>, routing_mark: Option<u32>) -> Self {
+        Self {
+            session_id,
+            outbound: outbound.into(),
+            routing_mark,
+        }
+    }
+}
+
 pub mod tcp;
 pub mod tls;
 pub mod verifier;

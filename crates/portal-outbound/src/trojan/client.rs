@@ -125,11 +125,11 @@ impl ProxyOutbound for TrojanOutbound {
         let tls = self.tls.clone();
         let closed = self.is_closed();
         let tcp_trace = self.dialer.context(ctx, self.meta.tag.clone());
-        let tls_trace = ConnectTraceContext {
-            session_id: ctx.meta.id,
-            outbound: self.meta.tag.clone(),
-            routing_mark: self.dialer.routing_mark(),
-        };
+        let tls_trace = ConnectTraceContext::new(
+            ctx.meta.id,
+            self.meta.tag.clone(),
+            self.dialer.routing_mark(),
+        );
         let protocol_trace =
             ProtocolTraceContext::new(ctx.meta.id, self.meta.tag.clone(), destination.clone());
 

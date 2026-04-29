@@ -138,11 +138,11 @@ pub(crate) async fn connect_tls_for_dns(
     tls: &OutboundTls,
     request: &DnsRequest,
 ) -> veex_core::Result<BoxedAsyncStream> {
-    let trace = ConnectTraceContext {
-        session_id: request.session_id.unwrap_or_default(),
-        outbound: dialer.detour_tag().to_string(),
-        routing_mark: dialer.routing_mark(),
-    };
+    let trace = ConnectTraceContext::new(
+        request.session_id.unwrap_or_default(),
+        dialer.detour_tag(),
+        dialer.routing_mark(),
+    );
     connect_tls_stream(
         stream,
         &destination.host,

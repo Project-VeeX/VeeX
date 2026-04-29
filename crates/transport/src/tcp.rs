@@ -66,11 +66,11 @@ impl TcpConnectOptions {
             disable_keepalive: dial.disable_tcp_keep_alive,
             keepalive: dial.tcp_keep_alive,
             keepalive_interval: dial.tcp_keep_alive_interval,
-            trace: Some(ConnectTraceContext {
-                session_id: ctx.session_id,
-                outbound: ctx.outbound_tag.clone(),
-                routing_mark: dial.routing_mark,
-            }),
+            trace: Some(ConnectTraceContext::new(
+                ctx.session_id,
+                ctx.outbound_tag.clone(),
+                dial.routing_mark,
+            )),
             connector: None,
         }
     }
@@ -550,11 +550,7 @@ mod tests {
         assert_eq!(options.keepalive_interval, Some(Duration::from_secs(12)));
         assert_eq!(
             options.trace,
-            Some(ConnectTraceContext {
-                session_id: 17,
-                outbound: "proxy".into(),
-                routing_mark: Some(9),
-            })
+            Some(ConnectTraceContext::new(17, "proxy", Some(9)))
         );
         assert!(options.connector.is_none());
     }
