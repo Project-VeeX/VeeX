@@ -18,7 +18,7 @@ use tokio_rustls::TlsConnector;
 use tracing::{info, warn};
 use veex_core::{ProxyError, Result, io::BoxedAsyncStream, logging::sanitize_field, types::Host};
 
-use crate::tcp::ConnectTraceContext;
+use crate::ConnectTraceContext;
 use crate::verifier::{
     CertificateVerifierOptions, VerifierError, build_client_config, validate_certificate_paths,
 };
@@ -477,7 +477,7 @@ mod tests {
     use super::{
         OutboundTls, connect_tls, is_ignorable_tls_close_notify_error, server_name_for_tls,
     };
-    use crate::tcp::ConnectTraceContext;
+    use crate::ConnectTraceContext;
     use veex_test_tracing::{assert_has_event, captured_events, install_test_subscriber};
 
     #[test]

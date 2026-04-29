@@ -21,12 +21,7 @@ use veex_core::{
     types::Host,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ConnectTraceContext {
-    pub session_id: u64,
-    pub outbound: String,
-    pub routing_mark: Option<u32>,
-}
+use crate::ConnectTraceContext;
 
 pub type TcpAttemptFuture = Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send + 'static>>;
 pub type TcpAttemptConnector = dyn Fn(SocketAddr) -> TcpAttemptFuture + Send + Sync;
@@ -513,10 +508,9 @@ mod tests {
         time::sleep,
     };
 
-    use super::{
-        ConnectTraceContext, TcpAttemptConnector, TcpConnectOptions, connect_host,
-        connect_resolved_addresses,
-    };
+    use crate::ConnectTraceContext;
+
+    use super::{TcpAttemptConnector, TcpConnectOptions, connect_host, connect_resolved_addresses};
     use veex_core::{
         portal::{Dial, DialContext},
         types::Host,
