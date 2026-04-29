@@ -332,6 +332,7 @@ mod tests {
                 dial: DialFields {
                     domain_resolver: Some(DomainResolverConfig {
                         server: "missing".into(),
+                        disable_cache: false,
                     }),
                     ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
                 },
@@ -462,6 +463,7 @@ mod tests {
                 dial: DialFields {
                     domain_resolver: Some(DomainResolverConfig {
                         server: "bootstrap".into(),
+                        disable_cache: false,
                     }),
                     ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
                 },
@@ -505,6 +507,7 @@ mod tests {
                     detour: Some("direct".into()),
                     domain_resolver: Some(DomainResolverConfig {
                         server: "dot".into(),
+                        disable_cache: false,
                     }),
                     ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
                 },

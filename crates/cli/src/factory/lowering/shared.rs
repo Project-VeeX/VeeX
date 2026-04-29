@@ -24,6 +24,10 @@ pub(super) fn lower_dial_fields(config: &DialFields) -> Dial {
             .domain_resolver
             .as_ref()
             .map(|resolver| resolver.server.clone()),
+        domain_resolver_disable_cache: config
+            .domain_resolver
+            .as_ref()
+            .is_some_and(|resolver| resolver.disable_cache),
     }
 }
 
@@ -51,7 +55,7 @@ pub(super) fn parse_host(value: &str) -> Host {
 mod tests {
     use std::time::Duration;
 
-    use veex_config::{DEFAULT_CONNECT_TIMEOUT, DialFields, TlsFields};
+    use veex_config::{DEFAULT_CONNECT_TIMEOUT, DialFields, DomainResolverConfig, TlsFields};
 
     use super::{lower_dial_fields, lower_tls_fields};
 
@@ -95,5 +99,19 @@ mod tests {
             tls.alpn.as_deref(),
             Some(&["h2".to_string(), "http/1.1".to_string()][..])
         );
+    }
+
+    #[test]
+    fn lower_dial_fields_carries_domain_resolver_disable_cache() {
+        let dial = lower_dial_fields(&DialFields {
+            domain_resolver: Some(DomainResolverConfig {
+                server: "bootstrap".into(),
+                disable_cache: true,
+            }),
+            ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
+        });
+
+        assert_eq!(dial.domain_resolver.as_deref(), Some("bootstrap"));
+        assert!(dial.domain_resolver_disable_cache);
     }
 }

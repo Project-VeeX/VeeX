@@ -169,9 +169,14 @@ fn classify_direct_inbound_ignored(field: &str) -> Option<IgnoredDisposition> {
 fn classify_dns_ignored(field: &str) -> Option<IgnoredDisposition> {
     if let Some((_, nested)) = indexed_field(field, "servers[") {
         return Some(match first_segment(nested) {
-            "address" | "domain_resolver" | "address_resolver" => IgnoredDisposition::Warn(
+            "address" | "address_resolver" => IgnoredDisposition::Warn(
                 "field is accepted for compatibility but does not affect the current dns server runtime",
             ),
+            "domain_resolver" if nested != "domain_resolver.disable_cache" => {
+                IgnoredDisposition::Warn(
+                    "field is accepted for compatibility but does not affect the current dns server runtime",
+                )
+            }
             "client_subnet" => IgnoredDisposition::Ignore(
                 "field is accepted for compatibility but ignored by the current dns server runtime",
             ),
@@ -228,11 +233,14 @@ fn classify_tproxy_ignored(field: &str) -> Option<IgnoredDisposition> {
 
 fn classify_direct_ignored(field: &str) -> Option<IgnoredDisposition> {
     Some(match first_segment(field) {
-        "bind_interface" | "domain_strategy" | "domain_resolver" | "ipv4_only" | "ipv6_only" => {
+        "bind_interface" | "domain_strategy" | "ipv4_only" | "ipv6_only" => {
             IgnoredDisposition::Warn(
                 "field is accepted for compatibility but does not affect the current direct outbound",
             )
         }
+        "domain_resolver" if field != "domain_resolver.disable_cache" => IgnoredDisposition::Warn(
+            "field is accepted for compatibility but does not affect the current direct outbound",
+        ),
         "tcp_fast_open" | "fallback_delay" => IgnoredDisposition::Ignore(
             "field is accepted for compatibility but ignored by the current direct outbound",
         ),
@@ -241,17 +249,10 @@ fn classify_direct_ignored(field: &str) -> Option<IgnoredDisposition> {
 }
 
 fn classify_trojan_ignored(field: &str) -> Option<IgnoredDisposition> {
-    let field = first_segment(field);
+    let first = first_segment(field);
     if matches!(
-        field,
-        "transport"
-            | "mux"
-            | "multiplex"
-            | "packet_encoding"
-            | "dialer_proxy"
-            | "domain_resolver"
-            | "reality"
-            | "utls"
+        first,
+        "transport" | "mux" | "multiplex" | "packet_encoding" | "dialer_proxy" | "reality" | "utls"
     ) || is_udp_related(field)
     {
         return Some(IgnoredDisposition::Warn(
@@ -259,7 +260,12 @@ fn classify_trojan_ignored(field: &str) -> Option<IgnoredDisposition> {
         ));
     }
 
-    match field {
+    match first {
+        "domain_resolver" if field != "domain_resolver.disable_cache" => {
+            Some(IgnoredDisposition::Warn(
+                "field is accepted for compatibility but does not affect the current trojan outbound",
+            ))
+        }
         "tcp_fast_open" => Some(IgnoredDisposition::Ignore(
             "field is accepted for compatibility but ignored by the current trojan outbound",
         )),

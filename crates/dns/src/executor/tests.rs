@@ -639,6 +639,64 @@ async fn domain_resolver_cache_hit_avoids_second_exchange() {
     assert_eq!(connected_destinations.lock().await.len(), 1);
 }
 
+#[tokio::test]
+async fn domain_resolver_disable_cache_bypasses_cache() {
+    let session = queued_test_session(vec![
+        build_dns_answer_response("resolve-bypass.example.com", [203, 0, 113, 41]),
+        build_dns_answer_response("resolve-bypass.example.com", [203, 0, 113, 41]),
+    ]);
+    let session_handle: PacketSessionHandle = session.clone();
+    let connected_destinations = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = Vec::new();
+    let default_outbound = register_default_test_outbound(
+        &mut registry,
+        "direct",
+        session_handle,
+        Arc::clone(&connected_destinations),
+    );
+    let executor = DnsExecutor::new(
+        dns_runtime_config(
+            "direct",
+            vec![DnsServer {
+                tag: "direct".into(),
+                transport: DnsServerTransport::Udp,
+                destination: Destination::new(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), 53),
+                dial: Dial {
+                    detour: Some("direct".into()),
+                    connect_timeout: None,
+                    routing_mark: None,
+                    domain_resolver: None,
+                    ..Dial::default()
+                },
+            }],
+            Vec::new(),
+        ),
+        finalize_catalog(registry, default_outbound),
+    )
+    .expect("dns executor should build");
+
+    let context = ResolveContext::outbound_dial("proxy", None).with_disable_cache(true);
+    executor
+        .resolve_host(
+            Host::Domain("resolve-bypass.example.com".into()),
+            443,
+            context.clone(),
+        )
+        .await
+        .expect("first resolve should succeed");
+    executor
+        .resolve_host(
+            Host::Domain("resolve-bypass.example.com".into()),
+            443,
+            context,
+        )
+        .await
+        .expect("second resolve should bypass cache");
+
+    assert_eq!(session.sent_count.load(Ordering::Relaxed), 2);
+    assert_eq!(connected_destinations.lock().await.len(), 2);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn concurrent_resolution_uses_first_success_and_cancels_loser() {
     let (remote_session, _remote_tx) = parked_test_session();

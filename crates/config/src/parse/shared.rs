@@ -144,10 +144,14 @@ pub(crate) fn optional_domain_resolver(
                     "domain_resolver server must not be empty",
                 ));
             }
-            Ok(Some(DomainResolverConfig { server }))
+            Ok(Some(DomainResolverConfig {
+                server,
+                disable_cache: false,
+            }))
         }
         Some(InputDomainResolverValue::Structured(config)) => Ok(Some(DomainResolverConfig {
             server: required_nested_string(config.server, format!("{path}.server"))?,
+            disable_cache: config.disable_cache,
         })),
         None => Ok(None),
     }

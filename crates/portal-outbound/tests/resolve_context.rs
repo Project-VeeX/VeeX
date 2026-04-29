@@ -58,6 +58,7 @@ async fn direct_and_trojan_build_the_same_fresh_resolve_context() {
     let direct = build_direct_dialer(
         Dial {
             domain_resolver: Some("bootstrap".into()),
+            domain_resolver_disable_cache: true,
             ..Dial::default()
         },
         capture_contexts(Arc::clone(&direct_contexts)),
@@ -66,6 +67,7 @@ async fn direct_and_trojan_build_the_same_fresh_resolve_context() {
     let trojan = build_trojan_dialer(
         Dial {
             domain_resolver: Some("bootstrap".into()),
+            domain_resolver_disable_cache: true,
             ..Dial::default()
         },
         capture_contexts(Arc::clone(&trojan_contexts)),
@@ -96,20 +98,20 @@ async fn direct_and_trojan_build_the_same_fresh_resolve_context() {
             .lock()
             .expect("direct contexts should lock")
             .as_slice(),
-        &[ResolveContext::outbound_dial(
-            "shared-outbound",
-            Some("bootstrap".into())
-        )]
+        &[
+            ResolveContext::outbound_dial("shared-outbound", Some("bootstrap".into()))
+                .with_disable_cache(true)
+        ]
     );
     assert_eq!(
         trojan_contexts
             .lock()
             .expect("trojan contexts should lock")
             .as_slice(),
-        &[ResolveContext::outbound_dial(
-            "shared-outbound",
-            Some("bootstrap".into())
-        )]
+        &[
+            ResolveContext::outbound_dial("shared-outbound", Some("bootstrap".into()))
+                .with_disable_cache(true)
+        ]
     );
 }
 

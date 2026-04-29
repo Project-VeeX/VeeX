@@ -16,6 +16,7 @@ pub struct Dial {
     pub tcp_keep_alive: Option<Duration>,
     pub tcp_keep_alive_interval: Option<Duration>,
     pub domain_resolver: Option<String>,
+    pub domain_resolver_disable_cache: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -118,6 +119,7 @@ fn build_dial_context(dial: &Dial, session: &SessionContext, outbound_tag: Strin
             session.state.resolve_context.as_ref(),
             outbound_tag,
             dial.domain_resolver.clone(),
-        )),
+        )
+        .with_disable_cache(dial.domain_resolver_disable_cache)),
     }
 }

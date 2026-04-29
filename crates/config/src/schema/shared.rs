@@ -75,4 +75,5 @@ pub struct TlsFields {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DomainResolverConfig {
     pub server: String,
+    pub disable_cache: bool,
 }

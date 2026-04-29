@@ -1003,7 +1003,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_structured_domain_resolver_and_warns_on_extra_fields() {
+    fn parses_structured_domain_resolver_with_disable_cache_and_warns_on_extra_fields() {
         let input = r#"
         {
           "dns": {
@@ -1022,7 +1022,15 @@ mod tests {
             { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080 }
           ],
           "outbounds": [
-            { "type": "direct", "tag": "direct", "domain_resolver": { "server": "bootstrap", "strategy": "prefer_ipv6" } }
+            {
+              "type": "direct",
+              "tag": "direct",
+              "domain_resolver": {
+                "server": "bootstrap",
+                "disable_cache": true,
+                "strategy": "prefer_ipv6"
+              }
+            }
           ],
           "route": { "final": "direct" }
         }
@@ -1038,7 +1046,7 @@ mod tests {
                     ..
                 },
                 ..
-            }) if resolver.server == "bootstrap"
+            }) if resolver.server == "bootstrap" && resolver.disable_cache
         ));
         assert!(
             report
@@ -1046,6 +1054,13 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.path == "$.outbounds[0].domain_resolver.strategy")
+        );
+        assert!(
+            report
+                .diagnostics
+                .warnings
+                .iter()
+                .all(|warning| warning.path != "$.outbounds[0].domain_resolver.disable_cache")
         );
     }
 

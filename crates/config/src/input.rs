@@ -140,6 +140,8 @@ pub enum InputDomainResolverValue {
 pub struct InputDomainResolverObject {
     #[serde(default)]
     pub server: Option<Option<String>>,
+    #[serde(default)]
+    pub disable_cache: bool,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

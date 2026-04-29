@@ -204,6 +204,7 @@ async fn connect_packet_destination(
 fn build_resolve_context(dial: &Dial, ctx: &DialContext) -> ResolveContext {
     ctx.resolve_context.clone().unwrap_or_else(|| {
         ResolveContext::outbound_dial(ctx.outbound_tag.clone(), dial.domain_resolver.clone())
+            .with_disable_cache(dial.domain_resolver_disable_cache)
     })
 }
 

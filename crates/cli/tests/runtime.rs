@@ -379,6 +379,7 @@ async fn runtime_uses_explicit_domain_resolver_for_trojan_server_dial() {
                 dial: DialFields {
                     domain_resolver: Some(DomainResolverConfig {
                         server: "direct-dns".into(),
+                        disable_cache: false,
                     }),
                     ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
                 },
@@ -1801,6 +1802,7 @@ async fn assert_dns_upstream_self_resolution_round_trip(upstream: DnsUpstreamTra
                         detour: Some("direct".into()),
                         domain_resolver: Some(DomainResolverConfig {
                             server: "bootstrap".into(),
+                            disable_cache: false,
                         }),
                         ..DialFields::new(DEFAULT_CONNECT_TIMEOUT)
                     },
