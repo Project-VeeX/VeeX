@@ -9,6 +9,7 @@ use veex_core::{
     logging::sanitize_field,
     types::{Destination, Network},
 };
+use veex_transport::server_name_for_tls;
 
 use crate::{dialer::DnsDialer, http, traits::DnsUpstream, types::DnsHttpsOptions};
 
@@ -56,12 +57,8 @@ impl DnsUpstream for HttpsUpstream {
         )
         .await?;
 
-        let host_header = self
-            .options
-            .tls
-            .server_name
-            .clone()
-            .unwrap_or_else(|| self.destination.host.to_string());
+        let host_header =
+            server_name_for_tls(&self.destination.host, &self.options.tls).map_err(ProxyError::from)?;
         let path_field = sanitize_field(&self.options.path).into_owned();
         let query_id = req.session_id.unwrap_or_default();
         info!(
@@ -104,5 +101,45 @@ impl DnsUpstream for HttpsUpstream {
             "dns https exchange succeeded"
         );
         Ok(DnsResponse::new(response))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use veex_core::types::{Destination, Host};
+    use veex_transport::{OutboundTls, server_name_for_tls};
+
+    use crate::types::DnsHttpsOptions;
+
+    #[test]
+    fn dns_https_host_header_reuses_transport_tls_server_name_resolution() {
+        let derived = server_name_for_tls(
+            &Destination::new(Host::Domain("dns.example.com".into()), 443).host,
+            &DnsHttpsOptions {
+                path: "/dns-query".into(),
+                headers: BTreeMap::new(),
+                tls: OutboundTls::default(),
+            }
+            .tls,
+        )
+        .expect("domain host should derive host header");
+        assert_eq!(derived, "dns.example.com");
+
+        let explicit = server_name_for_tls(
+            &Destination::new(Host::Domain("dns.example.com".into()), 443).host,
+            &DnsHttpsOptions {
+                path: "/dns-query".into(),
+                headers: BTreeMap::new(),
+                tls: OutboundTls {
+                    server_name: Some("override.example.com".into()),
+                    ..OutboundTls::default()
+                },
+            }
+            .tls,
+        )
+        .expect("explicit tls server_name should win");
+        assert_eq!(explicit, "override.example.com");
     }
 }
