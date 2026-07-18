@@ -57,8 +57,8 @@ impl DnsUpstream for HttpsUpstream {
         )
         .await?;
 
-        let host_header =
-            server_name_for_tls(&self.destination.host, &self.options.tls).map_err(ProxyError::from)?;
+        let host_header = server_name_for_tls(&self.destination.host, &self.options.tls)
+            .map_err(ProxyError::from)?;
         let path_field = sanitize_field(&self.options.path).into_owned();
         let query_id = req.session_id.unwrap_or_default();
         info!(

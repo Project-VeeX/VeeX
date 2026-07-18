@@ -492,6 +492,11 @@ async fn dns_executor_emits_cache_lifecycle_events() {
         "dns_query_finish",
         &[
             ("query_name", "trace-cache.example.com"),
+            ("server", "direct"),
+            ("winner_server", "direct"),
+            ("detour", "direct"),
+            ("destination", "127.0.0.1:53"),
+            ("transport", "udp"),
             ("cache_hit", "true"),
         ],
     );

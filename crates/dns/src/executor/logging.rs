@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{borrow::Cow, net::SocketAddr, time::Duration};
 
 use tracing::{info, warn};
 use veex_core::{
@@ -23,6 +23,66 @@ pub(super) struct QueryFinishContext<'a> {
     pub query_id: u64,
     pub cache_hit: bool,
     pub winner_server_tag: &'a str,
+}
+
+struct DnsServerLogFields<'a> {
+    server: &'a DnsServer,
+}
+
+impl<'a> DnsServerLogFields<'a> {
+    fn new(server: &'a DnsServer) -> Self {
+        Self { server }
+    }
+
+    fn tag(&self) -> Cow<'a, str> {
+        sanitize_field(&self.server.tag)
+    }
+
+    fn detour(&self) -> Cow<'_, str> {
+        sanitize_field(self.server.detour_tag())
+    }
+
+    fn transport(&self) -> &'a str {
+        self.server.transport.as_str()
+    }
+
+    fn destination(&self) -> String {
+        sanitize_field(&self.server.destination.to_string()).into_owned()
+    }
+}
+
+impl<'a> From<&'a DnsServer> for DnsServerLogFields<'a> {
+    fn from(server: &'a DnsServer) -> Self {
+        Self::new(server)
+    }
+}
+
+impl<'a> From<&'a DnsServerRuntime> for DnsServerLogFields<'a> {
+    fn from(server: &'a DnsServerRuntime) -> Self {
+        Self::new(&server.server)
+    }
+}
+
+struct ResolveContextLogFields<'a> {
+    context: &'a ResolveContext,
+}
+
+impl<'a> ResolveContextLogFields<'a> {
+    fn new(context: &'a ResolveContext) -> Self {
+        Self { context }
+    }
+
+    fn caller_outbound(&self) -> Cow<'_, str> {
+        sanitize_field(self.context.caller_outbound_tag.as_deref().unwrap_or(""))
+    }
+
+    fn caller_dns_server(&self) -> Cow<'_, str> {
+        sanitize_field(self.context.caller_dns_server_tag.as_deref().unwrap_or(""))
+    }
+
+    fn explicit_server(&self) -> Cow<'_, str> {
+        sanitize_field(self.context.explicit_server_tag.as_deref().unwrap_or(""))
+    }
 }
 
 impl DnsExecutor {
@@ -161,16 +221,20 @@ impl DnsExecutor {
         selection: &DnsSelection,
         server: &DnsServerRuntime,
     ) {
+        let server_fields = DnsServerLogFields::from(server);
+        let selected_server = sanitize_field(&selection.server_tag);
+        let server_tag = server_fields.tag();
+        let detour = server_fields.detour();
         info!(
             event = "dns_upstream_query_start",
             query_id,
             query_kind = %query_kind,
             query_name = %sanitize_field(query_name),
             query_type = query_type as u64,
-            selected_server = %sanitize_field(&selection.server_tag),
-            server = %sanitize_field(&server.server.tag),
-            detour = %sanitize_field(server.server.detour_tag()),
-            transport = %server.server.transport.as_str(),
+            selected_server = %selected_server.as_ref(),
+            server = %server_tag.as_ref(),
+            detour = %detour.as_ref(),
+            transport = %server_fields.transport(),
             route_reason = %selection.reason.as_str(),
             candidate_count = selection.candidate_server_tags.len() as u64,
             "dns upstream query started"
@@ -187,14 +251,17 @@ impl DnsExecutor {
         server: &DnsServerRuntime,
         concurrent: bool,
     ) {
+        let server_fields = DnsServerLogFields::from(server);
+        let selected_server = sanitize_field(&selection.server_tag);
+        let server_tag = server_fields.tag();
         info!(
             event = "dns_upstream_query_won",
             query_id,
             query_kind = %query_kind,
             query_name = %sanitize_field(query_name),
             query_type = query_type as u64,
-            selected_server = %sanitize_field(&selection.server_tag),
-            server = %sanitize_field(&server.server.tag),
+            selected_server = %selected_server.as_ref(),
+            server = %server_tag.as_ref(),
             route_reason = %selection.reason.as_str(),
             concurrent,
             "dns upstream query produced the winning response"
@@ -210,14 +277,17 @@ impl DnsExecutor {
         selection: &DnsSelection,
         server: &DnsServerRuntime,
     ) {
+        let server_fields = DnsServerLogFields::from(server);
+        let selected_server = sanitize_field(&selection.server_tag);
+        let server_tag = server_fields.tag();
         info!(
             event = "dns_upstream_query_cancelled",
             query_id,
             query_kind = %query_kind,
             query_name = %sanitize_field(query_name),
             query_type = query_type as u64,
-            selected_server = %sanitize_field(&selection.server_tag),
-            server = %sanitize_field(&server.server.tag),
+            selected_server = %selected_server.as_ref(),
+            server = %server_tag.as_ref(),
             route_reason = %selection.reason.as_str(),
             "dns upstream query cancelled after another winner was selected"
         );
@@ -233,14 +303,17 @@ impl DnsExecutor {
         server: &DnsServerRuntime,
         err: &ProxyError,
     ) {
+        let server_fields = DnsServerLogFields::from(server);
+        let selected_server = sanitize_field(&selection.server_tag);
+        let server_tag = server_fields.tag();
         warn!(
             event = "dns_upstream_query_failed",
             query_id,
             query_kind = %query_kind,
             query_name = %sanitize_field(query_name),
             query_type = query_type as u64,
-            selected_server = %sanitize_field(&selection.server_tag),
-            server = %sanitize_field(&server.server.tag),
+            selected_server = %selected_server.as_ref(),
+            server = %server_tag.as_ref(),
             route_reason = %selection.reason.as_str(),
             error_kind = ?err.kind(),
             error = %err,
@@ -256,6 +329,10 @@ impl DnsExecutor {
         selection: &DnsSelection,
         query_id: u64,
     ) {
+        let server_fields = DnsServerLogFields::from(server);
+        let server_tag = server_fields.tag();
+        let detour = server_fields.detour();
+        let destination = server_fields.destination();
         info!(
             event = "dns_query_start",
             query_id,
@@ -263,12 +340,12 @@ impl DnsExecutor {
             ingress_protocol = %request.protocol.as_str(),
             query_name = %sanitize_field(&query.name),
             query_type = query.qtype as u64,
-            server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(server.detour_tag()),
-            destination = %sanitize_field(&server.destination.to_string()),
+            server = %server_tag.as_ref(),
+            detour = %detour.as_ref(),
+            destination = %destination,
             route_reason = %selection.reason.as_str(),
             candidate_count = selection.candidate_server_tags.len() as u64,
-            transport = %server.transport.as_str(),
+            transport = %server_fields.transport(),
             "dns query started"
         );
     }
@@ -279,6 +356,11 @@ impl DnsExecutor {
     }
 
     pub(super) fn log_query_finish(&self, context: QueryFinishContext<'_>, response: &DnsResponse) {
+        let server_fields = DnsServerLogFields::from(context.server);
+        let server_tag = server_fields.tag();
+        let winner_server = sanitize_field(context.winner_server_tag);
+        let detour = server_fields.detour();
+        let destination = server_fields.destination();
         info!(
             event = "dns_query_finish",
             query_id = context.query_id,
@@ -286,12 +368,12 @@ impl DnsExecutor {
             ingress_protocol = %context.request.protocol.as_str(),
             query_name = %sanitize_field(&context.query.name),
             query_type = context.query.qtype as u64,
-            server = %sanitize_field(&context.server.tag),
-            winner_server = %sanitize_field(context.winner_server_tag),
-            detour = %sanitize_field(context.server.detour_tag()),
-            destination = %sanitize_field(&context.server.destination.to_string()),
+            server = %server_tag.as_ref(),
+            winner_server = %winner_server.as_ref(),
+            detour = %detour.as_ref(),
+            destination = %destination,
             route_reason = %context.selection.reason.as_str(),
-            transport = %context.server.transport.as_str(),
+            transport = %server_fields.transport(),
             cache_hit = context.cache_hit,
             response_bytes = response.raw_message.len() as u64,
             "dns query finished"
@@ -303,12 +385,12 @@ impl DnsExecutor {
             ingress_protocol = %context.request.protocol.as_str(),
             query_name = %sanitize_field(&context.query.name),
             query_type = context.query.qtype as u64,
-            server = %sanitize_field(&context.server.tag),
-            winner_server = %sanitize_field(context.winner_server_tag),
-            detour = %sanitize_field(context.server.detour_tag()),
-            destination = %sanitize_field(&context.server.destination.to_string()),
+            server = %server_tag.as_ref(),
+            winner_server = %winner_server.as_ref(),
+            detour = %detour.as_ref(),
+            destination = %destination,
             route_reason = %context.selection.reason.as_str(),
-            transport = %context.server.transport.as_str(),
+            transport = %server_fields.transport(),
             cache_hit = context.cache_hit,
             response_bytes = response.raw_message.len() as u64,
             "dns query succeeded"
@@ -324,6 +406,10 @@ impl DnsExecutor {
         query_id: u64,
         err: &ProxyError,
     ) {
+        let server_fields = DnsServerLogFields::from(server);
+        let server_tag = server_fields.tag();
+        let detour = server_fields.detour();
+        let destination = server_fields.destination();
         warn!(
             event = "dns_query_failed",
             query_id,
@@ -331,11 +417,11 @@ impl DnsExecutor {
             ingress_protocol = %request.protocol.as_str(),
             query_name = %sanitize_field(&query.name),
             query_type = query.qtype as u64,
-            server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(server.detour_tag()),
-            destination = %sanitize_field(&server.destination.to_string()),
+            server = %server_tag.as_ref(),
+            detour = %detour.as_ref(),
+            destination = %destination,
             route_reason = %selection.reason.as_str(),
-            transport = %server.transport.as_str(),
+            transport = %server_fields.transport(),
             error_kind = ?err.kind(),
             error = %err,
             "dns upstream receive failed"
@@ -351,6 +437,13 @@ impl DnsExecutor {
         query_id: u64,
         context: &ResolveContext,
     ) {
+        let server_fields = DnsServerLogFields::from(server);
+        let resolve_fields = ResolveContextLogFields::new(context);
+        let caller_outbound = resolve_fields.caller_outbound();
+        let caller_dns_server = resolve_fields.caller_dns_server();
+        let explicit_server = resolve_fields.explicit_server();
+        let server_tag = server_fields.tag();
+        let detour = server_fields.detour();
         info!(
             event = "domain_resolve_start",
             query_id,
@@ -358,13 +451,13 @@ impl DnsExecutor {
             port,
             purpose = %context.purpose.as_str(),
             recursion_depth = context.recursion_depth as u64,
-            caller_outbound = %sanitize_field(context.caller_outbound_tag.as_deref().unwrap_or("")),
-            caller_dns_server = %sanitize_field(context.caller_dns_server_tag.as_deref().unwrap_or("")),
-            explicit_server = %sanitize_field(context.explicit_server_tag.as_deref().unwrap_or("")),
-            server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(server.detour_tag()),
+            caller_outbound = %caller_outbound.as_ref(),
+            caller_dns_server = %caller_dns_server.as_ref(),
+            explicit_server = %explicit_server.as_ref(),
+            server = %server_tag.as_ref(),
+            detour = %detour.as_ref(),
             route_reason = %selection.reason.as_str(),
-            transport = %server.transport.as_str(),
+            transport = %server_fields.transport(),
             "dial-side domain resolution started"
         );
     }
@@ -379,6 +472,13 @@ impl DnsExecutor {
         context: &ResolveContext,
         addresses: &[SocketAddr],
     ) {
+        let server_fields = DnsServerLogFields::from(server);
+        let resolve_fields = ResolveContextLogFields::new(context);
+        let caller_outbound = resolve_fields.caller_outbound();
+        let caller_dns_server = resolve_fields.caller_dns_server();
+        let explicit_server = resolve_fields.explicit_server();
+        let server_tag = server_fields.tag();
+        let detour = server_fields.detour();
         let addresses_field = addresses
             .iter()
             .map(ToString::to_string)
@@ -391,13 +491,13 @@ impl DnsExecutor {
             port,
             purpose = %context.purpose.as_str(),
             recursion_depth = context.recursion_depth as u64,
-            caller_outbound = %sanitize_field(context.caller_outbound_tag.as_deref().unwrap_or("")),
-            caller_dns_server = %sanitize_field(context.caller_dns_server_tag.as_deref().unwrap_or("")),
-            explicit_server = %sanitize_field(context.explicit_server_tag.as_deref().unwrap_or("")),
-            server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(server.detour_tag()),
+            caller_outbound = %caller_outbound.as_ref(),
+            caller_dns_server = %caller_dns_server.as_ref(),
+            explicit_server = %explicit_server.as_ref(),
+            server = %server_tag.as_ref(),
+            detour = %detour.as_ref(),
             route_reason = %selection.reason.as_str(),
-            transport = %server.transport.as_str(),
+            transport = %server_fields.transport(),
             resolved_addrs = %sanitize_field(&addresses_field),
             "dial-side domain resolution succeeded"
         );
@@ -413,6 +513,13 @@ impl DnsExecutor {
         context: &ResolveContext,
         err: &ProxyError,
     ) {
+        let server_fields = DnsServerLogFields::from(server);
+        let resolve_fields = ResolveContextLogFields::new(context);
+        let caller_outbound = resolve_fields.caller_outbound();
+        let caller_dns_server = resolve_fields.caller_dns_server();
+        let explicit_server = resolve_fields.explicit_server();
+        let server_tag = server_fields.tag();
+        let detour = server_fields.detour();
         warn!(
             event = "domain_resolve_failed",
             query_id,
@@ -420,13 +527,13 @@ impl DnsExecutor {
             port,
             purpose = %context.purpose.as_str(),
             recursion_depth = context.recursion_depth as u64,
-            caller_outbound = %sanitize_field(context.caller_outbound_tag.as_deref().unwrap_or("")),
-            caller_dns_server = %sanitize_field(context.caller_dns_server_tag.as_deref().unwrap_or("")),
-            explicit_server = %sanitize_field(context.explicit_server_tag.as_deref().unwrap_or("")),
-            server = %sanitize_field(&server.tag),
-            detour = %sanitize_field(server.detour_tag()),
+            caller_outbound = %caller_outbound.as_ref(),
+            caller_dns_server = %caller_dns_server.as_ref(),
+            explicit_server = %explicit_server.as_ref(),
+            server = %server_tag.as_ref(),
+            detour = %detour.as_ref(),
             route_reason = %selection.reason.as_str(),
-            transport = %server.transport.as_str(),
+            transport = %server_fields.transport(),
             error_kind = ?err.kind(),
             error = %err,
             "dial-side domain resolution failed"
