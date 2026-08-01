@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.2
+
+- Expanded the current sing-box-compatible config subset conservatively by adding `dial.domain_resolver.disable_cache`, and closed the shared dial-side resolver path around `veex_core::portal::Dial` so direct outbound, trojan outbound, and DNS upstream dialing now inherit the same explicit-resolver and cache-bypass semantics without duplicating lowering logic.
+- Further tightened shared connect-stage ownership without widening the supported surface: TCP connect options now lower through a shared `Dial -> TcpConnectOptions` path, shared connect/TLS trace context is owned by `veex_transport`, and DNS-over-HTTPS host-header derivation now reuses the transport TLS server-name resolution path.
+- Continued shrinking internal duplication in the DNS runtime by centralizing default-detour access, collapsing remaining resolve-context and logging field assembly into clearer local owners, and adding focused tracing regression coverage without changing public config shape or event names.
+
 ## 0.7.1
 
 - Expanded outbound dialing and TLS config support within the existing sing-box-compatible subset: added outbound `tls.alpn`, added `disable_tcp_keep_alive` / `tcp_keep_alive` / `tcp_keep_alive_interval`, and aligned the default outbound `connect_timeout` from `10s` to `5s` with sing-box's current TCP connect timeout baseline.
